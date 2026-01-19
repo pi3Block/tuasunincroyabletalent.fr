@@ -95,6 +95,15 @@ export interface RecentTrack {
   timestamp: string
 }
 
+export interface LyricsResponse {
+  session_id: string
+  lyrics: string
+  source: string
+  status: 'found' | 'not_found' | 'error'
+  url?: string
+  error?: string
+}
+
 class ApiClient {
   private baseUrl: string
 
@@ -187,6 +196,11 @@ class ApiClient {
 
   async getResults(sessionId: string): Promise<{ session_id: string; results: AnalysisResults }> {
     return this.request(`/api/session/${sessionId}/results`)
+  }
+
+  // Lyrics endpoint
+  async getLyrics(sessionId: string): Promise<LyricsResponse> {
+    return this.request<LyricsResponse>(`/api/session/${sessionId}/lyrics`)
   }
 }
 

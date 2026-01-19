@@ -2,8 +2,11 @@ import { useCallback, useEffect, useState, useRef } from 'react'
 import { useSessionStore } from '@stores/sessionStore'
 import { TrackSearch } from '@/components/TrackSearch'
 import { YouTubePlayer } from '@/components/YouTubePlayer'
+import { PitchIndicator } from '@/components/PitchIndicator'
+import { LyricsDisplay } from '@/components/LyricsDisplay'
 import { api, type Track, type AnalysisResults } from '@/api/client'
 import { useAudioRecorder } from '@/hooks/useAudioRecorder'
+import { usePitchDetection } from '@/hooks/usePitchDetection'
 
 function formatDuration(ms: number): string {
   const minutes = Math.floor(ms / 60000)
@@ -47,6 +50,8 @@ function App() {
     referenceStatus,
     results,
     analysisProgress,
+    lyrics,
+    lyricsStatus,
     error,
     startSession,
     selectTrack,
@@ -56,6 +61,8 @@ function App() {
     setStatus,
     setResults,
     setAnalysisProgress,
+    setLyrics,
+    setLyricsStatus,
     setError,
     reset,
   } = useSessionStore()
@@ -74,8 +81,17 @@ function App() {
     onError: (err) => setError(`Erreur micro: ${err.message}`),
   })
 
+  // Pitch detection hook for real-time feedback
+  const {
+    pitchData,
+    isAnalyzing: isPitchAnalyzing,
+    startAnalysis: startPitchAnalysis,
+    stopAnalysis: stopPitchAnalysis,
+  } = usePitchDetection()
+
   // Track analysis task ID
   const analysisTaskIdRef = useRef<string | null>(null)
+  const mediaStreamRef = useRef<MediaStream | null>(null)
 
   // Poll session status when preparing/downloading
   useEffect(() => {
@@ -108,6 +124,32 @@ function App() {
 
     return () => clearInterval(interval)
   }, [sessionId, status, setReferenceStatus, setStatus, setError])
+
+  // Fetch lyrics when session is ready
+  useEffect(() => {
+    if (!sessionId || status !== 'ready' || lyricsStatus !== 'idle') {
+      return
+    }
+
+    const fetchLyrics = async () => {
+      setLyricsStatus('loading')
+      try {
+        const response = await api.getLyrics(sessionId)
+        if (response.status === 'found') {
+          setLyrics(response.lyrics)
+          setLyricsStatus('found')
+        } else {
+          setLyrics(null)
+          setLyricsStatus('not_found')
+        }
+      } catch (err) {
+        console.error('Failed to fetch lyrics:', err)
+        setLyricsStatus('error')
+      }
+    }
+
+    fetchLyrics()
+  }, [sessionId, status, lyricsStatus, setLyrics, setLyricsStatus])
 
   // Poll analysis status when analyzing
   useEffect(() => {
@@ -179,16 +221,39 @@ function App() {
   // Handle recording start
   const handleStartRecording = useCallback(async () => {
     try {
+      // Request microphone access
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      })
+      mediaStreamRef.current = stream
+
+      // Start pitch detection with the stream
+      startPitchAnalysis(stream)
+
+      // Start audio recording
       await startAudioRecording()
       setStatus('recording')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Impossible de démarrer l\'enregistrement')
     }
-  }, [startAudioRecording, setStatus, setError])
+  }, [startAudioRecording, startPitchAnalysis, setStatus, setError])
 
   // Handle recording stop and upload
   const handleStopRecording = useCallback(async () => {
     if (!sessionId) return
+
+    // Stop pitch detection
+    stopPitchAnalysis()
+
+    // Clean up media stream
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach(track => track.stop())
+      mediaStreamRef.current = null
+    }
 
     try {
       setStatus('uploading')
@@ -211,15 +276,20 @@ function App() {
       setError(err instanceof Error ? err.message : 'Erreur lors de l\'envoi')
       setStatus('ready')
     }
-  }, [sessionId, stopAudioRecording, setStatus, setError])
+  }, [sessionId, stopAudioRecording, stopPitchAnalysis, setStatus, setError])
 
   // Reset handler with cleanup
   const handleReset = useCallback(() => {
+    stopPitchAnalysis()
     resetRecording()
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach(track => track.stop())
+      mediaStreamRef.current = null
+    }
     analysisTaskIdRef.current = null
     setAnalysisProgress(null)
     reset()
-  }, [resetRecording, setAnalysisProgress, reset])
+  }, [stopPitchAnalysis, resetRecording, setAnalysisProgress, reset])
 
   return (
     <div className="min-h-screen flex flex-col safe-area-top safe-area-bottom">
@@ -378,6 +448,26 @@ function App() {
               <YouTubePlayer video={youtubeMatch} />
             )}
 
+            {/* Lyrics status indicator */}
+            {lyricsStatus === 'loading' && (
+              <div className="flex items-center justify-center gap-2 text-gray-400 text-sm">
+                <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+                <span>Chargement des paroles...</span>
+              </div>
+            )}
+            {lyricsStatus === 'found' && (
+              <div className="flex items-center justify-center gap-2 text-green-400 text-sm">
+                <span>✓</span>
+                <span>Paroles disponibles</span>
+              </div>
+            )}
+            {lyricsStatus === 'not_found' && (
+              <div className="flex items-center justify-center gap-2 text-yellow-400 text-sm">
+                <span>⚠</span>
+                <span>Paroles non disponibles</span>
+              </div>
+            )}
+
             <div className="bg-green-500/20 border border-green-500 rounded-lg p-4">
               <p className="text-green-300 font-medium">Prêt à enregistrer !</p>
               <p className="text-green-400/80 text-sm mt-1">
@@ -413,12 +503,22 @@ function App() {
               </p>
             </div>
 
+            {/* Real-time pitch indicator */}
+            <PitchIndicator pitchData={pitchData} />
+
+            {/* Lyrics display */}
+            {lyrics && (
+              <LyricsDisplay
+                lyrics={lyrics}
+                currentTime={recordingDuration}
+                isPlaying={isRecording}
+              />
+            )}
+
             {/* YouTube Player - keep playing during recording */}
             {youtubeMatch && (
               <YouTubePlayer video={youtubeMatch} />
             )}
-
-            <p className="text-gray-400">Chante de tout ton coeur !</p>
 
             <button
               onClick={handleStopRecording}

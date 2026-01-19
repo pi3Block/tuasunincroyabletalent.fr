@@ -18,6 +18,8 @@ interface SessionState {
   referenceStatus: string | null
   results: AnalysisResults | null
   analysisProgress: AnalysisProgress | null
+  lyrics: string | null
+  lyricsStatus: 'idle' | 'loading' | 'found' | 'not_found' | 'error'
   error: string | null
 
   // Actions
@@ -31,6 +33,8 @@ interface SessionState {
   stopRecording: () => void
   setResults: (results: AnalysisResults) => void
   setAnalysisProgress: (progress: AnalysisProgress | null) => void
+  setLyrics: (lyrics: string | null) => void
+  setLyricsStatus: (status: 'idle' | 'loading' | 'found' | 'not_found' | 'error') => void
   setError: (error: string) => void
   reset: () => void
 }
@@ -44,6 +48,8 @@ export const useSessionStore = create<SessionState>((set) => ({
   referenceStatus: null,
   results: null,
   analysisProgress: null,
+  lyrics: null,
+  lyricsStatus: 'idle',
   error: null,
 
   // Actions
@@ -87,6 +93,14 @@ export const useSessionStore = create<SessionState>((set) => ({
     set({ analysisProgress: progress })
   },
 
+  setLyrics: (lyrics: string | null) => {
+    set({ lyrics })
+  },
+
+  setLyricsStatus: (lyricsStatus: 'idle' | 'loading' | 'found' | 'not_found' | 'error') => {
+    set({ lyricsStatus })
+  },
+
   setError: (error: string) => {
     set({ error })
   },
@@ -100,6 +114,8 @@ export const useSessionStore = create<SessionState>((set) => ({
       referenceStatus: null,
       results: null,
       analysisProgress: null,
+      lyrics: null,
+      lyricsStatus: 'idle',
       error: null,
     })
   },

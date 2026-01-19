@@ -11,6 +11,7 @@ from app.services.spotify import spotify_service
 from app.services.redis_client import redis_client
 from app.services.youtube_cache import youtube_cache
 from app.services.search_history import search_history
+from app.services.lyrics import lyrics_service
 from app.config import settings
 
 # Celery app for triggering tasks
@@ -466,4 +467,55 @@ async def get_results(session_id: str):
         "track_name": session.get("track_name"),
         "artist_name": session.get("artist_name"),
         "results": results,
+    }
+
+
+@router.get("/{session_id}/lyrics")
+async def get_session_lyrics(session_id: str):
+    """
+    Get lyrics for the session's track from Genius API.
+
+    Returns cached lyrics if already fetched, otherwise fetches from Genius.
+    """
+    session = await redis_client.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Check if lyrics already cached in session
+    cached_lyrics = session.get("lyrics")
+    if cached_lyrics:
+        return {
+            "session_id": session_id,
+            "lyrics": cached_lyrics.get("text", ""),
+            "source": cached_lyrics.get("source", "cache"),
+            "status": cached_lyrics.get("status", "found"),
+        }
+
+    # Get track info from session
+    artist_name = session.get("artist_name", "")
+    track_name = session.get("track_name", "")
+
+    if not artist_name or not track_name:
+        return {
+            "session_id": session_id,
+            "lyrics": "",
+            "source": "none",
+            "status": "not_found",
+            "error": "Track info not available",
+        }
+
+    # Fetch from Genius
+    lyrics_result = await lyrics_service.get_lyrics(artist_name, track_name)
+
+    # Cache in session
+    await redis_client.update_session(session_id, {
+        "lyrics": lyrics_result,
+    })
+
+    return {
+        "session_id": session_id,
+        "lyrics": lyrics_result.get("text", ""),
+        "source": lyrics_result.get("source", "none"),
+        "status": lyrics_result.get("status", "not_found"),
+        "url": lyrics_result.get("url"),
     }
