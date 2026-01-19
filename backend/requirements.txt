@@ -31,5 +31,9 @@ spotipy>=2.24.0
 # Lyrics API
 lyricsgenius>=3.0.1
 
+# Audio Processing
+numpy>=1.26.0
+scipy>=1.11.0
+
 # Utils
 python-dotenv>=1.0.1
