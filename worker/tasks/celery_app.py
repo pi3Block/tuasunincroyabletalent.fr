@@ -16,6 +16,7 @@ celery_app = Celery(
         "tasks.pitch_analysis",
         "tasks.transcription",
         "tasks.scoring",
+        "tasks.lyrics",
         "tasks.pipeline",
     ],
 )
