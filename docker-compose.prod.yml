@@ -1,0 +1,62 @@
+# ===========================================
+# Production Docker Compose - Ubuntu + GPU NVIDIA
+# ===========================================
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Prerequisites:
+# - NVIDIA drivers installed
+# - nvidia-container-toolkit installed
+# - Ollama installed system-wide (not in Docker)
+
+services:
+  # ============================================
+  # Frontend - Production build with Nginx
+  # ============================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  # ============================================
+  # Backend API - Production
+  # ============================================
+  api:
+    environment:
+      - DEBUG=false
+      - OLLAMA_HOST=http://host.docker.internal:11434
+    restart: unless-stopped
+
+  # ============================================
+  # Worker - With NVIDIA GPU Support
+  # ============================================
+  worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile.prod
+    environment:
+      - OLLAMA_HOST=http://host.docker.internal:11434
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  # ============================================
+  # PostgreSQL - Production
+  # ============================================
+  postgres:
+    restart: unless-stopped
+
+  # ============================================
+  # Redis - Production
+  # ============================================
+  redis:
+    restart: unless-stopped

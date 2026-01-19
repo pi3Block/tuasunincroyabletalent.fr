@@ -1,0 +1,15 @@
+# Heavy PyTorch dependencies - separated for Docker layer caching
+# These rarely change and take longest to install
+
+# Core PyTorch (auto-detects CUDA if available)
+torch>=2.1.0
+torchaudio>=2.1.0
+
+# Source Separation
+demucs>=4.0.1
+
+# Speech-to-Text (uses PyTorch backend)
+openai-whisper>=20240930
+
+# Pitch Detection (PyTorch-based alternative to TensorFlow CREPE)
+torchcrepe>=0.0.22

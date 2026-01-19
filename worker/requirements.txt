@@ -1,0 +1,28 @@
+# Light dependencies - install after requirements-torch.txt
+# These may change more frequently
+
+# Celery & Redis
+celery[redis]>=5.4.0
+redis>=5.2.0
+
+# Database
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.9
+
+# Audio Analysis
+librosa>=0.10.2
+scipy>=1.14.0
+numpy>=1.26.0
+fastdtw>=0.3.4
+jiwer>=3.0.0
+
+# Audio I/O
+soundfile>=0.12.1
+pydub>=0.25.1
+torchcodec>=0.1.0
+
+# Ollama Client
+httpx>=0.28.0
+
+# Utils
+python-dotenv>=1.0.1
