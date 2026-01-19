@@ -13,6 +13,7 @@ from app.services.youtube_cache import youtube_cache
 from app.services.search_history import search_history
 from app.services.lyrics import lyrics_service
 from app.services.lyrics_offset import lyrics_offset_service
+from app.services.auto_sync import auto_sync_service
 from app.config import settings
 
 # Celery app for triggering tasks
@@ -604,4 +605,45 @@ async def set_lyrics_offset(session_id: str, request: LyricsOffsetRequest):
         spotify_track_id=spotify_track_id,
         youtube_video_id=youtube_id,
         offset_seconds=offset,
+    )
+
+
+class AutoSyncResponse(BaseModel):
+    """Response with auto-sync calculation result."""
+    suggested_offset: float
+    confidence: float
+    method: str
+    applied: bool
+    error: str | None = None
+
+
+@router.post("/{session_id}/auto-sync", response_model=AutoSyncResponse)
+async def auto_sync_lyrics(session_id: str):
+    """
+    Calculate automatic lyrics offset using cross-correlation.
+
+    Algorithm:
+    1. Transcribe first 30s of YouTube audio with Whisper (word timestamps)
+    2. Compare with synced lyrics timestamps
+    3. Cross-correlate to find optimal offset
+
+    Returns:
+        - suggested_offset: Calculated offset in seconds
+        - confidence: Confidence score (0-1)
+        - method: 'cross_correlation' or 'text_matching'
+        - applied: Whether offset was auto-applied (if confidence > 0.5)
+        - error: Error message if failed
+    """
+    session = await redis_client.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    result = await auto_sync_service.calculate_offset(session_id)
+
+    return AutoSyncResponse(
+        suggested_offset=result.get("suggested_offset", 0),
+        confidence=result.get("confidence", 0),
+        method=result.get("method", "none"),
+        applied=result.get("applied", False),
+        error=result.get("error"),
     )

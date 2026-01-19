@@ -36,6 +36,7 @@ interface SessionState {
   // Auto-sync
   autoSyncOffset: number | null
   autoSyncConfidence: number | null
+  isAutoSyncing: boolean
 
   // Actions
   startSession: () => void
@@ -54,6 +55,7 @@ interface SessionState {
   setLyricsSource: (source: LyricsSource) => void
   setLyricsStatus: (status: 'idle' | 'loading' | 'found' | 'not_found' | 'error') => void
   setAutoSync: (offset: number | null, confidence: number | null) => void
+  setIsAutoSyncing: (isAutoSyncing: boolean) => void
   setError: (error: string) => void
   setPlaybackTime: (time: number) => void
   setIsVideoPlaying: (isPlaying: boolean) => void
@@ -83,6 +85,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   lyricsOffsetStatus: 'idle',
   autoSyncOffset: null,
   autoSyncConfidence: null,
+  isAutoSyncing: false,
 
   // Actions
   startSession: () => {
@@ -149,6 +152,10 @@ export const useSessionStore = create<SessionState>((set) => ({
     set({ autoSyncOffset, autoSyncConfidence })
   },
 
+  setIsAutoSyncing: (isAutoSyncing: boolean) => {
+    set({ isAutoSyncing })
+  },
+
   setError: (error: string) => {
     set({ error })
   },
@@ -190,6 +197,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       lyricsOffsetStatus: 'idle',
       autoSyncOffset: null,
       autoSyncConfidence: null,
+      isAutoSyncing: false,
     })
   },
 }))
@@ -243,5 +251,6 @@ export const useAutoSync = () => useSessionStore(
   useShallow((s) => ({
     autoSyncOffset: s.autoSyncOffset,
     autoSyncConfidence: s.autoSyncConfidence,
+    isAutoSyncing: s.isAutoSyncing,
   }))
 )
