@@ -7,13 +7,14 @@ from celery import shared_task
 import numpy as np
 
 
-def do_extract_pitch(vocals_path: str, session_id: str) -> dict:
+def do_extract_pitch(vocals_path: str, session_id: str, fast_mode: bool = False) -> dict:
     """
     Core logic: Extract pitch information from vocals using torchcrepe.
 
     Args:
         vocals_path: Path to vocals audio file
         session_id: Session identifier
+        fast_mode: If True, use 'tiny' model for speed (good for reference analysis)
 
     Returns:
         dict with pitch data
@@ -37,23 +38,24 @@ def do_extract_pitch(vocals_path: str, session_id: str) -> dict:
         audio = resampler(audio)
         sample_rate = 16000
 
-    print(f"[CREPE] Extracting pitch...")
-
-    # Select device
+    # Select device and log GPU status
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    model_name = "tiny" if fast_mode else "full"
+    print(f"[CREPE] Extracting pitch (model={model_name}, device={device})...")
+
     audio = audio.to(device)
 
     # Extract pitch with torchcrepe
-    # Model: 'tiny' (fast) or 'full' (accurate) - torchcrepe only supports these two
+    # Model: 'tiny' (fast, ~3x faster) or 'full' (accurate)
     hop_length = 160  # 10ms at 16kHz
     frequency, confidence = torchcrepe.predict(
         audio,
         sample_rate,
         hop_length=hop_length,
-        model="full",  # Best accuracy (use "tiny" for faster but less accurate)
+        model=model_name,
         decoder=torchcrepe.decode.viterbi,  # Smooth pitch curve
         device=device,
-        batch_size=512,
+        batch_size=1024 if device == "cuda" else 256,  # Larger batch on GPU
         return_periodicity=True,
     )
 

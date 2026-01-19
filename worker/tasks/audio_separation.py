@@ -3,6 +3,7 @@ Audio source separation using Demucs.
 Separates vocals from instrumentals.
 """
 import os
+import subprocess
 from pathlib import Path
 from celery import shared_task
 
@@ -24,6 +25,27 @@ def get_demucs_model():
     return _demucs_model
 
 
+def convert_to_wav(input_path: Path, output_path: Path) -> Path:
+    """
+    Convert audio file to WAV format using ffmpeg.
+    Required for WebM/Opus files that torchaudio cannot read directly.
+    """
+    print(f"[FFmpeg] Converting {input_path.suffix} to WAV...")
+    cmd = [
+        "ffmpeg", "-y",  # Overwrite output
+        "-i", str(input_path),
+        "-ar", "44100",  # Sample rate
+        "-ac", "2",  # Stereo
+        "-c:a", "pcm_s16le",  # 16-bit PCM
+        str(output_path)
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"FFmpeg conversion failed: {result.stderr}")
+    print(f"[FFmpeg] Conversion complete: {output_path}")
+    return output_path
+
+
 def do_separate_audio(audio_path: str, session_id: str) -> dict:
     """
     Core logic: Separate audio into vocals and instrumentals using Demucs.
@@ -41,8 +63,15 @@ def do_separate_audio(audio_path: str, session_id: str) -> dict:
 
     print(f"[Demucs] Loading audio: {audio_path}")
 
-    # Load audio using soundfile backend (more compatible)
     audio_path = Path(audio_path)
+
+    # Convert WebM/Opus to WAV if needed (torchaudio doesn't support WebM well)
+    if audio_path.suffix.lower() in [".webm", ".opus", ".ogg"]:
+        wav_path = audio_path.with_suffix(".wav")
+        convert_to_wav(audio_path, wav_path)
+        audio_path = wav_path
+
+    # Load audio using soundfile backend (more compatible)
     waveform, sample_rate = torchaudio.load(audio_path, backend="soundfile")
 
     # Resample to 44100Hz if needed (Demucs requirement)

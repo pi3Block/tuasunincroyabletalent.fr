@@ -377,6 +377,7 @@ async def start_analysis(session_id: str, background_tasks: BackgroundTasks):
     })
 
     # Trigger the full analysis pipeline
+    # Pass youtube_id for reference separation cache lookup
     task = celery_app.send_task(
         "tasks.pipeline.analyze_performance",
         args=[
@@ -385,6 +386,7 @@ async def start_analysis(session_id: str, background_tasks: BackgroundTasks):
             reference_path,
             session.get("track_name", "Unknown"),
             session.get("artist_name", "Unknown"),
+            session.get("youtube_id"),  # Cache key for reference separation
         ],
         queue="gpu",  # Explicitly route to gpu queue
     )

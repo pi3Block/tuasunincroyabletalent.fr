@@ -1,0 +1,136 @@
+# Development-only docker-compose file
+# Run with: docker compose -f docker-compose.dev.yml up
+#
+# This is a STANDALONE file for local development (not an override)
+
+services:
+  # ============================================
+  # Frontend - React + Vite + Tailwind
+  # ============================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    depends_on:
+      - api
+    networks:
+      - voicejury-network
+
+  # ============================================
+  # Backend API - FastAPI + Uvicorn
+  # ============================================
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8080"
+    volumes:
+      - ./backend:/app
+      - audio-data:/app/audio_files
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://voicejury:voicejury_secret@postgres:5432/voicejury
+      - REDIS_URL=redis://redis:6379/0
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
+      - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}
+      - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
+      - SECRET_KEY=${SECRET_KEY:-dev-secret-key-change-in-prod}
+      - DEBUG=${DEBUG:-true}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - voicejury-network
+
+  # ============================================
+  # Worker - Celery (Demucs, CREPE, Whisper)
+  # ============================================
+  worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    volumes:
+      - ./worker:/app
+      - audio-data:/app/audio_files
+      - model-cache:/root/.cache
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://voicejury:voicejury_secret@postgres:5432/voicejury
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
+      - WHISPER_MODEL=${WHISPER_MODEL:-turbo}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - voicejury-network
+
+  # ============================================
+  # PostgreSQL - Database
+  # ============================================
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=voicejury
+      - POSTGRES_PASSWORD=voicejury_secret
+      - POSTGRES_DB=voicejury
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U voicejury"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - voicejury-network
+
+  # ============================================
+  # Redis - Cache + Message Queue
+  # ============================================
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - voicejury-network
+
+# ============================================
+# Volumes
+# ============================================
+volumes:
+  postgres-data:
+  redis-data:
+  audio-data:
+  model-cache:
+
+# ============================================
+# Networks - local only, no coolify
+# ============================================
+networks:
+  voicejury-network:
+    driver: bridge
