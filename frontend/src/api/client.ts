@@ -104,6 +104,12 @@ export interface LyricsResponse {
   error?: string
 }
 
+export interface LyricsOffsetResponse {
+  spotify_track_id: string
+  youtube_video_id: string
+  offset_seconds: number
+}
+
 class ApiClient {
   private baseUrl: string
 
@@ -201,6 +207,18 @@ class ApiClient {
   // Lyrics endpoint
   async getLyrics(sessionId: string): Promise<LyricsResponse> {
     return this.request<LyricsResponse>(`/api/session/${sessionId}/lyrics`)
+  }
+
+  // Lyrics offset endpoints
+  async getLyricsOffset(sessionId: string): Promise<LyricsOffsetResponse> {
+    return this.request<LyricsOffsetResponse>(`/api/session/${sessionId}/lyrics-offset`)
+  }
+
+  async setLyricsOffset(sessionId: string, offsetSeconds: number): Promise<LyricsOffsetResponse> {
+    return this.request<LyricsOffsetResponse>(`/api/session/${sessionId}/lyrics-offset`, {
+      method: 'POST',
+      body: JSON.stringify({ offset_seconds: offsetSeconds }),
+    })
   }
 }
 

@@ -1,26 +1,33 @@
 /**
- * Lyrics display component for karaoke-style lyrics during recording.
- * Shows current line highlighted with previous/next lines for context.
+ * Lyrics display component for karaoke-style lyrics.
+ * Uses shadcn/ui for polished, accessible UI.
  */
 import { useState, useEffect, useMemo, useRef } from 'react'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent } from '@/components/ui/card'
+import { Progress } from '@/components/ui/progress'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { ChevronLeft, ChevronRight, Minus, Plus, Target } from 'lucide-react'
+import { cn } from '@/lib/utils'
 
 export interface LyricLine {
   text: string
-  startTime?: number  // Optional: timestamp in seconds
+  startTime?: number
   endTime?: number
 }
 
 interface LyricsDisplayProps {
-  lyrics: string           // Raw lyrics text (newline separated)
-  currentTime?: number     // Current playback time in seconds
-  isPlaying?: boolean      // Is the song playing?
+  lyrics: string
+  currentTime?: number
+  isPlaying?: boolean
   onLineChange?: (lineIndex: number) => void
+  offset?: number
+  onOffsetChange?: (newOffset: number) => void
+  showOffsetControls?: boolean
 }
 
-// Parse raw lyrics into lines
 function parseLyrics(lyrics: string): LyricLine[] {
   if (!lyrics) return []
-
   return lyrics
     .split('\n')
     .map((line) => line.trim())
@@ -33,41 +40,37 @@ export function LyricsDisplay({
   currentTime = 0,
   isPlaying = false,
   onLineChange,
+  offset = 0,
+  onOffsetChange,
+  showOffsetControls = true,
 }: LyricsDisplayProps) {
   const [currentLineIndex, setCurrentLineIndex] = useState(0)
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true)
-  const containerRef = useRef<HTMLDivElement>(null)
   const currentLineRef = useRef<HTMLDivElement>(null)
 
-  // Parse lyrics into lines
   const lines = useMemo(() => parseLyrics(lyrics), [lyrics])
+  const adjustedTime = currentTime + offset
 
-  // Auto-advance lyrics (simple time-based estimation if no timestamps)
+  // Auto-advance lyrics
   useEffect(() => {
     if (!isPlaying || lines.length === 0) return
-
-    // Simple auto-advance: estimate ~4 seconds per line
     const estimatedLineTime = 4
-    const estimatedIndex = Math.floor(currentTime / estimatedLineTime)
-    const newIndex = Math.min(estimatedIndex, lines.length - 1)
-
+    const estimatedIndex = Math.floor(adjustedTime / estimatedLineTime)
+    const newIndex = Math.min(Math.max(0, estimatedIndex), lines.length - 1)
     if (newIndex !== currentLineIndex) {
       setCurrentLineIndex(newIndex)
       onLineChange?.(newIndex)
     }
-  }, [currentTime, isPlaying, lines.length, currentLineIndex, onLineChange])
+  }, [adjustedTime, isPlaying, lines.length, currentLineIndex, onLineChange])
 
-  // Manual navigation
-  const goToLine = (index: number) => {
-    if (index >= 0 && index < lines.length) {
-      setCurrentLineIndex(index)
-      setAutoScrollEnabled(false)
-      onLineChange?.(index)
-    }
+  // Sync button handler
+  const handleSync = () => {
+    const newOffset = -currentTime
+    const clampedOffset = Math.max(-60, Math.min(60, newOffset))
+    onOffsetChange?.(clampedOffset)
+    setCurrentLineIndex(0)
+    setAutoScrollEnabled(true)
   }
-
-  const nextLine = () => goToLine(currentLineIndex + 1)
-  const prevLine = () => goToLine(currentLineIndex - 1)
 
   // Auto-scroll to current line
   useEffect(() => {
@@ -79,97 +82,137 @@ export function LyricsDisplay({
     }
   }, [currentLineIndex, autoScrollEnabled])
 
-  // Re-enable auto-scroll when playing restarts
   useEffect(() => {
-    if (isPlaying) {
-      setAutoScrollEnabled(true)
-    }
+    if (isPlaying) setAutoScrollEnabled(true)
   }, [isPlaying])
+
+  const goToLine = (index: number) => {
+    if (index >= 0 && index < lines.length) {
+      setCurrentLineIndex(index)
+      setAutoScrollEnabled(false)
+      onLineChange?.(index)
+    }
+  }
 
   if (lines.length === 0) {
     return (
-      <div className="w-full bg-gray-800/50 backdrop-blur rounded-2xl p-4 text-center">
-        <p className="text-gray-500 italic">Paroles non disponibles</p>
-      </div>
+      <Card className="bg-card/50 border-border/30">
+        <CardContent className="py-12 text-center">
+          <p className="text-muted-foreground text-lg">Paroles non disponibles</p>
+        </CardContent>
+      </Card>
     )
   }
 
-  // Get visible lines (current + context)
-  const visibleRange = {
-    start: Math.max(0, currentLineIndex - 2),
-    end: Math.min(lines.length, currentLineIndex + 4),
-  }
+  const progressPercent = ((currentLineIndex + 1) / lines.length) * 100
 
   return (
-    <div className="w-full bg-gray-800/50 backdrop-blur rounded-2xl overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-2 bg-gray-900/50 border-b border-gray-700">
-        <div className="flex items-center gap-2">
-          <span className="text-lg">📝</span>
-          <span className="text-sm text-gray-400">Paroles</span>
-        </div>
+    <Card className="overflow-hidden bg-card/80 backdrop-blur border-border/50 shadow-xl">
+      {/* Header - Controls */}
+      <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-border/50 bg-muted/20">
+        {/* Offset controls */}
+        {showOffsetControls && onOffsetChange && (
+          <div className="flex items-center gap-1.5">
+            {/* Sync button */}
+            <Button
+              variant="default"
+              size="sm"
+              className="h-9 gap-1.5 bg-green-600 hover:bg-green-500"
+              onClick={handleSync}
+            >
+              <Target className="h-4 w-4" />
+              <span className="hidden sm:inline">Sync</span>
+            </Button>
+
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-9 w-9"
+              onClick={() => onOffsetChange(Math.max(-30, offset - 0.5))}
+            >
+              <Minus className="h-4 w-4" />
+            </Button>
+
+            <Button
+              variant={offset === 0 ? "outline" : "secondary"}
+              size="sm"
+              className="h-9 min-w-[72px] font-mono text-sm"
+              onClick={() => onOffsetChange(0)}
+            >
+              {offset >= 0 ? '+' : ''}{offset.toFixed(1)}s
+            </Button>
+
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-9 w-9"
+              onClick={() => onOffsetChange(Math.min(30, offset + 0.5))}
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
+          </div>
+        )}
+
+        {/* Navigation */}
         <div className="flex items-center gap-1">
-          <button
-            onClick={prevLine}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-9 w-9"
             disabled={currentLineIndex === 0}
-            className="p-1 text-gray-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
+            onClick={() => goToLine(currentLineIndex - 1)}
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-            </svg>
-          </button>
-          <span className="text-xs text-gray-500 min-w-[3rem] text-center">
-            {currentLineIndex + 1}/{lines.length}
+            <ChevronLeft className="h-5 w-5" />
+          </Button>
+
+          <span className="text-sm text-muted-foreground font-medium min-w-[4.5rem] text-center tabular-nums">
+            {currentLineIndex + 1} / {lines.length}
           </span>
-          <button
-            onClick={nextLine}
+
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-9 w-9"
             disabled={currentLineIndex >= lines.length - 1}
-            className="p-1 text-gray-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
+            onClick={() => goToLine(currentLineIndex + 1)}
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-            </svg>
-          </button>
+            <ChevronRight className="h-5 w-5" />
+          </Button>
         </div>
       </div>
 
-      {/* Lyrics content */}
-      <div
-        ref={containerRef}
-        className="p-4 max-h-48 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-600"
-      >
-        <div className="space-y-2">
-          {lines.slice(visibleRange.start, visibleRange.end).map((line, i) => {
-            const actualIndex = visibleRange.start + i
-            const isCurrent = actualIndex === currentLineIndex
-            const isPast = actualIndex < currentLineIndex
-            const isFuture = actualIndex > currentLineIndex
+      {/* Lyrics - Main content */}
+      <ScrollArea className="h-[300px] md:h-[400px] lg:h-[450px]">
+        <div className="px-6 py-8 md:px-10 md:py-10 space-y-6 md:space-y-8">
+          {lines.map((line, i) => {
+            const isCurrent = i === currentLineIndex
+            const isPast = i < currentLineIndex
+            const distance = Math.abs(i - currentLineIndex)
+
+            // Only render nearby lines
+            if (distance > 5) return null
 
             return (
               <div
-                key={actualIndex}
+                key={i}
                 ref={isCurrent ? currentLineRef : undefined}
-                onClick={() => goToLine(actualIndex)}
-                className={`
-                  py-2 px-3 rounded-lg cursor-pointer transition-all duration-300
-                  ${isCurrent
-                    ? 'bg-primary-500/30 border border-primary-500/50 scale-105'
-                    : 'hover:bg-gray-700/50'
-                  }
-                `}
+                onClick={() => goToLine(i)}
+                className={cn(
+                  "cursor-pointer transition-all duration-500 ease-out",
+                  isCurrent && "scale-100",
+                  !isCurrent && "scale-[0.92] hover:scale-[0.96]"
+                )}
               >
                 <p
-                  className={`
-                    text-center transition-all duration-300
-                    ${isCurrent
-                      ? 'text-xl font-bold text-white'
-                      : isPast
-                        ? 'text-sm text-gray-500'
-                        : isFuture
-                          ? 'text-sm text-gray-400'
-                          : ''
-                    }
-                  `}
+                  className={cn(
+                    "text-center leading-relaxed transition-all duration-500",
+                    // Current line - prominent
+                    isCurrent && "text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold text-foreground",
+                    // Past lines
+                    !isCurrent && isPast && "text-lg md:text-xl lg:text-2xl text-muted-foreground/40",
+                    // Future lines
+                    !isCurrent && !isPast && "text-lg md:text-xl lg:text-2xl text-muted-foreground/60"
+                  )}
                 >
                   {line.text}
                 </p>
@@ -177,29 +220,13 @@ export function LyricsDisplay({
             )
           })}
         </div>
-      </div>
+      </ScrollArea>
 
-      {/* Quick navigation dots */}
-      <div className="px-4 py-2 bg-gray-900/30 border-t border-gray-700/50">
-        <div className="flex justify-center gap-1 flex-wrap max-h-6 overflow-hidden">
-          {lines.map((_, i) => (
-            <button
-              key={i}
-              onClick={() => goToLine(i)}
-              className={`
-                w-2 h-2 rounded-full transition-all
-                ${i === currentLineIndex
-                  ? 'bg-primary-500 scale-125'
-                  : i < currentLineIndex
-                    ? 'bg-gray-600'
-                    : 'bg-gray-700'
-                }
-              `}
-            />
-          ))}
-        </div>
+      {/* Progress bar */}
+      <div className="px-4 py-3 border-t border-border/30 bg-muted/10">
+        <Progress value={progressPercent} className="h-2" />
       </div>
-    </div>
+    </Card>
   )
 }
 
@@ -215,20 +242,18 @@ export function LyricsDisplayCompact({
 }) {
   const lines = useMemo(() => parseLyrics(lyrics), [lyrics])
 
-  if (lines.length === 0) {
-    return null
-  }
+  if (lines.length === 0) return null
 
   const currentLine = lines[currentLineIndex]?.text || ''
   const nextLine = lines[currentLineIndex + 1]?.text || ''
 
   return (
-    <div className="text-center space-y-1">
-      <p className="text-lg font-semibold text-white truncate px-4">
+    <div className="text-center space-y-2">
+      <p className="text-2xl md:text-3xl font-bold text-foreground truncate px-4">
         {currentLine}
       </p>
       {nextLine && (
-        <p className="text-sm text-gray-500 truncate px-4">
+        <p className="text-lg md:text-xl text-muted-foreground truncate px-4">
           {nextLine}
         </p>
       )}

@@ -12,6 +12,7 @@ from app.services.redis_client import redis_client
 from app.services.youtube_cache import youtube_cache
 from app.services.search_history import search_history
 from app.services.lyrics import lyrics_service
+from app.services.lyrics_offset import lyrics_offset_service
 from app.config import settings
 
 # Celery app for triggering tasks
@@ -57,6 +58,18 @@ class SessionStatus(BaseModel):
     artist_name: str | None = None
     youtube_url: str | None = None
     error: str | None = None
+
+
+class LyricsOffsetRequest(BaseModel):
+    """Request to set lyrics offset."""
+    offset_seconds: float
+
+
+class LyricsOffsetResponse(BaseModel):
+    """Response with offset data."""
+    spotify_track_id: str
+    youtube_video_id: str
+    offset_seconds: float
 
 
 async def prepare_reference_audio(session_id: str, youtube_url: str, youtube_id: str):
@@ -519,3 +532,58 @@ async def get_session_lyrics(session_id: str):
         "status": lyrics_result.get("status", "not_found"),
         "url": lyrics_result.get("url"),
     }
+
+
+@router.get("/{session_id}/lyrics-offset", response_model=LyricsOffsetResponse)
+async def get_lyrics_offset(session_id: str):
+    """
+    Get the saved lyrics offset for the current session's track/video pair.
+    Returns 0.0 if no offset has been saved.
+    """
+    session = await redis_client.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    spotify_track_id = session.get("spotify_track_id")
+    youtube_id = session.get("youtube_id")
+
+    if not spotify_track_id or not youtube_id:
+        raise HTTPException(status_code=400, detail="Session missing track/video info")
+
+    offset = await lyrics_offset_service.get_offset(spotify_track_id, youtube_id)
+
+    return LyricsOffsetResponse(
+        spotify_track_id=spotify_track_id,
+        youtube_video_id=youtube_id,
+        offset_seconds=offset,
+    )
+
+
+@router.post("/{session_id}/lyrics-offset", response_model=LyricsOffsetResponse)
+async def set_lyrics_offset(session_id: str, request: LyricsOffsetRequest):
+    """
+    Save or update the lyrics offset for the current session's track/video pair.
+    Offset is stored permanently in PostgreSQL.
+
+    Positive offset = lyrics appear earlier (video is ahead)
+    Negative offset = lyrics appear later (video is behind)
+    """
+    session = await redis_client.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    spotify_track_id = session.get("spotify_track_id")
+    youtube_id = session.get("youtube_id")
+
+    if not spotify_track_id or not youtube_id:
+        raise HTTPException(status_code=400, detail="Session missing track/video info")
+
+    offset = await lyrics_offset_service.set_offset(
+        spotify_track_id, youtube_id, request.offset_seconds
+    )
+
+    return LyricsOffsetResponse(
+        spotify_track_id=spotify_track_id,
+        youtube_video_id=youtube_id,
+        offset_seconds=offset,
+    )

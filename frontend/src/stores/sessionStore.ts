@@ -24,6 +24,9 @@ interface SessionState {
   // Playback state
   playbackTime: number
   isVideoPlaying: boolean
+  // Lyrics offset
+  lyricsOffset: number
+  lyricsOffsetStatus: 'idle' | 'loading' | 'loaded' | 'saving' | 'error'
 
   // Actions
   startSession: () => void
@@ -41,6 +44,8 @@ interface SessionState {
   setError: (error: string) => void
   setPlaybackTime: (time: number) => void
   setIsVideoPlaying: (isPlaying: boolean) => void
+  setLyricsOffset: (offset: number) => void
+  setLyricsOffsetStatus: (status: 'idle' | 'loading' | 'loaded' | 'saving' | 'error') => void
   reset: () => void
 }
 
@@ -58,6 +63,8 @@ export const useSessionStore = create<SessionState>((set) => ({
   error: null,
   playbackTime: 0,
   isVideoPlaying: false,
+  lyricsOffset: 0,
+  lyricsOffsetStatus: 'idle',
 
   // Actions
   startSession: () => {
@@ -120,6 +127,14 @@ export const useSessionStore = create<SessionState>((set) => ({
     set({ isVideoPlaying })
   },
 
+  setLyricsOffset: (lyricsOffset: number) => {
+    set({ lyricsOffset })
+  },
+
+  setLyricsOffsetStatus: (lyricsOffsetStatus: 'idle' | 'loading' | 'loaded' | 'saving' | 'error') => {
+    set({ lyricsOffsetStatus })
+  },
+
   reset: () => {
     set({
       status: 'idle',
@@ -134,6 +149,8 @@ export const useSessionStore = create<SessionState>((set) => ({
       error: null,
       playbackTime: 0,
       isVideoPlaying: false,
+      lyricsOffset: 0,
+      lyricsOffsetStatus: 'idle',
     })
   },
 }))

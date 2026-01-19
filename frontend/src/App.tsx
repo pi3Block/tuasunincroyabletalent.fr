@@ -67,6 +67,10 @@ function App() {
     setError,
     setPlaybackTime,
     setIsVideoPlaying,
+    lyricsOffset,
+    lyricsOffsetStatus,
+    setLyricsOffset,
+    setLyricsOffsetStatus,
     reset,
   } = useSessionStore()
 
@@ -75,7 +79,6 @@ function App() {
 
   // Audio recorder hook
   const {
-    isRecording,
     duration: recordingDuration,
     startRecording: startAudioRecording,
     stopRecording: stopAudioRecording,
@@ -94,6 +97,7 @@ function App() {
   // Track analysis task ID
   const analysisTaskIdRef = useRef<string | null>(null)
   const mediaStreamRef = useRef<MediaStream | null>(null)
+  const saveOffsetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Poll session status when preparing/downloading
   useEffect(() => {
@@ -152,6 +156,59 @@ function App() {
 
     fetchLyrics()
   }, [sessionId, status, lyricsStatus, setLyrics, setLyricsStatus])
+
+  // Fetch lyrics offset when session is ready
+  useEffect(() => {
+    if (!sessionId || status !== 'ready' || lyricsOffsetStatus !== 'idle') {
+      return
+    }
+
+    const fetchOffset = async () => {
+      setLyricsOffsetStatus('loading')
+      try {
+        const response = await api.getLyricsOffset(sessionId)
+        setLyricsOffset(response.offset_seconds)
+        setLyricsOffsetStatus('loaded')
+      } catch (err) {
+        console.error('Failed to fetch lyrics offset:', err)
+        setLyricsOffsetStatus('error')
+        setLyricsOffset(0)
+      }
+    }
+
+    fetchOffset()
+  }, [sessionId, status, lyricsOffsetStatus, setLyricsOffset, setLyricsOffsetStatus])
+
+  // Handler for offset changes (debounced save to backend)
+  const handleOffsetChange = useCallback((newOffset: number) => {
+    // Immediate local update
+    setLyricsOffset(newOffset)
+
+    // Clear previous timeout
+    if (saveOffsetTimeoutRef.current) {
+      clearTimeout(saveOffsetTimeoutRef.current)
+    }
+
+    // Debounced save to backend (after 1s of no changes)
+    saveOffsetTimeoutRef.current = setTimeout(async () => {
+      if (!sessionId) return
+      try {
+        await api.setLyricsOffset(sessionId, newOffset)
+        console.log(`[LyricsOffset] Saved offset: ${newOffset}s`)
+      } catch (err) {
+        console.error('Failed to save lyrics offset:', err)
+      }
+    }, 1000)
+  }, [sessionId, setLyricsOffset])
+
+  // Cleanup offset save timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (saveOffsetTimeoutRef.current) {
+        clearTimeout(saveOffsetTimeoutRef.current)
+      }
+    }
+  }, [])
 
   // Poll analysis status when analyzing
   useEffect(() => {
@@ -306,10 +363,10 @@ function App() {
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col items-center justify-center p-6">
+      <main className="flex-1 flex flex-col items-center justify-center p-4 md:p-8 lg:p-12">
         {/* Error Banner */}
         {error && (
-          <div className="w-full max-w-md mb-4 bg-red-500/20 border border-red-500 rounded-lg p-3 text-red-300 text-sm text-center">
+          <div className="w-full max-w-md md:max-w-2xl lg:max-w-4xl mb-4 bg-red-500/20 border border-red-500 rounded-lg p-3 text-red-300 text-sm text-center">
             {error}
           </div>
         )}
@@ -340,7 +397,7 @@ function App() {
 
         {/* SELECTING - Search Screen */}
         {status === 'selecting' && (
-          <div className="w-full max-w-md space-y-4">
+          <div className="w-full max-w-md md:max-w-2xl lg:max-w-4xl space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-xl font-semibold">
                 Choisis ta chanson
@@ -359,7 +416,7 @@ function App() {
 
         {/* PREPARING - Searching YouTube */}
         {status === 'preparing' && selectedTrack && (
-          <div className="text-center space-y-6 w-full max-w-md">
+          <div className="text-center space-y-6 w-full max-w-md md:max-w-2xl lg:max-w-4xl">
             <TrackCard track={selectedTrack} />
 
             <div className="space-y-2">
@@ -376,7 +433,7 @@ function App() {
 
         {/* DOWNLOADING - Downloading from YouTube */}
         {status === 'downloading' && selectedTrack && (
-          <div className="text-center space-y-6 w-full max-w-md">
+          <div className="text-center space-y-6 w-full max-w-md md:max-w-2xl lg:max-w-4xl">
             <TrackCard track={selectedTrack} />
 
             <div className="space-y-2">
@@ -401,7 +458,7 @@ function App() {
 
         {/* NEEDS_FALLBACK - Manual YouTube URL required */}
         {status === 'needs_fallback' && selectedTrack && (
-          <div className="text-center space-y-6 w-full max-w-md">
+          <div className="text-center space-y-6 w-full max-w-md md:max-w-2xl lg:max-w-4xl">
             <TrackCard track={selectedTrack} />
 
             <div className="bg-yellow-500/20 border border-yellow-500 rounded-lg p-4 text-left">
@@ -442,7 +499,7 @@ function App() {
 
         {/* READY - Ready to record */}
         {status === 'ready' && selectedTrack && (
-          <div className="text-center space-y-6 w-full max-w-md">
+          <div className="text-center space-y-6 w-full max-w-md md:max-w-2xl lg:max-w-4xl">
             <TrackCard track={selectedTrack} />
 
             {/* YouTube Player */}
@@ -480,6 +537,9 @@ function App() {
                 lyrics={lyrics}
                 currentTime={playbackTime}
                 isPlaying={isVideoPlaying}
+                offset={lyricsOffset}
+                onOffsetChange={handleOffsetChange}
+                showOffsetControls={true}
               />
             )}
 
@@ -509,7 +569,7 @@ function App() {
 
         {/* RECORDING */}
         {status === 'recording' && (
-          <div className="text-center space-y-4 w-full max-w-md">
+          <div className="text-center space-y-4 w-full max-w-md md:max-w-2xl lg:max-w-4xl">
             {/* Recording indicator */}
             <div className="flex items-center justify-center gap-3 bg-red-500/20 border border-red-500 rounded-lg p-3">
               <div className="w-4 h-4 bg-red-500 rounded-full animate-pulse" />
@@ -527,6 +587,9 @@ function App() {
                 lyrics={lyrics}
                 currentTime={playbackTime}
                 isPlaying={isVideoPlaying}
+                offset={lyricsOffset}
+                onOffsetChange={handleOffsetChange}
+                showOffsetControls={true}
               />
             )}
 
@@ -559,7 +622,7 @@ function App() {
 
         {/* ANALYZING */}
         {(status === 'analyzing') && (
-          <div className="text-center space-y-6 w-full max-w-md">
+          <div className="text-center space-y-6 w-full max-w-md md:max-w-2xl lg:max-w-4xl">
             {/* Animation du jury */}
             <div className="relative">
               <div className="w-24 h-24 mx-auto border-4 border-gold-400 border-t-transparent rounded-full animate-spin" />
@@ -609,7 +672,7 @@ function App() {
 
         {/* RESULTS */}
         {status === 'results' && results && (
-          <div className="text-center space-y-6 w-full max-w-md">
+          <div className="text-center space-y-6 w-full max-w-md md:max-w-2xl lg:max-w-4xl">
             {/* Score principal */}
             <div className="relative">
               <div className="w-32 h-32 mx-auto rounded-full bg-gradient-to-br from-gold-400 to-gold-600 flex items-center justify-center shadow-lg">

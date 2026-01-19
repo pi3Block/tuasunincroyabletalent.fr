@@ -14,9 +14,19 @@ async def lifespan(app: FastAPI):
     """Startup and shutdown events."""
     # Startup
     print(f"🚀 Starting The AI Voice Jury API (debug={settings.debug})")
+
+    # Initialize database tables
+    from app.services.database import init_db, close_db
+    try:
+        await init_db()
+    except Exception as e:
+        print(f"⚠️ Database initialization warning: {e}")
+
     yield
+
     # Shutdown
     print("👋 Shutting down...")
+    await close_db()
 
 
 app = FastAPI(
