@@ -16,6 +16,10 @@ RUN apt-get update && apt-get install -y \
 # Add uv to PATH
 ENV PATH="/root/.local/bin:$PATH"
 
+# Use GPU 1 (second GPU with more VRAM)
+# Set before any PyTorch import
+ENV CUDA_VISIBLE_DEVICES=1
+
 # Install Python dependencies (PyTorch already included in base image)
 COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/uv \

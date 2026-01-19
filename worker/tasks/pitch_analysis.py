@@ -55,7 +55,7 @@ def do_extract_pitch(vocals_path: str, session_id: str, fast_mode: bool = False)
         model=model_name,
         decoder=torchcrepe.decode.viterbi,  # Smooth pitch curve
         device=device,
-        batch_size=1024 if device == "cuda" else 256,  # Larger batch on GPU
+        batch_size=512 if device == "cuda" else 256,  # Reduced for multi-worker GPU sharing
         return_periodicity=True,
     )
 

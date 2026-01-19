@@ -83,6 +83,7 @@ async def prepare_reference_audio(session_id: str, youtube_url: str, youtube_id:
             await redis_client.update_session(session_id, {
                 "reference_status": "ready",
                 "reference_path": cached["reference_path"],
+                "youtube_id": youtube_id,  # Ensure youtube_id is always stored for worker cache
             })
             return
 
@@ -113,6 +114,7 @@ async def prepare_reference_audio(session_id: str, youtube_url: str, youtube_id:
         await redis_client.update_session(session_id, {
             "reference_status": "ready",
             "reference_path": str(audio_path),
+            "youtube_id": youtube_id,  # Ensure youtube_id is always stored for worker cache
         })
 
         print(f"[Session {session_id}] Reference ready (cached for future use)")
