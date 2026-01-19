@@ -2,7 +2,7 @@
  * @fileoverview Karaoke word component with progressive gradient fill.
  *
  * This component renders a single word with Apple Music-style
- * progressive highlight animation using CSS gradient.
+ * progressive highlight animation using CSS gradient + fun effects.
  *
  * Architecture: Pure presentational component with CSS-in-JS gradient.
  */
@@ -17,12 +17,14 @@ import type { KaraokeWordProps } from '@/types/lyrics'
 
 /** Colors for the gradient fill */
 const COLORS = {
-  /** Active/highlighted color (amber-400) */
-  active: '#fbbf24',
+  /** Active/highlighted color - bright cyan/electric blue */
+  active: '#22d3ee',
+  /** Active glow color */
+  activeGlow: '#06b6d4',
   /** Inactive/upcoming color */
-  inactive: '#9ca3af',
-  /** Past color (slightly dimmed) */
-  past: '#d1d5db',
+  inactive: '#6b7280',
+  /** Past color - golden/sung */
+  past: '#fbbf24',
 } as const
 
 // ============================================================================
@@ -30,10 +32,13 @@ const COLORS = {
 // ============================================================================
 
 /**
- * Karaoke word with progressive gradient fill.
+ * Karaoke word with progressive gradient fill and fun effects.
  *
- * The gradient creates a "filling" effect as the word is being sung,
- * similar to Apple Music's karaoke mode.
+ * Features:
+ * - Progressive color fill as word is sung
+ * - Subtle pulse animation on active word
+ * - Glow effect on active word
+ * - Past words stay highlighted in gold
  *
  * @example
  * ```tsx
@@ -52,23 +57,39 @@ export const KaraokeWord = memo(function KaraokeWord({
   progress,
 }: KaraokeWordProps) {
   // Calculate gradient style for active word
-  const gradientStyle = useMemo(() => {
-    if (!isActive) return undefined
+  const wordStyle = useMemo(() => {
+    if (isActive) {
+      // Clamp progress to 0-1
+      const p = Math.max(0, Math.min(1, progress)) * 100
 
-    // Clamp progress to 0-1
-    const p = Math.max(0, Math.min(1, progress)) * 100
+      return {
+        background: `linear-gradient(90deg,
+          ${COLORS.active} 0%,
+          ${COLORS.active} ${p}%,
+          ${COLORS.inactive} ${p}%,
+          ${COLORS.inactive} 100%)`,
+        WebkitBackgroundClip: 'text',
+        WebkitTextFillColor: 'transparent',
+        backgroundClip: 'text',
+        // Add glow effect
+        filter: `drop-shadow(0 0 8px ${COLORS.activeGlow})`,
+        // Subtle scale for emphasis
+        transform: 'scale(1.05)',
+      } as React.CSSProperties
+    }
+
+    if (isPast) {
+      return {
+        color: COLORS.past,
+        // Subtle glow on past words
+        textShadow: `0 0 4px ${COLORS.past}40`,
+      } as React.CSSProperties
+    }
 
     return {
-      background: `linear-gradient(90deg,
-        ${COLORS.active} 0%,
-        ${COLORS.active} ${p}%,
-        ${COLORS.inactive} ${p}%,
-        ${COLORS.inactive} 100%)`,
-      WebkitBackgroundClip: 'text',
-      WebkitTextFillColor: 'transparent',
-      backgroundClip: 'text',
+      color: COLORS.inactive,
     } as React.CSSProperties
-  }, [isActive, progress])
+  }, [isActive, isPast, progress])
 
   // Determine text class based on state
   const textClass = useMemo(() => {
@@ -76,18 +97,20 @@ export const KaraokeWord = memo(function KaraokeWord({
       return 'font-bold'
     }
     if (isPast) {
-      return 'text-amber-400/90'
+      return 'font-semibold'
     }
-    return 'text-muted-foreground/70'
+    return 'font-normal'
   }, [isActive, isPast])
 
   return (
     <span
       className={cn(
-        'inline-block transition-all duration-150',
-        textClass
+        'inline-block transition-all duration-100 ease-out',
+        textClass,
+        // Pulse animation on active word
+        isActive && 'animate-pulse-subtle'
       )}
-      style={gradientStyle}
+      style={wordStyle}
     >
       {word.text}
       {/* Space after word */}

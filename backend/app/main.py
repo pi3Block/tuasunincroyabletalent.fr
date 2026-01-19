@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import session, results, search
+from app.routers import session, results, search, audio
 
 
 @asynccontextmanager
@@ -55,6 +55,7 @@ app.add_middleware(
 app.include_router(search.router, prefix="/api/search", tags=["Search"])
 app.include_router(session.router, prefix="/api/session", tags=["Session"])
 app.include_router(results.router, prefix="/api/results", tags=["Results"])
+app.include_router(audio.router, prefix="/api/audio", tags=["Audio"])
 
 
 @app.get("/")

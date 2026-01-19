@@ -110,14 +110,15 @@ export const LyricLine = memo(forwardRef<HTMLDivElement, LyricLineProps>(
     }, [isActive, distance])
 
     // Determine text classes based on state
+    // Reduced sizes for better readability and more lines visible
     const textClasses = useMemo(() => {
       if (isActive) {
-        return 'text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold text-foreground'
+        return 'text-xl sm:text-2xl md:text-2xl lg:text-3xl font-bold text-foreground'
       }
       if (isPast) {
-        return 'text-lg md:text-xl lg:text-2xl text-muted-foreground/40'
+        return 'text-base md:text-lg lg:text-xl text-muted-foreground/40'
       }
-      return 'text-lg md:text-xl lg:text-2xl text-muted-foreground/60'
+      return 'text-base md:text-lg lg:text-xl text-muted-foreground/60'
     }, [isActive, isPast])
 
     // Render content based on display mode

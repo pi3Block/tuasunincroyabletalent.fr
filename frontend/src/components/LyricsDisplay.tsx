@@ -16,9 +16,10 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { ChevronLeft, ChevronRight, Loader2, Minus, Plus, Target, Wand2 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Loader2, Minus, Plus, Target, Wand2, Bug } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { SyncedLyricLine } from '@/api/client'
+import { TimelineDebug } from './lyrics/TimelineDebug'
 
 // Re-export types for backward compatibility
 export interface LyricLine {
@@ -136,6 +137,7 @@ export const LyricsDisplay = React.memo(function LyricsDisplay({
 }: LyricsDisplayProps) {
   const [currentLineIndex, setCurrentLineIndex] = useState(0)
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true)
+  const [showDebug, setShowDebug] = useState(false)
   const currentLineRef = useRef<HTMLDivElement>(null)
   const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -204,19 +206,23 @@ export const LyricsDisplay = React.memo(function LyricsDisplay({
   }, [isPlaying])
 
   // Sync button handler - aligns the first line to current playback time
-  // This means: if the user clicks Sync when they hear the first word,
-  // the offset will be set so that line 1 starts at the current time
+  // When user presses Sync, they're saying "the lyrics START NOW in the video"
+  // Since adjustedTime = currentTime + offset, we need:
+  // adjustedTime = firstLineStart (so first line shows now)
+  // Therefore: offset = firstLineStart - currentTime
   const handleSync = useCallback(() => {
     if (lines.length === 0) return
 
     // Get the start time of the first line (in seconds)
     const firstLineStart = lines[0]?.startTime ?? 0
 
-    // Calculate offset so that the first line aligns with current playback time
-    // offset = currentTime - firstLineStart
-    // This means: lyrics will be shifted so that line 1 appears at currentTime
-    const newOffset = currentTime - firstLineStart
+    // Calculate offset so that adjustedTime = firstLineStart
+    // adjustedTime = currentTime + offset = firstLineStart
+    // offset = firstLineStart - currentTime
+    const newOffset = firstLineStart - currentTime
     const clampedOffset = Math.max(-300, Math.min(300, newOffset))
+
+    console.log('[Sync] currentTime:', currentTime, 'firstLineStart:', firstLineStart, 'newOffset:', newOffset)
 
     lastSyncOffsetRef.current = clampedOffset
     setCurrentLineIndex(0)
@@ -270,6 +276,20 @@ export const LyricsDisplay = React.memo(function LyricsDisplay({
 
   return (
     <Card className="overflow-hidden bg-card/80 backdrop-blur border-border/50 shadow-xl">
+      {/* Debug Timeline UI */}
+      {showDebug && (
+        <TimelineDebug
+          currentTime={currentTime}
+          offset={offset}
+          firstLineStartTime={lines[0]?.startTime ?? 0}
+          currentLineStartTime={lines[currentLineIndex]?.startTime ?? 0}
+          currentLineIndex={currentLineIndex}
+          totalLines={lines.length}
+          isPlaying={isPlaying}
+          className="m-4"
+        />
+      )}
+
       {/* Header - Controls */}
       <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-border/50 bg-muted/20">
         {/* Offset controls */}
@@ -394,6 +414,17 @@ export const LyricsDisplay = React.memo(function LyricsDisplay({
                 ⚡ Synced
               </span>
             )}
+
+            {/* Debug toggle button */}
+            <Button
+              variant={showDebug ? "default" : "ghost"}
+              size="icon"
+              className={cn("h-9 w-9 ml-2", showDebug && "bg-yellow-600 hover:bg-yellow-500")}
+              onClick={() => setShowDebug(!showDebug)}
+              title="Toggle debug timeline"
+            >
+              <Bug className="h-4 w-4" />
+            </Button>
           </div>
         )}
 
@@ -427,14 +458,18 @@ export const LyricsDisplay = React.memo(function LyricsDisplay({
 
       {/* Lyrics - Main content */}
       <ScrollArea className="h-[300px] md:h-[400px] lg:h-[450px]">
-        <div className="px-6 py-8 md:px-10 md:py-10 space-y-6 md:space-y-8">
+        <div className="px-6 py-6 md:px-10 md:py-8 space-y-4 md:space-y-5">
           {lines.map((line, i) => {
             const isCurrent = i === currentLineIndex
             const isPast = i < currentLineIndex
             const distance = Math.abs(i - currentLineIndex)
 
             // Only render nearby lines (performance optimization)
-            if (distance > 5) return null
+            if (distance > 6) return null
+
+            // Calculate blur for depth effect
+            const blur = distance === 0 ? 0 : Math.min(distance * 0.8, 3)
+            const opacity = distance === 0 ? 1 : Math.max(0.3, 1 - distance * 0.15)
 
             return (
               <div
@@ -442,20 +477,24 @@ export const LyricsDisplay = React.memo(function LyricsDisplay({
                 ref={isCurrent ? currentLineRef : undefined}
                 onClick={() => goToLine(i)}
                 className={cn(
-                  "cursor-pointer transition-all duration-500 ease-out",
+                  "cursor-pointer transition-all duration-300 ease-out",
                   isCurrent && "scale-100",
-                  !isCurrent && "scale-[0.92] hover:scale-[0.96]"
+                  !isCurrent && "scale-[0.95] hover:scale-[0.97] hover:opacity-80"
                 )}
+                style={{
+                  filter: blur > 0 ? `blur(${blur}px)` : undefined,
+                  opacity,
+                }}
               >
                 <p
                   className={cn(
-                    "text-center leading-relaxed transition-all duration-500",
-                    // Current line - prominent
-                    isCurrent && "text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold text-foreground",
-                    // Past lines
-                    !isCurrent && isPast && "text-lg md:text-xl lg:text-2xl text-muted-foreground/40",
-                    // Future lines
-                    !isCurrent && !isPast && "text-lg md:text-xl lg:text-2xl text-muted-foreground/60"
+                    "text-center leading-relaxed transition-all duration-300",
+                    // Current line - compact but prominent with glow
+                    isCurrent && "text-xl sm:text-2xl md:text-2xl lg:text-3xl font-bold text-cyan-400 animate-line-glow",
+                    // Past lines - golden/sung
+                    !isCurrent && isPast && "text-base md:text-lg lg:text-xl text-amber-400/50",
+                    // Future lines - dimmed
+                    !isCurrent && !isPast && "text-base md:text-lg lg:text-xl text-muted-foreground/60"
                   )}
                 >
                   {line.text}

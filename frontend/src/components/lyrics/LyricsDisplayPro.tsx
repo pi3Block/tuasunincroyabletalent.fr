@@ -60,6 +60,8 @@ interface LyricsDisplayProProps {
   isAutoSyncing?: boolean
   /** Auto-sync confidence after calculation */
   autoSyncConfidence?: number | null
+  /** Show debug timeline UI */
+  showDebug?: boolean
   /** Custom class name */
   className?: string
 }
@@ -67,6 +69,7 @@ import { useLyricsSync } from '@/hooks/useLyricsSync'
 import { useLyricsScroll } from '@/hooks/useLyricsScroll'
 import { LyricLine } from './LyricLine'
 import { LyricsControls } from './LyricsControls'
+import { TimelineDebug } from './TimelineDebug'
 import type { SyncedLyricLine } from '@/api/client'
 
 // ============================================================================
@@ -144,6 +147,7 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
   onAutoSync,
   isAutoSyncing = false,
   autoSyncConfidence,
+  showDebug = false,
   className,
 }: LyricsDisplayProProps) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -268,6 +272,20 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
         className
       )}
     >
+      {/* Debug Timeline UI */}
+      {showDebug && (
+        <TimelineDebug
+          currentTime={currentTime}
+          offset={offset}
+          firstLineStartTime={lines[0]?.startTime ?? 0}
+          currentLineStartTime={lines[currentLineIndex]?.startTime ?? 0}
+          currentLineIndex={currentLineIndex}
+          totalLines={lines.length}
+          isPlaying={isPlaying}
+          className="m-4"
+        />
+      )}
+
       {/* Header - Controls */}
       <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-border/50 bg-muted/20">
         {/* Offset controls */}

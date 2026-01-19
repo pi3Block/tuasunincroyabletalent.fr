@@ -555,7 +555,7 @@ function App() {
 
         {/* READY - Ready to record */}
         {status === 'ready' && selectedTrack && (
-          <div className="w-full max-w-md md:max-w-4xl lg:max-w-6xl space-y-6">
+          <div className="w-full max-w-md md:max-w-4xl lg:max-w-7xl xl:max-w-[90%] 2xl:max-w-[85%] space-y-6">
             <TrackCard track={selectedTrack} />
 
             {/* Desktop: Video + Lyrics side by side | Mobile: stacked */}
@@ -638,7 +638,7 @@ function App() {
 
         {/* RECORDING */}
         {status === 'recording' && (
-          <div className="w-full max-w-md md:max-w-4xl lg:max-w-6xl space-y-4">
+          <div className="w-full max-w-md md:max-w-4xl lg:max-w-7xl xl:max-w-[90%] 2xl:max-w-[85%] space-y-4">
             {/* Recording indicator */}
             <div className="flex items-center justify-center gap-3 bg-red-500/20 border border-red-500 rounded-lg p-3">
               <div className="w-4 h-4 bg-red-500 rounded-full animate-pulse" />

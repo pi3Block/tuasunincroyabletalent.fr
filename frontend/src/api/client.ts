@@ -127,6 +127,23 @@ export interface AutoSyncResponse {
   error?: string
 }
 
+// Audio track availability response
+export interface AudioTracksResponse {
+  session_id: string
+  tracks: {
+    ref: {
+      vocals: boolean
+      instrumentals: boolean
+      original: boolean
+    }
+    user: {
+      vocals: boolean
+      instrumentals: boolean
+      original: boolean
+    }
+  }
+}
+
 class ApiClient {
   private baseUrl: string
 
@@ -243,6 +260,19 @@ class ApiClient {
     return this.request<AutoSyncResponse>(`/api/session/${sessionId}/auto-sync`, {
       method: 'POST',
     })
+  }
+
+  // Audio endpoints
+  async getAudioTracks(sessionId: string): Promise<AudioTracksResponse> {
+    return this.request<AudioTracksResponse>(`/api/audio/${sessionId}/tracks`)
+  }
+
+  getAudioTrackUrl(
+    sessionId: string,
+    source: 'user' | 'ref',
+    trackType: 'vocals' | 'instrumentals' | 'original'
+  ): string {
+    return `${this.baseUrl}/api/audio/${sessionId}/${source}/${trackType}`
   }
 }
 

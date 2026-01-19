@@ -90,3 +90,69 @@ body {
     @apply bg-background text-foreground;
   }
 }
+
+/* ============================================================================
+   KARAOKE ANIMATIONS
+   ============================================================================ */
+
+/* Subtle pulse animation for active karaoke word */
+@keyframes pulse-subtle {
+  0%, 100% {
+    transform: scale(1.05);
+    filter: drop-shadow(0 0 8px rgba(6, 182, 212, 0.6));
+  }
+  50% {
+    transform: scale(1.08);
+    filter: drop-shadow(0 0 12px rgba(6, 182, 212, 0.8));
+  }
+}
+
+.animate-pulse-subtle {
+  animation: pulse-subtle 0.8s ease-in-out infinite;
+}
+
+/* Bounce animation for word completion */
+@keyframes word-bounce {
+  0%, 100% {
+    transform: translateY(0) scale(1);
+  }
+  50% {
+    transform: translateY(-3px) scale(1.02);
+  }
+}
+
+.animate-word-bounce {
+  animation: word-bounce 0.3s ease-out;
+}
+
+/* Glow animation for active line */
+@keyframes line-glow {
+  0%, 100% {
+    text-shadow: 0 0 10px rgba(34, 211, 238, 0.3), 0 0 20px rgba(34, 211, 238, 0.1);
+  }
+  50% {
+    text-shadow: 0 0 15px rgba(34, 211, 238, 0.5), 0 0 30px rgba(34, 211, 238, 0.2);
+  }
+}
+
+.animate-line-glow {
+  animation: line-glow 1.5s ease-in-out infinite;
+}
+
+/* Progress fill effect using pseudo-element */
+.karaoke-fill {
+  position: relative;
+  display: inline-block;
+}
+
+.karaoke-fill::after {
+  content: attr(data-text);
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: #22d3ee;
+  overflow: hidden;
+  white-space: nowrap;
+  width: var(--fill-progress, 0%);
+  text-shadow: 0 0 8px rgba(34, 211, 238, 0.5);
+}
