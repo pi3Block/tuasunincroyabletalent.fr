@@ -489,12 +489,12 @@ export const LyricsDisplay = React.memo(function LyricsDisplay({
                 <p
                   className={cn(
                     "text-center leading-relaxed transition-all duration-300",
-                    // Current line - compact but prominent with glow
-                    isCurrent && "text-xl sm:text-2xl md:text-2xl lg:text-3xl font-bold text-cyan-400 animate-line-glow",
-                    // Past lines - golden/sung
-                    !isCurrent && isPast && "text-base md:text-lg lg:text-xl text-amber-400/50",
-                    // Future lines - dimmed
-                    !isCurrent && !isPast && "text-base md:text-lg lg:text-xl text-muted-foreground/60"
+                    // Current line - bright white, large, with subtle glow for visibility
+                    isCurrent && "text-xl sm:text-2xl md:text-2xl lg:text-3xl font-bold text-white drop-shadow-[0_0_8px_rgba(255,255,255,0.4)]",
+                    // Past lines - dimmed gray (already sung)
+                    !isCurrent && isPast && "text-base md:text-lg lg:text-xl text-gray-500",
+                    // Future lines - lighter gray (upcoming)
+                    !isCurrent && !isPast && "text-base md:text-lg lg:text-xl text-gray-400"
                   )}
                 >
                   {line.text}

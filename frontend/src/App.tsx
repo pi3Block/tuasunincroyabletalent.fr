@@ -4,6 +4,7 @@ import { TrackSearch } from '@/components/TrackSearch'
 import { YouTubePlayer } from '@/components/YouTubePlayer'
 import { PitchIndicator } from '@/components/PitchIndicator'
 import { LyricsDisplay } from '@/components/LyricsDisplay'
+import { StudioMode } from '@/audio'
 import { api, type Track } from '@/api/client'
 import { useAudioRecorder } from '@/hooks/useAudioRecorder'
 import { usePitchDetection } from '@/hooks/usePitchDetection'
@@ -701,62 +702,60 @@ function App() {
         )}
 
         {/* ANALYZING */}
-        {(status === 'analyzing') && (
-          <div className="text-center space-y-6 w-full max-w-md md:max-w-2xl lg:max-w-4xl">
+        {(status === 'analyzing') && sessionId && (
+          <div className="space-y-6 w-full max-w-md md:max-w-2xl lg:max-w-4xl">
             {/* Animation du jury */}
-            <div className="relative">
-              <div className="w-24 h-24 mx-auto border-4 border-gold-400 border-t-transparent rounded-full animate-spin" />
-              <div className="absolute inset-0 flex items-center justify-center">
-                <span className="text-4xl">👨‍⚖️</span>
-              </div>
-            </div>
-
-            <div>
-              <p className="text-2xl font-bold bg-gradient-to-r from-gold-400 to-gold-600 bg-clip-text text-transparent">
-                Le jury délibère...
-              </p>
-              <p className="text-gray-400 mt-2">Analyse de ta performance en cours</p>
-            </div>
-
-            {/* Progress indicator */}
-            {analysisProgress && (
-              <div className="space-y-3">
-                {/* Progress bar */}
-                <div className="h-3 bg-gray-700 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-gradient-to-r from-gold-400 to-gold-600 transition-all duration-700 ease-out"
-                    style={{ width: `${analysisProgress.progress}%` }}
-                  />
+            <div className="text-center">
+              <div className="relative inline-block">
+                <div className="w-20 h-20 mx-auto border-4 border-gold-400 border-t-transparent rounded-full animate-spin" />
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <span className="text-3xl">👨‍⚖️</span>
                 </div>
-
-                {/* Percentage */}
-                <p className="text-gold-400 font-bold text-lg">
-                  {analysisProgress.progress}%
-                </p>
-
-                {/* Step label */}
-                <p className="text-gray-300">
-                  {getProgressLabel(analysisProgress.step)}
-                </p>
-
-                {/* Detail (if provided) */}
-                {analysisProgress.detail && (
-                  <p className="text-sm text-gray-500 italic">
-                    {analysisProgress.detail}
-                  </p>
-                )}
               </div>
-            )}
+
+              <div className="mt-4">
+                <p className="text-xl font-bold bg-gradient-to-r from-gold-400 to-gold-600 bg-clip-text text-transparent">
+                  Le jury délibère...
+                </p>
+                <p className="text-gray-400 text-sm mt-1">Analyse de ta performance en cours</p>
+              </div>
+
+              {/* Progress indicator */}
+              {analysisProgress && (
+                <div className="mt-4 space-y-2">
+                  {/* Progress bar */}
+                  <div className="h-2 bg-gray-700 rounded-full overflow-hidden max-w-xs mx-auto">
+                    <div
+                      className="h-full bg-gradient-to-r from-gold-400 to-gold-600 transition-all duration-700 ease-out"
+                      style={{ width: `${analysisProgress.progress}%` }}
+                    />
+                  </div>
+
+                  {/* Step label */}
+                  <p className="text-gray-300 text-sm">
+                    {getProgressLabel(analysisProgress.step)} ({analysisProgress.progress}%)
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Studio Mode - Listen while analyzing */}
+            <StudioMode
+              sessionId={sessionId}
+              context="analyzing"
+            />
           </div>
         )}
 
         {/* RESULTS */}
-        {status === 'results' && results && (
-          <div className="text-center space-y-6 w-full max-w-md md:max-w-2xl lg:max-w-4xl">
+        {status === 'results' && results && sessionId && (
+          <div className="space-y-6 w-full max-w-md md:max-w-2xl lg:max-w-4xl">
             {/* Score principal */}
-            <div className="relative">
-              <div className="w-32 h-32 mx-auto rounded-full bg-gradient-to-br from-gold-400 to-gold-600 flex items-center justify-center shadow-lg">
-                <span className="text-5xl font-bold text-gray-900">{results.score}</span>
+            <div className="text-center">
+              <div className="relative inline-block">
+                <div className="w-28 h-28 mx-auto rounded-full bg-gradient-to-br from-gold-400 to-gold-600 flex items-center justify-center shadow-lg">
+                  <span className="text-4xl font-bold text-gray-900">{results.score}</span>
+                </div>
               </div>
               <p className="text-gray-400 mt-2">Score global</p>
             </div>
@@ -773,7 +772,7 @@ function App() {
               {results.jury_comments.map((jury, i) => (
                 <div
                   key={i}
-                  className={`w-16 h-16 rounded-full flex items-center justify-center text-3xl ${
+                  className={`w-14 h-14 rounded-full flex items-center justify-center text-2xl ${
                     jury.vote === 'yes'
                       ? 'bg-green-500/20 border-2 border-green-500'
                       : 'bg-red-500/20 border-2 border-red-500'
@@ -786,7 +785,7 @@ function App() {
 
             {/* Commentaires du jury */}
             <div className="space-y-3">
-              <h3 className="text-lg font-semibold">Le jury a dit:</h3>
+              <h3 className="text-lg font-semibold text-center">Le jury a dit:</h3>
               {results.jury_comments.map((jury, i) => (
                 <div key={i} className="bg-gray-800 rounded-xl p-4 text-left">
                   <div className="flex items-center gap-2 mb-2">
@@ -800,9 +799,15 @@ function App() {
               ))}
             </div>
 
+            {/* Studio Mode - Compare your performance */}
+            <StudioMode
+              sessionId={sessionId}
+              context="results"
+            />
+
             <button
               onClick={handleReset}
-              className="bg-primary-500 hover:bg-primary-600 text-white font-bold py-4 px-8 rounded-full text-lg shadow-lg transform transition hover:scale-105 active:scale-95"
+              className="w-full bg-primary-500 hover:bg-primary-600 text-white font-bold py-4 px-8 rounded-full text-lg shadow-lg transform transition hover:scale-105 active:scale-95"
             >
               Recommencer
             </button>
