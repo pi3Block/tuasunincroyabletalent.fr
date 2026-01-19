@@ -4,7 +4,7 @@ import { TrackSearch } from '@/components/TrackSearch'
 import { YouTubePlayer } from '@/components/YouTubePlayer'
 import { PitchIndicator } from '@/components/PitchIndicator'
 import { LyricsDisplay } from '@/components/LyricsDisplay'
-import { api, type Track, type AnalysisResults } from '@/api/client'
+import { api, type Track } from '@/api/client'
 import { useAudioRecorder } from '@/hooks/useAudioRecorder'
 import { usePitchDetection } from '@/hooks/usePitchDetection'
 
@@ -47,7 +47,6 @@ function App() {
     sessionId,
     selectedTrack,
     youtubeMatch,
-    referenceStatus,
     results,
     analysisProgress,
     lyrics,
@@ -84,7 +83,6 @@ function App() {
   // Pitch detection hook for real-time feedback
   const {
     pitchData,
-    isAnalyzing: isPitchAnalyzing,
     startAnalysis: startPitchAnalysis,
     stopAnalysis: stopPitchAnalysis,
   } = usePitchDetection()
