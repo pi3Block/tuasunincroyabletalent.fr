@@ -51,9 +51,6 @@ export const TimelineDebug = memo(function TimelineDebug({
   // Calculate what offset SHOULD be to sync first line to current time
   const idealOffset = firstLineStartTime - currentTime
 
-  // Timeline visualization scale (100px = 60 seconds)
-  const scale = 100 / 60
-
   // Determine if lyrics are ahead or behind
   const syncStatus = useMemo(() => {
     if (Math.abs(offset) < 0.5) return { status: 'synced', color: 'text-green-400', label: 'Synchronisé' }
