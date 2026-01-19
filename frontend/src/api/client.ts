@@ -119,14 +119,6 @@ export interface LyricsOffsetResponse {
   offset_seconds: number
 }
 
-export interface AutoSyncResponse {
-  suggested_offset: number
-  confidence: number
-  method: 'cross_correlation' | 'text_matching' | 'none'
-  applied: boolean
-  error?: string
-}
-
 // Audio track availability response
 export interface AudioTracksResponse {
   session_id: string
@@ -252,13 +244,6 @@ class ApiClient {
     return this.request<LyricsOffsetResponse>(`/api/session/${sessionId}/lyrics-offset`, {
       method: 'POST',
       body: JSON.stringify({ offset_seconds: offsetSeconds }),
-    })
-  }
-
-  // Auto-sync endpoint
-  async autoSyncLyrics(sessionId: string): Promise<AutoSyncResponse> {
-    return this.request<AutoSyncResponse>(`/api/session/${sessionId}/auto-sync`, {
-      method: 'POST',
     })
   }
 

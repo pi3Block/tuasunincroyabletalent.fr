@@ -76,10 +76,6 @@ function App() {
     lyricsOffsetStatus,
     setLyricsOffset,
     setLyricsOffsetStatus,
-    autoSyncConfidence,
-    isAutoSyncing,
-    setAutoSync,
-    setIsAutoSyncing,
     reset,
   } = useSessionStore()
 
@@ -200,42 +196,6 @@ function App() {
 
     fetchOffset()
   }, [sessionId, status, lyricsOffsetStatus, setLyricsOffset, setLyricsOffsetStatus])
-
-  // Handler for auto-sync calculation
-  const handleAutoSync = useCallback(async () => {
-    if (!sessionId) return null
-
-    setIsAutoSyncing(true)
-    try {
-      const response = await api.autoSyncLyrics(sessionId)
-
-      if (response.error) {
-        console.error('[AutoSync] Error:', response.error)
-        setAutoSync(null, 0)
-        return null
-      }
-
-      // Store auto-sync result
-      setAutoSync(response.suggested_offset, response.confidence)
-
-      // If confidence is high enough and offset was applied, update local state
-      if (response.applied && response.confidence >= 0.5) {
-        setLyricsOffset(response.suggested_offset)
-        console.log(`[AutoSync] Applied offset: ${response.suggested_offset}s (confidence: ${Math.round(response.confidence * 100)}%)`)
-      }
-
-      return {
-        offset: response.suggested_offset,
-        confidence: response.confidence,
-      }
-    } catch (err) {
-      console.error('[AutoSync] Failed:', err)
-      setAutoSync(null, 0)
-      return null
-    } finally {
-      setIsAutoSyncing(false)
-    }
-  }, [sessionId, setAutoSync, setIsAutoSyncing, setLyricsOffset])
 
   // Handler for offset changes (debounced save to backend)
   const handleOffsetChange = useCallback((newOffset: number) => {
@@ -685,9 +645,6 @@ function App() {
                       offset={lyricsOffset}
                       onOffsetChange={handleOffsetChange}
                       showOffsetControls={true}
-                      onAutoSync={handleAutoSync}
-                      isAutoSyncing={isAutoSyncing}
-                      autoSyncConfidence={autoSyncConfidence}
                     />
                   )}
                 </div>
@@ -741,9 +698,6 @@ function App() {
                     offset={lyricsOffset}
                     onOffsetChange={handleOffsetChange}
                     showOffsetControls={true}
-                    onAutoSync={handleAutoSync}
-                    isAutoSyncing={isAutoSyncing}
-                    autoSyncConfidence={autoSyncConfidence}
                   />
                 )}
               </div>

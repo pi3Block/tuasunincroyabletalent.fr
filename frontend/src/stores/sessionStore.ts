@@ -33,10 +33,6 @@ interface SessionState {
   // Lyrics offset
   lyricsOffset: number
   lyricsOffsetStatus: 'idle' | 'loading' | 'loaded' | 'saving' | 'error'
-  // Auto-sync
-  autoSyncOffset: number | null
-  autoSyncConfidence: number | null
-  isAutoSyncing: boolean
 
   // Actions
   startSession: () => void
@@ -54,8 +50,6 @@ interface SessionState {
   setLyricsSyncType: (syncType: LyricsSyncType) => void
   setLyricsSource: (source: LyricsSource) => void
   setLyricsStatus: (status: 'idle' | 'loading' | 'found' | 'not_found' | 'error') => void
-  setAutoSync: (offset: number | null, confidence: number | null) => void
-  setIsAutoSyncing: (isAutoSyncing: boolean) => void
   setError: (error: string) => void
   setPlaybackTime: (time: number) => void
   setIsVideoPlaying: (isPlaying: boolean) => void
@@ -83,9 +77,6 @@ export const useSessionStore = create<SessionState>((set) => ({
   isVideoPlaying: false,
   lyricsOffset: 0,
   lyricsOffsetStatus: 'idle',
-  autoSyncOffset: null,
-  autoSyncConfidence: null,
-  isAutoSyncing: false,
 
   // Actions
   startSession: () => {
@@ -148,14 +139,6 @@ export const useSessionStore = create<SessionState>((set) => ({
     set({ lyricsStatus })
   },
 
-  setAutoSync: (autoSyncOffset: number | null, autoSyncConfidence: number | null) => {
-    set({ autoSyncOffset, autoSyncConfidence })
-  },
-
-  setIsAutoSyncing: (isAutoSyncing: boolean) => {
-    set({ isAutoSyncing })
-  },
-
   setError: (error: string) => {
     set({ error })
   },
@@ -195,9 +178,6 @@ export const useSessionStore = create<SessionState>((set) => ({
       isVideoPlaying: false,
       lyricsOffset: 0,
       lyricsOffsetStatus: 'idle',
-      autoSyncOffset: null,
-      autoSyncConfidence: null,
-      isAutoSyncing: false,
     })
   },
 }))
@@ -245,12 +225,3 @@ export const useAnalysisProgress = () => useSessionStore((s) => s.analysisProgre
 
 /** Results - changes once after analysis */
 export const useResults = () => useSessionStore((s) => s.results)
-
-/** Auto-sync state */
-export const useAutoSync = () => useSessionStore(
-  useShallow((s) => ({
-    autoSyncOffset: s.autoSyncOffset,
-    autoSyncConfidence: s.autoSyncConfidence,
-    isAutoSyncing: s.isAutoSyncing,
-  }))
-)

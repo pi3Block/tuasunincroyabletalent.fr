@@ -2,7 +2,6 @@
  * @fileoverview Lyrics offset and sync controls component.
  *
  * Features:
- * - Auto-sync button with confidence indicator
  * - Manual sync (tap-to-sync) button
  * - Quick offset adjustments (±5s, ±30s)
  * - Fine offset adjustments (±0.5s)
@@ -15,11 +14,9 @@
 import { memo, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import {
-  Loader2,
   Minus,
   Plus,
   Target,
-  Wand2,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { OFFSET_CONFIG } from '@/types/lyrics'
@@ -33,14 +30,8 @@ interface LyricsControlsProps {
   offset: number
   /** Callback when offset changes */
   onOffsetChange: (offset: number) => void
-  /** Auto-sync handler */
-  onAutoSync?: () => void
   /** Manual sync handler (sync first line to current time) */
   onManualSync?: () => void
-  /** Whether auto-sync is in progress */
-  isAutoSyncing?: boolean
-  /** Auto-sync confidence score (0-1) */
-  autoSyncConfidence?: number | null
   /** Whether lyrics have timestamps */
   hasSyncedTimestamps?: boolean
   /** Custom class name */
@@ -92,10 +83,7 @@ const QuickOffsetButton = memo(function QuickOffsetButton({
  * <LyricsControls
  *   offset={offset}
  *   onOffsetChange={setOffset}
- *   onAutoSync={handleAutoSync}
  *   onManualSync={handleManualSync}
- *   isAutoSyncing={isAutoSyncing}
- *   autoSyncConfidence={autoSyncConfidence}
  *   hasSyncedTimestamps={true}
  * />
  * ```
@@ -103,10 +91,7 @@ const QuickOffsetButton = memo(function QuickOffsetButton({
 export const LyricsControls = memo(function LyricsControls({
   offset,
   onOffsetChange,
-  onAutoSync,
   onManualSync,
-  isAutoSyncing = false,
-  autoSyncConfidence,
   hasSyncedTimestamps = false,
   className,
   compact = false,
@@ -140,34 +125,6 @@ export const LyricsControls = memo(function LyricsControls({
 
   return (
     <div className={cn('flex items-center gap-1.5 flex-wrap', className)}>
-      {/* Auto-sync button */}
-      {onAutoSync && (
-        <Button
-          variant="default"
-          size="sm"
-          className="h-9 gap-1.5 bg-purple-600 hover:bg-purple-500 disabled:opacity-50"
-          onClick={onAutoSync}
-          disabled={isAutoSyncing}
-          title={
-            autoSyncConfidence != null
-              ? `Auto-sync (Confidence: ${Math.round(autoSyncConfidence * 100)}%)`
-              : 'Auto-detect lyrics offset'
-          }
-        >
-          {isAutoSyncing ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <Wand2 className="h-4 w-4" />
-          )}
-          {!compact && <span className="hidden sm:inline">Auto</span>}
-          {autoSyncConfidence != null && autoSyncConfidence > 0 && (
-            <span className="text-xs opacity-75">
-              {Math.round(autoSyncConfidence * 100)}%
-            </span>
-          )}
-        </Button>
-      )}
-
       {/* Manual sync button */}
       {onManualSync && (
         <Button
@@ -251,8 +208,6 @@ export const LyricsControls = memo(function LyricsControls({
 interface LyricsControlsMobileProps {
   offset: number
   onOffsetChange: (offset: number) => void
-  onAutoSync?: () => void
-  isAutoSyncing?: boolean
   className?: string
 }
 
@@ -262,8 +217,6 @@ interface LyricsControlsMobileProps {
 export const LyricsControlsMobile = memo(function LyricsControlsMobile({
   offset,
   onOffsetChange,
-  onAutoSync,
-  isAutoSyncing = false,
   className,
 }: LyricsControlsMobileProps) {
   const handleQuickOffset = useCallback(
@@ -322,23 +275,6 @@ export const LyricsControlsMobile = memo(function LyricsControlsMobile({
       >
         +5s
       </Button>
-
-      {/* Auto-sync */}
-      {onAutoSync && (
-        <Button
-          variant="default"
-          size="icon"
-          className="h-8 w-8 bg-purple-600 hover:bg-purple-500"
-          onClick={onAutoSync}
-          disabled={isAutoSyncing}
-        >
-          {isAutoSyncing ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <Wand2 className="h-4 w-4" />
-          )}
-        </Button>
-      )}
     </div>
   )
 })

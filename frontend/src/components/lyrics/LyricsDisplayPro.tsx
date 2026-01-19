@@ -54,12 +54,6 @@ interface LyricsDisplayProProps {
   onLineChange?: (lineIndex: number) => void
   /** Callback when user taps a line (tap-to-sync) */
   onLineTap?: (lineIndex: number, lineStartTime: number) => void
-  /** Auto-sync handler */
-  onAutoSync?: () => Promise<{ offset: number; confidence: number } | null>
-  /** Whether auto-sync is in progress */
-  isAutoSyncing?: boolean
-  /** Auto-sync confidence after calculation */
-  autoSyncConfidence?: number | null
   /** Show debug timeline UI */
   showDebug?: boolean
   /** Custom class name */
@@ -144,9 +138,6 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
   showOffsetControls = true,
   onLineChange,
   onLineTap,
-  onAutoSync,
-  isAutoSyncing = false,
-  autoSyncConfidence,
   showDebug = false,
   className,
 }: LyricsDisplayProProps) {
@@ -293,10 +284,7 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
           <LyricsControls
             offset={offset}
             onOffsetChange={onOffsetChange}
-            onAutoSync={onAutoSync}
             onManualSync={handleManualSync}
-            isAutoSyncing={isAutoSyncing}
-            autoSyncConfidence={autoSyncConfidence}
             hasSyncedTimestamps={hasSyncedTimestamps}
           />
         )}
@@ -467,12 +455,6 @@ interface LyricsDisplayFullscreenProps {
   offset?: number
   /** Offset change handler */
   onOffsetChange?: (offset: number) => void
-  /** Auto-sync handler */
-  onAutoSync?: () => Promise<{ offset: number; confidence: number } | null>
-  /** Auto-syncing state */
-  isAutoSyncing?: boolean
-  /** Auto-sync confidence */
-  autoSyncConfidence?: number | null
   /** Close fullscreen callback */
   onClose?: () => void
   /** Custom class name */
@@ -493,9 +475,6 @@ export const LyricsDisplayFullscreen = memo(function LyricsDisplayFullscreen({
   displayMode,
   offset,
   onOffsetChange,
-  onAutoSync,
-  isAutoSyncing,
-  autoSyncConfidence,
 }: LyricsDisplayFullscreenProps) {
   return (
     <div
@@ -528,9 +507,6 @@ export const LyricsDisplayFullscreen = memo(function LyricsDisplayFullscreen({
           displayMode={displayMode}
           offset={offset}
           onOffsetChange={onOffsetChange}
-          onAutoSync={onAutoSync}
-          isAutoSyncing={isAutoSyncing}
-          autoSyncConfidence={autoSyncConfidence}
           className="border-0 bg-transparent shadow-none"
         />
       </div>

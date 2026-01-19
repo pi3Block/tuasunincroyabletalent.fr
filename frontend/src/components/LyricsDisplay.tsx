@@ -16,7 +16,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { ChevronLeft, ChevronRight, Loader2, Minus, Plus, Target, Wand2, Bug } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Minus, Plus, Target, Bug } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { SyncedLyricLine } from '@/api/client'
 import { TimelineDebug } from './lyrics/TimelineDebug'
@@ -45,12 +45,6 @@ interface LyricsDisplayProps {
   onOffsetChange?: (newOffset: number) => void
   /** Show offset adjustment controls */
   showOffsetControls?: boolean
-  /** Callback for auto-sync button click */
-  onAutoSync?: () => Promise<{ offset: number; confidence: number } | null>
-  /** Whether auto-sync is in progress */
-  isAutoSyncing?: boolean
-  /** Auto-sync confidence (0-1) after calculation */
-  autoSyncConfidence?: number | null
 }
 
 /**
@@ -131,9 +125,6 @@ export const LyricsDisplay = React.memo(function LyricsDisplay({
   offset = 0,
   onOffsetChange,
   showOffsetControls = true,
-  onAutoSync,
-  isAutoSyncing = false,
-  autoSyncConfidence,
 }: LyricsDisplayProps) {
   const [currentLineIndex, setCurrentLineIndex] = useState(0)
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true)
@@ -295,30 +286,6 @@ export const LyricsDisplay = React.memo(function LyricsDisplay({
         {/* Offset controls */}
         {showOffsetControls && onOffsetChange && (
           <div className="flex items-center gap-1.5">
-            {/* Auto-sync button */}
-            {onAutoSync && (
-              <Button
-                variant="default"
-                size="sm"
-                className="h-9 gap-1.5 bg-purple-600 hover:bg-purple-500 disabled:opacity-50"
-                onClick={onAutoSync}
-                disabled={isAutoSyncing}
-                title={autoSyncConfidence != null ? `Confidence: ${Math.round(autoSyncConfidence * 100)}%` : 'Auto-detect lyrics offset'}
-              >
-                {isAutoSyncing ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Wand2 className="h-4 w-4" />
-                )}
-                <span className="hidden sm:inline">Auto</span>
-                {autoSyncConfidence != null && autoSyncConfidence > 0 && (
-                  <span className="text-xs opacity-75">
-                    {Math.round(autoSyncConfidence * 100)}%
-                  </span>
-                )}
-              </Button>
-            )}
-
             {/* Sync button - align first line to current time */}
             <Button
               variant="default"
