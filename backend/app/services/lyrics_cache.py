@@ -270,6 +270,8 @@ class LyricsCacheService:
             track_name: Track name for debugging
         """
         # Build cache data for Redis
+        # Determine status based on whether we have lyrics
+        has_lyrics = bool(lyrics_text) or bool(synced_lines)
         cache_data = {
             "spotify_track_id": spotify_track_id,
             "lyrics": lyrics_text or "",
@@ -277,6 +279,7 @@ class LyricsCacheService:
             "syncType": sync_type,
             "source": source,
             "url": source_url,
+            "status": "found" if has_lyrics else "not_found",
             "cachedAt": datetime.utcnow().isoformat(),
         }
 

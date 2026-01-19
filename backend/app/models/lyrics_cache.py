@@ -62,6 +62,7 @@ class LyricsCache(Base):
 
     def to_dict(self) -> dict:
         """Convert to dictionary for API response."""
+        has_lyrics = bool(self.lyrics_text) or bool(self.synced_lines)
         return {
             "spotify_track_id": self.spotify_track_id,
             "lyrics": self.lyrics_text or "",
@@ -69,5 +70,6 @@ class LyricsCache(Base):
             "syncType": self.sync_type,
             "source": self.source,
             "url": self.source_url,
+            "status": "found" if has_lyrics else "not_found",
             "cachedAt": self.fetched_at.isoformat() if self.fetched_at else None,
         }
