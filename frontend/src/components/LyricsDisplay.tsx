@@ -48,12 +48,28 @@ export function LyricsDisplay({
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true)
   const currentLineRef = useRef<HTMLDivElement>(null)
 
+  // Track the offset that was applied during last sync, to detect when parent has updated
+  const lastSyncOffsetRef = useRef<number | null>(null)
+
   const lines = useMemo(() => parseLyrics(lyrics), [lyrics])
   const adjustedTime = currentTime + offset
 
   // Auto-advance lyrics
   useEffect(() => {
     if (!isPlaying || lines.length === 0) return
+
+    // If we just synced, wait for the offset prop to be updated before resuming auto-advance
+    if (lastSyncOffsetRef.current !== null) {
+      // Check if the parent has applied our requested offset
+      if (Math.abs(offset - lastSyncOffsetRef.current) < 0.01) {
+        // Offset has been applied, clear the sync flag and continue
+        lastSyncOffsetRef.current = null
+      } else {
+        // Still waiting for offset update, don't advance yet
+        return
+      }
+    }
+
     const estimatedLineTime = 4
     const estimatedIndex = Math.floor(adjustedTime / estimatedLineTime)
     const newIndex = Math.min(Math.max(0, estimatedIndex), lines.length - 1)
@@ -61,15 +77,23 @@ export function LyricsDisplay({
       setCurrentLineIndex(newIndex)
       onLineChange?.(newIndex)
     }
-  }, [adjustedTime, isPlaying, lines.length, currentLineIndex, onLineChange])
+  }, [adjustedTime, offset, isPlaying, lines.length, currentLineIndex, onLineChange])
 
   // Sync button handler
   const handleSync = () => {
     const newOffset = -currentTime
     const clampedOffset = Math.max(-60, Math.min(60, newOffset))
-    onOffsetChange?.(clampedOffset)
+
+    // Store the offset we're requesting - we'll wait for it to be applied
+    lastSyncOffsetRef.current = clampedOffset
+
+    // Reset to line 0 first
     setCurrentLineIndex(0)
     setAutoScrollEnabled(true)
+    onLineChange?.(0)
+
+    // Request the offset change from parent
+    onOffsetChange?.(clampedOffset)
   }
 
   // Auto-scroll to current line
