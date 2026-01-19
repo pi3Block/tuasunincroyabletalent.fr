@@ -175,10 +175,13 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
   })
 
   // Use scroll hook for smart auto-scrolling
-  const { currentLineRef, enableAutoScroll } = useLyricsScroll({
+  // Shows 3 lines ahead so the singer can read upcoming lyrics
+  const { currentLineRef, scrollTargetRef, scrollTargetIndex, enableAutoScroll } = useLyricsScroll({
     currentLineIndex,
+    totalLines: lines.length,
     isPlaying,
     containerRef: containerRef as React.RefObject<HTMLElement>,
+    linesAhead: 3,
   })
 
   // Notify parent of line changes
@@ -189,13 +192,16 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
   }, [currentLineIndex, onLineChange])
 
   // Handle tap-to-sync: clicking a line sets offset to align that line with current time
+  // When user taps a line, they're saying "THIS line should be playing NOW"
+  // So we need: adjustedTime = line.startTime when currentTime = now
+  // Since adjustedTime = currentTime + offset, we need offset = line.startTime - currentTime
   const handleLineTap = useCallback(
     (index: number) => {
       const line = lines[index]
       if (!line || !onOffsetChange) return
 
       // Calculate offset to align this line with current playback time
-      const newOffset = currentTime - line.startTime
+      const newOffset = line.startTime - currentTime
       const clampedOffset = Math.max(
         OFFSET_CONFIG.MIN,
         Math.min(OFFSET_CONFIG.MAX, newOffset)
@@ -211,11 +217,14 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
   )
 
   // Handle manual sync (first line to current time)
+  // When user presses Sync, they're saying "the lyrics START NOW in the video"
+  // So we need: adjustedTime = firstLine.startTime when currentTime = now
+  // Since adjustedTime = currentTime + offset, we need offset = firstLine.startTime - currentTime
   const handleManualSync = useCallback(() => {
     if (lines.length === 0 || !onOffsetChange) return
 
     const firstLine = lines[0]
-    const newOffset = currentTime - firstLine.startTime
+    const newOffset = firstLine.startTime - currentTime
     const clampedOffset = Math.max(
       OFFSET_CONFIG.MIN,
       Math.min(OFFSET_CONFIG.MAX, newOffset)
@@ -322,16 +331,26 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
             const isActive = index === currentLineIndex
             const isPast = index < currentLineIndex
             const distance = Math.abs(index - currentLineIndex)
+            const isScrollTarget = index === scrollTargetIndex
 
             // Virtualization: only render nearby lines
             if (!isLineVisible(index)) {
               return <div key={line.id} className="h-16" aria-hidden="true" />
             }
 
+            // Determine which ref to attach:
+            // - scrollTargetRef on the line 3 ahead (for scroll positioning)
+            // - currentLineRef on the active line (for reference)
+            const lineRef = isScrollTarget
+              ? scrollTargetRef
+              : isActive
+                ? currentLineRef
+                : undefined
+
             return (
               <LyricLine
                 key={line.id}
-                ref={isActive ? currentLineRef : undefined}
+                ref={lineRef}
                 line={line}
                 index={index}
                 isActive={isActive}

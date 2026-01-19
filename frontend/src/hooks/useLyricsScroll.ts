@@ -18,6 +18,8 @@ import { PERFORMANCE_CONFIG } from '@/types/lyrics'
 interface UseLyricsScrollOptions {
   /** Current line index to scroll to */
   currentLineIndex: number
+  /** Total number of lines */
+  totalLines?: number
   /** Whether playback is active */
   isPlaying: boolean
   /** Container element ref */
@@ -30,11 +32,17 @@ interface UseLyricsScrollOptions {
   block?: ScrollLogicalPosition
   /** Debounce delay in ms */
   debounceMs?: number
+  /** Number of lines to show ahead of current line (default: 3) */
+  linesAhead?: number
 }
 
 interface UseLyricsScrollReturn {
   /** Ref to attach to the current line element */
   currentLineRef: React.RefObject<HTMLDivElement>
+  /** Ref to attach to the target scroll line (current + linesAhead) */
+  scrollTargetRef: React.RefObject<HTMLDivElement>
+  /** Index of the line that should be used as scroll target */
+  scrollTargetIndex: number
   /** Whether auto-scroll is currently enabled */
   autoScrollEnabled: boolean
   /** Manually enable auto-scroll */
@@ -77,20 +85,26 @@ interface UseLyricsScrollReturn {
  */
 export function useLyricsScroll({
   currentLineIndex,
+  totalLines = 0,
   isPlaying,
   containerRef,
   enabled = true,
   behavior = 'smooth',
   block = 'center',
   debounceMs = PERFORMANCE_CONFIG.SCROLL_DEBOUNCE_MS,
+  linesAhead = 3,
 }: UseLyricsScrollOptions): UseLyricsScrollReturn {
   const currentLineRef = useRef<HTMLDivElement>(null)
+  const scrollTargetRef = useRef<HTMLDivElement>(null)
   const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const userScrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isUserScrollingRef = useRef(false)
   const lastScrollTimeRef = useRef(0)
 
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(enabled)
+
+  // Calculate scroll target index (current line + lines ahead, clamped to total)
+  const scrollTargetIndex = Math.min(currentLineIndex + linesAhead, totalLines - 1)
 
   // Detect user scroll interaction
   useEffect(() => {
@@ -138,9 +152,14 @@ export function useLyricsScroll({
     }
   }, [isPlaying])
 
-  // Debounced scroll to current line
+  // Debounced scroll to target line (current + linesAhead)
+  // This ensures the singer always sees several lines ahead
   useEffect(() => {
-    if (!autoScrollEnabled || !currentLineRef.current || !enabled) return
+    if (!autoScrollEnabled || !enabled) return
+
+    // Use scrollTargetRef if available, fallback to currentLineRef
+    const targetElement = scrollTargetRef.current || currentLineRef.current
+    if (!targetElement) return
 
     // Clear previous timeout
     if (scrollTimeoutRef.current) {
@@ -149,13 +168,14 @@ export function useLyricsScroll({
 
     // Debounce scroll
     scrollTimeoutRef.current = setTimeout(() => {
-      const element = currentLineRef.current
+      const element = scrollTargetRef.current || currentLineRef.current
       if (!element) return
 
       // Mark this as a programmatic scroll
       lastScrollTimeRef.current = Date.now()
 
-      // Use scrollIntoView for smooth centering
+      // Scroll so that the target line (current + linesAhead) is centered
+      // This puts the current line near the top with linesAhead visible below
       element.scrollIntoView({
         behavior,
         block,
@@ -167,7 +187,7 @@ export function useLyricsScroll({
         clearTimeout(scrollTimeoutRef.current)
       }
     }
-  }, [currentLineIndex, autoScrollEnabled, enabled, behavior, block, debounceMs])
+  }, [currentLineIndex, scrollTargetIndex, autoScrollEnabled, enabled, behavior, block, debounceMs])
 
   // Manual controls
   const enableAutoScroll = useCallback(() => {
@@ -185,6 +205,8 @@ export function useLyricsScroll({
 
   return {
     currentLineRef,
+    scrollTargetRef,
+    scrollTargetIndex,
     autoScrollEnabled,
     enableAutoScroll,
     disableAutoScroll,

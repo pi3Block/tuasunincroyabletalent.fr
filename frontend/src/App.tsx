@@ -555,81 +555,90 @@ function App() {
 
         {/* READY - Ready to record */}
         {status === 'ready' && selectedTrack && (
-          <div className="text-center space-y-6 w-full max-w-md md:max-w-2xl lg:max-w-4xl">
+          <div className="w-full max-w-md md:max-w-4xl lg:max-w-6xl space-y-6">
             <TrackCard track={selectedTrack} />
 
-            {/* YouTube Player */}
-            {youtubeMatch && (
-              <YouTubePlayer
-                video={youtubeMatch}
-                onTimeUpdate={setPlaybackTime}
-                onStateChange={setIsVideoPlaying}
-              />
-            )}
+            {/* Desktop: Video + Lyrics side by side | Mobile: stacked */}
+            <div className="flex flex-col lg:flex-row gap-6">
+              {/* Left side: YouTube Player */}
+              <div className="flex-1 space-y-4">
+                {youtubeMatch && (
+                  <YouTubePlayer
+                    video={youtubeMatch}
+                    onTimeUpdate={setPlaybackTime}
+                    onStateChange={setIsVideoPlaying}
+                  />
+                )}
 
-            {/* Lyrics status indicator */}
-            {lyricsStatus === 'loading' && (
-              <div className="flex items-center justify-center gap-2 text-gray-400 text-sm">
-                <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
-                <span>Chargement des paroles...</span>
-              </div>
-            )}
-            {lyricsStatus === 'found' && (
-              <div className="flex items-center justify-center gap-2 text-green-400 text-sm">
-                <span>✓</span>
-                <span>Paroles disponibles</span>
-              </div>
-            )}
-            {lyricsStatus === 'not_found' && (
-              <div className="flex items-center justify-center gap-2 text-yellow-400 text-sm">
-                <span>⚠</span>
-                <span>Paroles non disponibles</span>
-              </div>
-            )}
+                {/* Action buttons below video */}
+                <div className="bg-green-500/20 border border-green-500 rounded-lg p-4 text-center">
+                  <p className="text-green-300 font-medium">Prêt à enregistrer !</p>
+                  <p className="text-green-400/80 text-sm mt-1">
+                    Lance la vidéo et appuie sur Enregistrer quand tu es prêt
+                  </p>
+                </div>
 
-            {/* Lyrics display - synced with YouTube playback */}
-            {lyrics && lyricsStatus === 'found' && (
-              <LyricsDisplay
-                lyrics={lyrics}
-                syncedLines={lyricsLines}
-                currentTime={playbackTime}
-                isPlaying={isVideoPlaying}
-                offset={lyricsOffset}
-                onOffsetChange={handleOffsetChange}
-                showOffsetControls={true}
-                onAutoSync={handleAutoSync}
-                isAutoSyncing={isAutoSyncing}
-                autoSyncConfidence={autoSyncConfidence}
-              />
-            )}
+                <button
+                  onClick={handleStartRecording}
+                  className="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-5 px-10 rounded-full text-xl shadow-lg transform transition hover:scale-105 active:scale-95 flex items-center justify-center gap-3"
+                >
+                  <span className="text-2xl">🎙️</span>
+                  Enregistrer
+                </button>
 
-            <div className="bg-green-500/20 border border-green-500 rounded-lg p-4">
-              <p className="text-green-300 font-medium">Prêt à enregistrer !</p>
-              <p className="text-green-400/80 text-sm mt-1">
-                Lance la vidéo et appuie sur Enregistrer quand tu es prêt
-              </p>
+                <button
+                  onClick={handleReset}
+                  className="w-full text-gray-400 hover:text-white text-sm"
+                >
+                  Changer de chanson
+                </button>
+              </div>
+
+              {/* Right side: Lyrics */}
+              <div className="flex-1">
+                {/* Lyrics status indicator */}
+                {lyricsStatus === 'loading' && (
+                  <div className="flex items-center justify-center gap-2 text-gray-400 text-sm py-4">
+                    <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+                    <span>Chargement des paroles...</span>
+                  </div>
+                )}
+                {lyricsStatus === 'found' && (
+                  <div className="flex items-center justify-center gap-2 text-green-400 text-sm pb-2">
+                    <span>✓</span>
+                    <span>Paroles disponibles</span>
+                  </div>
+                )}
+                {lyricsStatus === 'not_found' && (
+                  <div className="flex items-center justify-center gap-2 text-yellow-400 text-sm py-4">
+                    <span>⚠</span>
+                    <span>Paroles non disponibles</span>
+                  </div>
+                )}
+
+                {/* Lyrics display - synced with YouTube playback */}
+                {lyrics && lyricsStatus === 'found' && (
+                  <LyricsDisplay
+                    lyrics={lyrics}
+                    syncedLines={lyricsLines}
+                    currentTime={playbackTime}
+                    isPlaying={isVideoPlaying}
+                    offset={lyricsOffset}
+                    onOffsetChange={handleOffsetChange}
+                    showOffsetControls={true}
+                    onAutoSync={handleAutoSync}
+                    isAutoSyncing={isAutoSyncing}
+                    autoSyncConfidence={autoSyncConfidence}
+                  />
+                )}
+              </div>
             </div>
-
-            <button
-              onClick={handleStartRecording}
-              className="bg-red-500 hover:bg-red-600 text-white font-bold py-5 px-10 rounded-full text-xl shadow-lg transform transition hover:scale-105 active:scale-95 flex items-center gap-3 mx-auto"
-            >
-              <span className="text-2xl">🎙️</span>
-              Enregistrer
-            </button>
-
-            <button
-              onClick={handleReset}
-              className="text-gray-400 hover:text-white text-sm"
-            >
-              Changer de chanson
-            </button>
           </div>
         )}
 
         {/* RECORDING */}
         {status === 'recording' && (
-          <div className="text-center space-y-4 w-full max-w-md md:max-w-2xl lg:max-w-4xl">
+          <div className="w-full max-w-md md:max-w-4xl lg:max-w-6xl space-y-4">
             {/* Recording indicator */}
             <div className="flex items-center justify-center gap-3 bg-red-500/20 border border-red-500 rounded-lg p-3">
               <div className="w-4 h-4 bg-red-500 rounded-full animate-pulse" />
@@ -641,37 +650,44 @@ function App() {
             {/* Real-time pitch indicator */}
             <PitchIndicator pitchData={pitchData} />
 
-            {/* Lyrics display - synced with YouTube playback */}
-            {lyrics && (
-              <LyricsDisplay
-                lyrics={lyrics}
-                syncedLines={lyricsLines}
-                currentTime={playbackTime}
-                isPlaying={isVideoPlaying}
-                offset={lyricsOffset}
-                onOffsetChange={handleOffsetChange}
-                showOffsetControls={true}
-                onAutoSync={handleAutoSync}
-                isAutoSyncing={isAutoSyncing}
-                autoSyncConfidence={autoSyncConfidence}
-              />
-            )}
+            {/* Desktop: Video + Lyrics side by side | Mobile: stacked */}
+            <div className="flex flex-col lg:flex-row gap-6">
+              {/* Left side: YouTube Player */}
+              <div className="flex-1 space-y-4">
+                {youtubeMatch && (
+                  <YouTubePlayer
+                    video={youtubeMatch}
+                    onTimeUpdate={setPlaybackTime}
+                    onStateChange={setIsVideoPlaying}
+                  />
+                )}
 
-            {/* YouTube Player - keep playing during recording */}
-            {youtubeMatch && (
-              <YouTubePlayer
-                video={youtubeMatch}
-                onTimeUpdate={setPlaybackTime}
-                onStateChange={setIsVideoPlaying}
-              />
-            )}
+                <button
+                  onClick={handleStopRecording}
+                  className="w-full bg-gray-700 hover:bg-gray-600 text-white font-bold py-4 px-8 rounded-full text-lg shadow-lg transform transition hover:scale-105 active:scale-95"
+                >
+                  Arrêter l'enregistrement
+                </button>
+              </div>
 
-            <button
-              onClick={handleStopRecording}
-              className="bg-gray-700 hover:bg-gray-600 text-white font-bold py-4 px-8 rounded-full text-lg shadow-lg transform transition hover:scale-105 active:scale-95"
-            >
-              Arrêter l'enregistrement
-            </button>
+              {/* Right side: Lyrics */}
+              <div className="flex-1">
+                {lyrics && (
+                  <LyricsDisplay
+                    lyrics={lyrics}
+                    syncedLines={lyricsLines}
+                    currentTime={playbackTime}
+                    isPlaying={isVideoPlaying}
+                    offset={lyricsOffset}
+                    onOffsetChange={handleOffsetChange}
+                    showOffsetControls={true}
+                    onAutoSync={handleAutoSync}
+                    isAutoSyncing={isAutoSyncing}
+                    autoSyncConfidence={autoSyncConfidence}
+                  />
+                )}
+              </div>
+            </div>
           </div>
         )}
 
