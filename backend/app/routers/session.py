@@ -486,51 +486,69 @@ async def get_results(session_id: str):
 @router.get("/{session_id}/lyrics")
 async def get_session_lyrics(session_id: str):
     """
-    Get lyrics for the session's track from Genius API.
+    Get lyrics for the session's track.
 
-    Returns cached lyrics if already fetched, otherwise fetches from Genius.
+    Uses hierarchical provider chain:
+    1. Global cache (Redis → PostgreSQL)
+    2. Spotify synced lyrics (if sp_dc configured)
+    3. Genius plain text lyrics
+
+    Returns:
+        - lyrics: Plain text lyrics (for backward compatibility)
+        - lines: Array of synced lyrics with timestamps (if available)
+        - syncType: 'synced', 'unsynced', or 'none'
+        - source: 'spotify', 'genius', or 'none'
+        - status: 'found', 'not_found', or 'error'
+        - url: Source URL (if available)
+        - cachedAt: Cache timestamp (if from cache)
     """
     session = await redis_client.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # Check if lyrics already cached in session
-    cached_lyrics = session.get("lyrics")
-    if cached_lyrics:
-        return {
-            "session_id": session_id,
-            "lyrics": cached_lyrics.get("text", ""),
-            "source": cached_lyrics.get("source", "cache"),
-            "status": cached_lyrics.get("status", "found"),
-        }
-
     # Get track info from session
+    spotify_track_id = session.get("spotify_track_id", "")
     artist_name = session.get("artist_name", "")
     track_name = session.get("track_name", "")
+
+    if not spotify_track_id:
+        return {
+            "session_id": session_id,
+            "lyrics": "",
+            "lines": None,
+            "syncType": "none",
+            "source": "none",
+            "status": "not_found",
+            "error": "Track ID not available",
+        }
 
     if not artist_name or not track_name:
         return {
             "session_id": session_id,
             "lyrics": "",
+            "lines": None,
+            "syncType": "none",
             "source": "none",
             "status": "not_found",
             "error": "Track info not available",
         }
 
-    # Fetch from Genius
-    lyrics_result = await lyrics_service.get_lyrics(artist_name, track_name)
-
-    # Cache in session
-    await redis_client.update_session(session_id, {
-        "lyrics": lyrics_result,
-    })
+    # Fetch lyrics using unified service (handles caching internally)
+    lyrics_result = await lyrics_service.get_lyrics(
+        spotify_track_id=spotify_track_id,
+        artist=artist_name,
+        title=track_name,
+    )
 
     return {
         "session_id": session_id,
-        "lyrics": lyrics_result.get("text", ""),
+        "lyrics": lyrics_result.get("lyrics", lyrics_result.get("text", "")),
+        "lines": lyrics_result.get("lines"),
+        "syncType": lyrics_result.get("syncType", "none"),
         "source": lyrics_result.get("source", "none"),
         "status": lyrics_result.get("status", "not_found"),
         "url": lyrics_result.get("url"),
+        "cachedAt": lyrics_result.get("cachedAt"),
     }
 
 

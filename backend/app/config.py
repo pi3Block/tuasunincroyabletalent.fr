@@ -25,9 +25,14 @@ class Settings(BaseSettings):
     # Spotify
     spotify_client_id: str = ""
     spotify_client_secret: str = ""
+    # Spotify sp_dc cookie for synced lyrics (optional, from browser session)
+    spotify_sp_dc: str = ""
 
     # Genius (Lyrics)
     genius_api_client_access_token: str = ""
+
+    # Lyrics Cache
+    lyrics_cache_ttl: int = 604800  # 7 days in seconds
 
     # App
     secret_key: str = "dev-secret-key-change-in-production"

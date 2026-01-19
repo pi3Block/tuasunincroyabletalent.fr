@@ -468,3 +468,12 @@ model.save_pretrained_gguf("jury-lora", tokenizer, quantization_method="q4_k_m")
 | 🟢 6 | WebSocket live feedback | UX temps réel | 8h+ |
 
 ---
+
+
+
+
+Pour obtenir le cookie sp_dc:
+
+Connecte-toi sur open.spotify.com
+Ouvre DevTools → Application → Cookies
+Copie la valeur du cookie sp_dc

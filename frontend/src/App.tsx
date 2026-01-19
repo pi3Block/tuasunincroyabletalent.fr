@@ -50,6 +50,7 @@ function App() {
     results,
     analysisProgress,
     lyrics,
+    lyricsLines,
     lyricsStatus,
     error,
     playbackTime,
@@ -63,6 +64,9 @@ function App() {
     setResults,
     setAnalysisProgress,
     setLyrics,
+    setLyricsLines,
+    setLyricsSyncType,
+    setLyricsSource,
     setLyricsStatus,
     setError,
     setPlaybackTime,
@@ -143,9 +147,21 @@ function App() {
         const response = await api.getLyrics(sessionId)
         if (response.status === 'found') {
           setLyrics(response.lyrics)
+          // Set synced lines if available
+          if (response.lines && response.lines.length > 0) {
+            setLyricsLines(response.lines)
+            setLyricsSyncType(response.syncType || 'synced')
+          } else {
+            setLyricsLines(null)
+            setLyricsSyncType(response.syncType || 'unsynced')
+          }
+          setLyricsSource(response.source || 'genius')
           setLyricsStatus('found')
         } else {
           setLyrics(null)
+          setLyricsLines(null)
+          setLyricsSyncType('none')
+          setLyricsSource('none')
           setLyricsStatus('not_found')
         }
       } catch (err) {
@@ -155,7 +171,7 @@ function App() {
     }
 
     fetchLyrics()
-  }, [sessionId, status, lyricsStatus, setLyrics, setLyricsStatus])
+  }, [sessionId, status, lyricsStatus, setLyrics, setLyricsLines, setLyricsSyncType, setLyricsSource, setLyricsStatus])
 
   // Fetch lyrics offset when session is ready
   useEffect(() => {
@@ -535,6 +551,7 @@ function App() {
             {lyrics && lyricsStatus === 'found' && (
               <LyricsDisplay
                 lyrics={lyrics}
+                syncedLines={lyricsLines}
                 currentTime={playbackTime}
                 isPlaying={isVideoPlaying}
                 offset={lyricsOffset}
@@ -585,6 +602,7 @@ function App() {
             {lyrics && (
               <LyricsDisplay
                 lyrics={lyrics}
+                syncedLines={lyricsLines}
                 currentTime={playbackTime}
                 isPlaying={isVideoPlaying}
                 offset={lyricsOffset}

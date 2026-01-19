@@ -95,13 +95,22 @@ export interface RecentTrack {
   timestamp: string
 }
 
+export interface SyncedLyricLine {
+  text: string
+  startTimeMs: number
+  endTimeMs?: number
+}
+
 export interface LyricsResponse {
   session_id: string
   lyrics: string
-  source: string
+  lines?: SyncedLyricLine[]
+  syncType: 'synced' | 'unsynced' | 'none'
+  source: 'spotify' | 'genius' | 'none'
   status: 'found' | 'not_found' | 'error'
   url?: string
   error?: string
+  cachedAt?: string
 }
 
 export interface LyricsOffsetResponse {

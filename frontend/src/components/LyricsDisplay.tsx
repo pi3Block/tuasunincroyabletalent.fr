@@ -1,14 +1,16 @@
 /**
  * Lyrics display component for karaoke-style lyrics.
  * Uses shadcn/ui for polished, accessible UI.
+ * Optimized with React.memo and memoized calculations.
  */
-import { useState, useEffect, useMemo, useRef } from 'react'
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { ChevronLeft, ChevronRight, Minus, Plus, Target } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import type { SyncedLyricLine } from '@/api/client'
 
 export interface LyricLine {
   text: string
@@ -17,16 +19,39 @@ export interface LyricLine {
 }
 
 interface LyricsDisplayProps {
+  /** Plain text lyrics (newline separated) */
   lyrics: string
+  /** Synced lyrics with timestamps (takes priority over plain text) */
+  syncedLines?: SyncedLyricLine[] | null
+  /** Current playback time in seconds */
   currentTime?: number
+  /** Whether playback is active */
   isPlaying?: boolean
+  /** Callback when current line changes */
   onLineChange?: (lineIndex: number) => void
+  /** Manual offset in seconds */
   offset?: number
+  /** Callback for offset changes */
   onOffsetChange?: (newOffset: number) => void
+  /** Show offset adjustment controls */
   showOffsetControls?: boolean
 }
 
-function parseLyrics(lyrics: string): LyricLine[] {
+/**
+ * Parse lyrics into LyricLine array.
+ * Handles both synced (with timestamps) and plain text lyrics.
+ */
+function parseLyrics(lyrics: string, syncedLines?: SyncedLyricLine[] | null): LyricLine[] {
+  // If synced lines provided, convert to LyricLine format
+  if (syncedLines && syncedLines.length > 0) {
+    return syncedLines.map((line) => ({
+      text: line.text,
+      startTime: line.startTimeMs / 1000,
+      endTime: line.endTimeMs ? line.endTimeMs / 1000 : undefined,
+    }))
+  }
+
+  // Fallback to plain text parsing
   if (!lyrics) return []
   return lyrics
     .split('\n')
@@ -35,8 +60,55 @@ function parseLyrics(lyrics: string): LyricLine[] {
     .map((text) => ({ text }))
 }
 
-export function LyricsDisplay({
+/** Debounce delay for scroll animation (ms) */
+const SCROLL_DEBOUNCE_MS = 150
+
+/**
+ * Calculate current line index based on timestamps or estimation.
+ * Returns the index of the line that should be highlighted.
+ */
+function calculateCurrentLineIndex(
+  lines: LyricLine[],
+  adjustedTime: number,
+  currentLineIndex: number
+): number {
+  if (lines.length === 0) return 0
+
+  // If we have synced lyrics with timestamps
+  const hasTimestamps = lines[0]?.startTime !== undefined
+
+  if (hasTimestamps) {
+    // Find the line that contains the current time
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      const lineStart = line.startTime ?? 0
+      const nextLineStart = lines[i + 1]?.startTime
+      const lineEnd = line.endTime ?? nextLineStart ?? lineStart + 10
+
+      if (adjustedTime >= lineStart && adjustedTime < lineEnd) {
+        return i
+      }
+    }
+    // If past all lines, return last line
+    if (adjustedTime >= (lines[lines.length - 1]?.startTime ?? 0)) {
+      return lines.length - 1
+    }
+    return 0
+  }
+
+  // Fallback: estimate ~4 seconds per line
+  const estimatedLineTime = 4
+  const estimatedIndex = Math.floor(adjustedTime / estimatedLineTime)
+  return Math.min(Math.max(0, estimatedIndex), lines.length - 1)
+}
+
+/**
+ * Main lyrics display component with karaoke-style highlighting.
+ * Wrapped with React.memo for performance optimization.
+ */
+export const LyricsDisplay = React.memo(function LyricsDisplay({
   lyrics,
+  syncedLines,
   currentTime = 0,
   isPlaying = false,
   onLineChange,
@@ -47,77 +119,109 @@ export function LyricsDisplay({
   const [currentLineIndex, setCurrentLineIndex] = useState(0)
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true)
   const currentLineRef = useRef<HTMLDivElement>(null)
+  const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Track the offset that was applied during last sync, to detect when parent has updated
+  // Track the offset that was applied during last sync
   const lastSyncOffsetRef = useRef<number | null>(null)
 
-  const lines = useMemo(() => parseLyrics(lyrics), [lyrics])
-  const adjustedTime = currentTime + offset
+  // Memoize parsed lyrics
+  const lines = useMemo(
+    () => parseLyrics(lyrics, syncedLines),
+    [lyrics, syncedLines]
+  )
 
-  // Auto-advance lyrics
+  // Memoize adjusted time to prevent unnecessary recalculations
+  const adjustedTime = useMemo(
+    () => currentTime + offset,
+    [currentTime, offset]
+  )
+
+  // Auto-advance lyrics based on timestamps or estimation
   useEffect(() => {
     if (!isPlaying || lines.length === 0) return
 
-    // If we just synced, wait for the offset prop to be updated before resuming auto-advance
+    // If we just synced, wait for the offset prop to be updated
     if (lastSyncOffsetRef.current !== null) {
-      // Check if the parent has applied our requested offset
       if (Math.abs(offset - lastSyncOffsetRef.current) < 0.01) {
-        // Offset has been applied, clear the sync flag and continue
         lastSyncOffsetRef.current = null
       } else {
-        // Still waiting for offset update, don't advance yet
         return
       }
     }
 
-    const estimatedLineTime = 4
-    const estimatedIndex = Math.floor(adjustedTime / estimatedLineTime)
-    const newIndex = Math.min(Math.max(0, estimatedIndex), lines.length - 1)
+    const newIndex = calculateCurrentLineIndex(lines, adjustedTime, currentLineIndex)
     if (newIndex !== currentLineIndex) {
       setCurrentLineIndex(newIndex)
       onLineChange?.(newIndex)
     }
-  }, [adjustedTime, offset, isPlaying, lines.length, currentLineIndex, onLineChange])
+  }, [adjustedTime, offset, isPlaying, lines, currentLineIndex, onLineChange])
 
-  // Sync button handler
-  const handleSync = () => {
-    const newOffset = -currentTime
-    const clampedOffset = Math.max(-60, Math.min(60, newOffset))
-
-    // Store the offset we're requesting - we'll wait for it to be applied
-    lastSyncOffsetRef.current = clampedOffset
-
-    // Reset to line 0 first
-    setCurrentLineIndex(0)
-    setAutoScrollEnabled(true)
-    onLineChange?.(0)
-
-    // Request the offset change from parent
-    onOffsetChange?.(clampedOffset)
-  }
-
-  // Auto-scroll to current line
+  // Debounced auto-scroll to current line
   useEffect(() => {
-    if (autoScrollEnabled && currentLineRef.current) {
-      currentLineRef.current.scrollIntoView({
+    if (!autoScrollEnabled || !currentLineRef.current) return
+
+    // Clear previous timeout
+    if (scrollTimeoutRef.current) {
+      clearTimeout(scrollTimeoutRef.current)
+    }
+
+    // Debounce scroll to prevent animation conflicts
+    scrollTimeoutRef.current = setTimeout(() => {
+      currentLineRef.current?.scrollIntoView({
         behavior: 'smooth',
         block: 'center',
       })
+    }, SCROLL_DEBOUNCE_MS)
+
+    return () => {
+      if (scrollTimeoutRef.current) {
+        clearTimeout(scrollTimeoutRef.current)
+      }
     }
   }, [currentLineIndex, autoScrollEnabled])
 
+  // Re-enable auto-scroll when playback starts
   useEffect(() => {
     if (isPlaying) setAutoScrollEnabled(true)
   }, [isPlaying])
 
-  const goToLine = (index: number) => {
+  // Sync button handler - resets offset to sync with current playback
+  const handleSync = useCallback(() => {
+    const newOffset = -currentTime
+    const clampedOffset = Math.max(-60, Math.min(60, newOffset))
+
+    lastSyncOffsetRef.current = clampedOffset
+    setCurrentLineIndex(0)
+    setAutoScrollEnabled(true)
+    onLineChange?.(0)
+    onOffsetChange?.(clampedOffset)
+  }, [currentTime, onLineChange, onOffsetChange])
+
+  // Navigate to specific line
+  const goToLine = useCallback((index: number) => {
     if (index >= 0 && index < lines.length) {
       setCurrentLineIndex(index)
       setAutoScrollEnabled(false)
       onLineChange?.(index)
     }
-  }
+  }, [lines.length, onLineChange])
 
+  // Handle offset decrease
+  const handleOffsetDecrease = useCallback(() => {
+    onOffsetChange?.(Math.max(-30, offset - 0.5))
+  }, [offset, onOffsetChange])
+
+  // Handle offset increase
+  const handleOffsetIncrease = useCallback(() => {
+    onOffsetChange?.(Math.min(30, offset + 0.5))
+  }, [offset, onOffsetChange])
+
+  // Handle offset reset
+  const handleOffsetReset = useCallback(() => {
+    onOffsetChange?.(0)
+  }, [onOffsetChange])
+
+  // Empty state
   if (lines.length === 0) {
     return (
       <Card className="bg-card/50 border-border/30">
@@ -129,6 +233,7 @@ export function LyricsDisplay({
   }
 
   const progressPercent = ((currentLineIndex + 1) / lines.length) * 100
+  const hasSyncedTimestamps = lines[0]?.startTime !== undefined
 
   return (
     <Card className="overflow-hidden bg-card/80 backdrop-blur border-border/50 shadow-xl">
@@ -152,7 +257,7 @@ export function LyricsDisplay({
               variant="outline"
               size="icon"
               className="h-9 w-9"
-              onClick={() => onOffsetChange(Math.max(-30, offset - 0.5))}
+              onClick={handleOffsetDecrease}
             >
               <Minus className="h-4 w-4" />
             </Button>
@@ -161,7 +266,7 @@ export function LyricsDisplay({
               variant={offset === 0 ? "outline" : "secondary"}
               size="sm"
               className="h-9 min-w-[72px] font-mono text-sm"
-              onClick={() => onOffsetChange(0)}
+              onClick={handleOffsetReset}
             >
               {offset >= 0 ? '+' : ''}{offset.toFixed(1)}s
             </Button>
@@ -170,10 +275,17 @@ export function LyricsDisplay({
               variant="outline"
               size="icon"
               className="h-9 w-9"
-              onClick={() => onOffsetChange(Math.min(30, offset + 0.5))}
+              onClick={handleOffsetIncrease}
             >
               <Plus className="h-4 w-4" />
             </Button>
+
+            {/* Sync indicator */}
+            {hasSyncedTimestamps && (
+              <span className="ml-2 text-xs text-green-500 font-medium">
+                ⚡ Synced
+              </span>
+            )}
           </div>
         )}
 
@@ -213,7 +325,7 @@ export function LyricsDisplay({
             const isPast = i < currentLineIndex
             const distance = Math.abs(i - currentLineIndex)
 
-            // Only render nearby lines
+            // Only render nearby lines (performance optimization)
             if (distance > 5) return null
 
             return (
@@ -252,19 +364,24 @@ export function LyricsDisplay({
       </div>
     </Card>
   )
-}
+})
 
 /**
  * Compact single-line lyrics display
  */
-export function LyricsDisplayCompact({
+export const LyricsDisplayCompact = React.memo(function LyricsDisplayCompact({
   lyrics,
+  syncedLines,
   currentLineIndex = 0,
 }: {
   lyrics: string
+  syncedLines?: SyncedLyricLine[] | null
   currentLineIndex?: number
 }) {
-  const lines = useMemo(() => parseLyrics(lyrics), [lyrics])
+  const lines = useMemo(
+    () => parseLyrics(lyrics, syncedLines),
+    [lyrics, syncedLines]
+  )
 
   if (lines.length === 0) return null
 
@@ -283,4 +400,4 @@ export function LyricsDisplayCompact({
       )}
     </div>
   )
-}
+})
