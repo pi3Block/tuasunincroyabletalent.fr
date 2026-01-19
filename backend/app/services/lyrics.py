@@ -24,13 +24,13 @@ class LyricsService:
 
     def _get_client(self) -> Optional[lyricsgenius.Genius]:
         """Lazy-load Genius client."""
-        if not settings.genius_api_token:
-            print("[LyricsService] No GENIUS_API_TOKEN configured")
+        if not settings.genius_api_client_access_token:
+            print("[LyricsService] No GENIUS_API_CLIENT_ACCESS_TOKEN configured")
             return None
 
         if self._genius is None:
             self._genius = lyricsgenius.Genius(
-                settings.genius_api_token,
+                settings.genius_api_client_access_token,
                 timeout=15,
                 retries=2,
                 verbose=False,

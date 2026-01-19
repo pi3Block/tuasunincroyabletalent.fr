@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     spotify_client_secret: str = ""
 
     # Genius (Lyrics)
-    genius_api_token: str = ""
+    genius_api_client_access_token: str = ""
 
     # App
     secret_key: str = "dev-secret-key-change-in-production"

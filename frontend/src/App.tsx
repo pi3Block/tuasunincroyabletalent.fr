@@ -52,6 +52,8 @@ function App() {
     lyrics,
     lyricsStatus,
     error,
+    playbackTime,
+    isVideoPlaying,
     startSession,
     selectTrack,
     setSessionId,
@@ -63,6 +65,8 @@ function App() {
     setLyrics,
     setLyricsStatus,
     setError,
+    setPlaybackTime,
+    setIsVideoPlaying,
     reset,
   } = useSessionStore()
 
@@ -443,7 +447,11 @@ function App() {
 
             {/* YouTube Player */}
             {youtubeMatch && (
-              <YouTubePlayer video={youtubeMatch} />
+              <YouTubePlayer
+                video={youtubeMatch}
+                onTimeUpdate={setPlaybackTime}
+                onStateChange={setIsVideoPlaying}
+              />
             )}
 
             {/* Lyrics status indicator */}
@@ -464,6 +472,15 @@ function App() {
                 <span>⚠</span>
                 <span>Paroles non disponibles</span>
               </div>
+            )}
+
+            {/* Lyrics display - synced with YouTube playback */}
+            {lyrics && lyricsStatus === 'found' && (
+              <LyricsDisplay
+                lyrics={lyrics}
+                currentTime={playbackTime}
+                isPlaying={isVideoPlaying}
+              />
             )}
 
             <div className="bg-green-500/20 border border-green-500 rounded-lg p-4">
@@ -504,18 +521,22 @@ function App() {
             {/* Real-time pitch indicator */}
             <PitchIndicator pitchData={pitchData} />
 
-            {/* Lyrics display */}
+            {/* Lyrics display - synced with YouTube playback */}
             {lyrics && (
               <LyricsDisplay
                 lyrics={lyrics}
-                currentTime={recordingDuration}
-                isPlaying={isRecording}
+                currentTime={playbackTime}
+                isPlaying={isVideoPlaying}
               />
             )}
 
             {/* YouTube Player - keep playing during recording */}
             {youtubeMatch && (
-              <YouTubePlayer video={youtubeMatch} />
+              <YouTubePlayer
+                video={youtubeMatch}
+                onTimeUpdate={setPlaybackTime}
+                onStateChange={setIsVideoPlaying}
+              />
             )}
 
             <button

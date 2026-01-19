@@ -1,31 +1,22 @@
-# Worker Production Dockerfile - Celery + GPU (NVIDIA CUDA) - Optimized with uv
-FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+# Worker Production Dockerfile - Celery + GPU
+# Using PyTorch image (includes CUDA + PyTorch pre-installed = faster builds)
+FROM pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
 
 WORKDIR /app
 
-# Install system dependencies + uv in single layer
+# Install system dependencies + uv
 RUN apt-get update && apt-get install -y \
-    python3.11 \
-    python3-pip \
-    python3.11-venv \
     ffmpeg \
     git \
     libsndfile1 \
     curl \
     && rm -rf /var/lib/apt/lists/* \
-    && ln -sf /usr/bin/python3.11 /usr/bin/python \
-    && ln -sf /usr/bin/pip3 /usr/bin/pip \
     && curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Add uv to PATH
 ENV PATH="/root/.local/bin:$PATH"
 
-# Layer 1: Heavy PyTorch dependencies (changes rarely)
-COPY requirements-torch.txt .
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system -r requirements-torch.txt
-
-# Layer 2: Light dependencies (changes occasionally)
+# Install Python dependencies (PyTorch already included in base image)
 COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --system -r requirements.txt
