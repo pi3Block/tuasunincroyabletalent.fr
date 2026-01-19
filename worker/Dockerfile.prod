@@ -25,4 +25,5 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY . .
 
 # Run Celery worker with production settings
-CMD ["celery", "-A", "tasks.celery_app", "worker", "--loglevel=info", "--concurrency=2"]
+# IMPORTANT: Must listen to 'gpu' queue where analyze tasks are routed!
+CMD ["celery", "-A", "tasks.celery_app", "worker", "--loglevel=info", "--concurrency=2", "-Q", "gpu,celery"]
