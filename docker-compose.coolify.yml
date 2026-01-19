@@ -1,0 +1,145 @@
+# ===========================================
+# Docker Compose for Coolify - Production Ready
+# ===========================================
+# Single self-contained file for Coolify deployment
+# GPU NVIDIA required for worker service
+
+services:
+  # ============================================
+  # Frontend - React + Vite + Nginx
+  # ============================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+    ports:
+      - "3000:80"
+    environment:
+      - VITE_API_URL=${VITE_API_URL:-http://api:8000}
+    depends_on:
+      - api
+    restart: unless-stopped
+    networks:
+      - voicejury-network
+
+  # ============================================
+  # Backend API - FastAPI + Uvicorn
+  # ============================================
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - audio-data:/app/audio_files
+    environment:
+      - DATABASE_URL=postgresql://voicejury:${POSTGRES_PASSWORD:-voicejury_secret}@postgres:5432/voicejury
+      - REDIS_URL=redis://redis:6379/0
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
+      - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}
+      - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
+      - GENIUS_API_TOKEN=${GENIUS_API_TOKEN:-}
+      - SECRET_KEY=${SECRET_KEY}
+      - DEBUG=false
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - voicejury-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ============================================
+  # Worker - Celery + GPU (NVIDIA CUDA)
+  # ============================================
+  worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile.prod
+    volumes:
+      - audio-data:/app/audio_files
+      - model-cache:/root/.cache
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://voicejury:${POSTGRES_PASSWORD:-voicejury_secret}@postgres:5432/voicejury
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
+      - WHISPER_MODEL=${WHISPER_MODEL:-turbo}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - voicejury-network
+
+  # ============================================
+  # PostgreSQL - Database
+  # ============================================
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=voicejury
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-voicejury_secret}
+      - POSTGRES_DB=voicejury
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U voicejury"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - voicejury-network
+
+  # ============================================
+  # Redis - Cache + Message Queue
+  # ============================================
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - voicejury-network
+
+# ============================================
+# Volumes (Persistent Data)
+# ============================================
+volumes:
+  postgres-data:
+  redis-data:
+  audio-data:
+  model-cache:
+
+# ============================================
+# Networks
+# ============================================
+networks:
+  voicejury-network:
+    driver: bridge
