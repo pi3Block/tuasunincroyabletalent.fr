@@ -28,7 +28,7 @@ class AutoSyncService:
     # Configuration
     SAMPLE_DURATION_SECONDS = 30  # Analyze first 30 seconds
     MIN_CONFIDENCE_THRESHOLD = 0.5  # Minimum confidence to suggest offset
-    MAX_OFFSET_SECONDS = 30  # Maximum offset to consider
+    MAX_OFFSET_SECONDS = 300  # Maximum offset to consider (±5 minutes)
 
     async def calculate_offset(
         self,
@@ -72,6 +72,8 @@ class AutoSyncService:
             reference_path = session.get("reference_path")
             artist_name = session.get("artist_name", "")
             track_name = session.get("track_name", "")
+            album_name = session.get("album_name")
+            duration_ms = session.get("duration_ms")
 
             if not reference_path:
                 return {
@@ -82,11 +84,16 @@ class AutoSyncService:
                     "error": "Reference audio not ready",
                 }
 
+            # Convert duration to seconds for LRCLib
+            duration_sec = int(duration_ms / 1000) if duration_ms else None
+
             # Get lyrics with timestamps
             lyrics_data = await lyrics_service.get_lyrics(
                 spotify_track_id=spotify_track_id,
                 artist=artist_name,
                 title=track_name,
+                album=album_name,
+                duration_sec=duration_sec,
             )
 
             synced_lines = lyrics_data.get("lines")

@@ -1,7 +1,15 @@
 /**
- * Lyrics display component for karaoke-style lyrics.
- * Uses shadcn/ui for polished, accessible UI.
- * Optimized with React.memo and memoized calculations.
+ * @fileoverview Lyrics display component - Legacy wrapper.
+ *
+ * This file maintains backward compatibility with the old API
+ * while using the new professional-grade implementation.
+ *
+ * For new code, prefer importing from '@/components/lyrics':
+ * ```tsx
+ * import { LyricsDisplayPro } from '@/components/lyrics'
+ * ```
+ *
+ * @deprecated Use LyricsDisplayPro from '@/components/lyrics' instead.
  */
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
@@ -12,6 +20,7 @@ import { ChevronLeft, ChevronRight, Loader2, Minus, Plus, Target, Wand2 } from '
 import { cn } from '@/lib/utils'
 import type { SyncedLyricLine } from '@/api/client'
 
+// Re-export types for backward compatibility
 export interface LyricLine {
   text: string
   startTime?: number
@@ -194,17 +203,27 @@ export const LyricsDisplay = React.memo(function LyricsDisplay({
     if (isPlaying) setAutoScrollEnabled(true)
   }, [isPlaying])
 
-  // Sync button handler - resets offset to sync with current playback
+  // Sync button handler - aligns the first line to current playback time
+  // This means: if the user clicks Sync when they hear the first word,
+  // the offset will be set so that line 1 starts at the current time
   const handleSync = useCallback(() => {
-    const newOffset = -currentTime
-    const clampedOffset = Math.max(-60, Math.min(60, newOffset))
+    if (lines.length === 0) return
+
+    // Get the start time of the first line (in seconds)
+    const firstLineStart = lines[0]?.startTime ?? 0
+
+    // Calculate offset so that the first line aligns with current playback time
+    // offset = currentTime - firstLineStart
+    // This means: lyrics will be shifted so that line 1 appears at currentTime
+    const newOffset = currentTime - firstLineStart
+    const clampedOffset = Math.max(-300, Math.min(300, newOffset))
 
     lastSyncOffsetRef.current = clampedOffset
     setCurrentLineIndex(0)
     setAutoScrollEnabled(true)
     onLineChange?.(0)
     onOffsetChange?.(clampedOffset)
-  }, [currentTime, onLineChange, onOffsetChange])
+  }, [currentTime, lines, onLineChange, onOffsetChange])
 
   // Navigate to specific line
   const goToLine = useCallback((index: number) => {
@@ -215,14 +234,19 @@ export const LyricsDisplay = React.memo(function LyricsDisplay({
     }
   }, [lines.length, onLineChange])
 
-  // Handle offset decrease
+  // Handle offset decrease (fine: 0.5s)
   const handleOffsetDecrease = useCallback(() => {
-    onOffsetChange?.(Math.max(-30, offset - 0.5))
+    onOffsetChange?.(Math.max(-300, offset - 0.5))
   }, [offset, onOffsetChange])
 
-  // Handle offset increase
+  // Handle offset increase (fine: 0.5s)
   const handleOffsetIncrease = useCallback(() => {
-    onOffsetChange?.(Math.min(30, offset + 0.5))
+    onOffsetChange?.(Math.min(300, offset + 0.5))
+  }, [offset, onOffsetChange])
+
+  // Handle quick offset adjustments
+  const handleQuickOffset = useCallback((delta: number) => {
+    onOffsetChange?.(Math.max(-300, Math.min(300, offset + delta)))
   }, [offset, onOffsetChange])
 
   // Handle offset reset
@@ -275,43 +299,94 @@ export const LyricsDisplay = React.memo(function LyricsDisplay({
               </Button>
             )}
 
-            {/* Sync button */}
+            {/* Sync button - align first line to current time */}
             <Button
               variant="default"
               size="sm"
               className="h-9 gap-1.5 bg-green-600 hover:bg-green-500"
               onClick={handleSync}
+              title="Sync: Align first line to current playback time"
             >
               <Target className="h-4 w-4" />
               <span className="hidden sm:inline">Sync</span>
             </Button>
 
+            {/* Quick offset buttons - large adjustments */}
+            <div className="hidden md:flex items-center gap-1 ml-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-9 px-2 text-xs font-mono"
+                onClick={() => handleQuickOffset(-30)}
+                title="-30 seconds"
+              >
+                -30s
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-9 px-2 text-xs font-mono"
+                onClick={() => handleQuickOffset(-5)}
+                title="-5 seconds"
+              >
+                -5s
+              </Button>
+            </div>
+
+            {/* Fine adjustment: -0.5s */}
             <Button
               variant="outline"
               size="icon"
               className="h-9 w-9"
               onClick={handleOffsetDecrease}
+              title="-0.5 seconds"
             >
               <Minus className="h-4 w-4" />
             </Button>
 
+            {/* Current offset display - click to reset */}
             <Button
               variant={offset === 0 ? "outline" : "secondary"}
               size="sm"
-              className="h-9 min-w-[72px] font-mono text-sm"
+              className="h-9 min-w-[80px] font-mono text-sm"
               onClick={handleOffsetReset}
+              title="Click to reset offset to 0"
             >
               {offset >= 0 ? '+' : ''}{offset.toFixed(1)}s
             </Button>
 
+            {/* Fine adjustment: +0.5s */}
             <Button
               variant="outline"
               size="icon"
               className="h-9 w-9"
               onClick={handleOffsetIncrease}
+              title="+0.5 seconds"
             >
               <Plus className="h-4 w-4" />
             </Button>
+
+            {/* Quick offset buttons - large adjustments */}
+            <div className="hidden md:flex items-center gap-1">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-9 px-2 text-xs font-mono"
+                onClick={() => handleQuickOffset(5)}
+                title="+5 seconds"
+              >
+                +5s
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-9 px-2 text-xs font-mono"
+                onClick={() => handleQuickOffset(30)}
+                title="+30 seconds"
+              >
+                +30s
+              </Button>
+            </div>
 
             {/* Sync indicator */}
             {hasSyncedTimestamps && (

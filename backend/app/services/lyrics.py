@@ -3,18 +3,232 @@ Unified lyrics service with hierarchical provider chain.
 
 Provider priority:
 1. Cache (Redis → PostgreSQL)
-2. Spotify Synced Lyrics (if sp_dc configured)
-3. Genius Plain Text Lyrics
+2. LRCLib (free, legal, synced lyrics)
+3. Genius Plain Text Lyrics (fallback)
 
 All results are cached for subsequent requests.
 """
 import re
 import asyncio
 from typing import Optional
+import httpx
 import lyricsgenius
 
 from app.config import settings
 from app.services.lyrics_cache import lyrics_cache_service
+
+
+class LRCLibLyricsProvider:
+    """
+    LRCLib provider for free, legal synced lyrics.
+    API docs: https://lrclib.net/docs
+    No API key required, no rate limiting.
+    """
+
+    BASE_URL = "https://lrclib.net/api"
+
+    async def get_lyrics(
+        self,
+        artist: str,
+        title: str,
+        album: Optional[str] = None,
+        duration_sec: Optional[int] = None,
+    ) -> dict:
+        """
+        Fetch synced lyrics from LRCLib.
+
+        Args:
+            artist: Artist name
+            title: Song title
+            album: Album name (optional, improves matching)
+            duration_sec: Track duration in seconds (optional, improves matching)
+
+        Returns:
+            dict with text, lines, source, syncType, status
+        """
+        try:
+            # Try exact match first with /api/get
+            if duration_sec:
+                result = await self._get_exact(artist, title, album, duration_sec)
+                if result["status"] == "found":
+                    return result
+
+            # Fallback to search
+            return await self._search(artist, title)
+
+        except Exception as e:
+            print(f"[LRCLib] Error: {e}")
+            return {
+                "text": "",
+                "lines": None,
+                "source": "none",
+                "syncType": "none",
+                "status": "error",
+                "error": str(e),
+            }
+
+    async def _get_exact(
+        self,
+        artist: str,
+        title: str,
+        album: Optional[str],
+        duration_sec: int,
+    ) -> dict:
+        """Try exact match using /api/get endpoint."""
+        params = {
+            "track_name": title,
+            "artist_name": artist,
+            "duration": duration_sec,
+        }
+        if album:
+            params["album_name"] = album
+
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{self.BASE_URL}/get",
+                params=params,
+                headers={"User-Agent": "VoiceJury/1.0"},
+                timeout=10.0,
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                return self._parse_response(data)
+            elif response.status_code == 404:
+                return {
+                    "text": "",
+                    "lines": None,
+                    "source": "none",
+                    "syncType": "none",
+                    "status": "not_found",
+                }
+            else:
+                print(f"[LRCLib] API error: {response.status_code}")
+                return {
+                    "text": "",
+                    "lines": None,
+                    "source": "none",
+                    "syncType": "none",
+                    "status": "error",
+                    "error": f"HTTP {response.status_code}",
+                }
+
+    async def _search(self, artist: str, title: str) -> dict:
+        """Search for lyrics using /api/search endpoint."""
+        query = f"{artist} {title}"
+
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{self.BASE_URL}/search",
+                params={"q": query},
+                headers={"User-Agent": "VoiceJury/1.0"},
+                timeout=10.0,
+            )
+
+            if response.status_code == 200:
+                results = response.json()
+                if results and len(results) > 0:
+                    # Take the first result
+                    return self._parse_response(results[0])
+                return {
+                    "text": "",
+                    "lines": None,
+                    "source": "none",
+                    "syncType": "none",
+                    "status": "not_found",
+                }
+            else:
+                print(f"[LRCLib] Search error: {response.status_code}")
+                return {
+                    "text": "",
+                    "lines": None,
+                    "source": "none",
+                    "syncType": "none",
+                    "status": "error",
+                    "error": f"HTTP {response.status_code}",
+                }
+
+    def _parse_response(self, data: dict) -> dict:
+        """Parse LRCLib API response."""
+        synced_lyrics = data.get("syncedLyrics")
+        plain_lyrics = data.get("plainLyrics", "")
+
+        if synced_lyrics:
+            # Parse LRC format to our format
+            lines = self._parse_lrc(synced_lyrics)
+            plain_text = "\n".join([line["text"] for line in lines])
+
+            return {
+                "text": plain_text,
+                "lines": lines,
+                "source": "lrclib",
+                "syncType": "synced",
+                "status": "found",
+                "title": data.get("trackName"),
+                "artist": data.get("artistName"),
+                "album": data.get("albumName"),
+                "duration": data.get("duration"),
+            }
+        elif plain_lyrics:
+            return {
+                "text": plain_lyrics,
+                "lines": None,
+                "source": "lrclib",
+                "syncType": "unsynced",
+                "status": "found",
+                "title": data.get("trackName"),
+                "artist": data.get("artistName"),
+            }
+        else:
+            return {
+                "text": "",
+                "lines": None,
+                "source": "none",
+                "syncType": "none",
+                "status": "not_found",
+            }
+
+    def _parse_lrc(self, lrc_text: str) -> list[dict]:
+        """
+        Parse LRC format to our synced lines format.
+        LRC format: [mm:ss.xx]lyrics text
+
+        Returns:
+            list of {text, startTimeMs, endTimeMs}
+        """
+        lines = []
+        lrc_pattern = re.compile(r"\[(\d{2}):(\d{2})\.(\d{2,3})\](.+)")
+
+        for line in lrc_text.strip().split("\n"):
+            match = lrc_pattern.match(line.strip())
+            if match:
+                minutes = int(match.group(1))
+                seconds = int(match.group(2))
+                centiseconds = match.group(3)
+                # Handle both .xx (centiseconds) and .xxx (milliseconds)
+                if len(centiseconds) == 2:
+                    ms = int(centiseconds) * 10
+                else:
+                    ms = int(centiseconds)
+                text = match.group(4).strip()
+
+                if text:  # Skip empty lines
+                    start_time_ms = (minutes * 60 + seconds) * 1000 + ms
+                    lines.append({
+                        "text": text,
+                        "startTimeMs": start_time_ms,
+                        "endTimeMs": None,  # Will be filled below
+                    })
+
+        # Calculate endTimeMs from next line's startTime
+        for i in range(len(lines) - 1):
+            lines[i]["endTimeMs"] = lines[i + 1]["startTimeMs"]
+
+        # Last line: estimate 5 seconds duration
+        if lines:
+            lines[-1]["endTimeMs"] = lines[-1]["startTimeMs"] + 5000
+
+        return lines
 
 
 class GeniusLyricsProvider:
@@ -156,177 +370,45 @@ class GeniusLyricsProvider:
             return []
 
 
-class SpotifyLyricsProvider:
-    """
-    Spotify synced lyrics provider.
-    Uses Spotify's internal API with sp_dc cookie authentication.
-
-    Note: This is an undocumented API and may break without notice.
-    """
-
-    LYRICS_API_URL = "https://spclient.wg.spotify.com/color-lyrics/v2/track/{track_id}"
-
-    def __init__(self):
-        self._sp_dc: str | None = None
-
-    def is_configured(self) -> bool:
-        """Check if Spotify synced lyrics is configured."""
-        return bool(getattr(settings, 'spotify_sp_dc', None))
-
-    async def get_synced_lyrics(self, spotify_track_id: str) -> dict:
-        """
-        Fetch synced lyrics from Spotify's internal API.
-
-        Args:
-            spotify_track_id: Spotify track ID
-
-        Returns:
-            dict with text, lines, source, syncType, status
-        """
-        if not self.is_configured():
-            return {
-                "text": "",
-                "lines": None,
-                "source": "none",
-                "syncType": "none",
-                "status": "error",
-                "error": "Spotify sp_dc not configured",
-            }
-
-        try:
-            import httpx
-
-            sp_dc = settings.spotify_sp_dc
-            url = self.LYRICS_API_URL.format(track_id=spotify_track_id)
-
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    url,
-                    headers={
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                        "App-Platform": "WebPlayer",
-                        "Authorization": f"Bearer {await self._get_access_token(sp_dc)}",
-                    },
-                    timeout=10.0,
-                )
-
-                if response.status_code == 200:
-                    data = response.json()
-                    return self._parse_response(data)
-                elif response.status_code == 401:
-                    print("[SpotifyLyrics] sp_dc cookie expired or invalid")
-                    return {
-                        "text": "",
-                        "lines": None,
-                        "source": "none",
-                        "syncType": "none",
-                        "status": "error",
-                        "error": "Spotify authentication expired",
-                    }
-                else:
-                    print(f"[SpotifyLyrics] API error: {response.status_code}")
-                    return {
-                        "text": "",
-                        "lines": None,
-                        "source": "none",
-                        "syncType": "none",
-                        "status": "not_found",
-                    }
-
-        except Exception as e:
-            print(f"[SpotifyLyrics] Error: {e}")
-            return {
-                "text": "",
-                "lines": None,
-                "source": "none",
-                "syncType": "none",
-                "status": "error",
-                "error": str(e),
-            }
-
-    async def _get_access_token(self, sp_dc: str) -> str:
-        """
-        Get Spotify Web API access token using sp_dc cookie.
-        """
-        import httpx
-
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                "https://open.spotify.com/get_access_token?reason=transport&productType=web_player",
-                cookies={"sp_dc": sp_dc},
-                timeout=10.0,
-            )
-            if response.status_code == 200:
-                data = response.json()
-                return data.get("accessToken", "")
-            return ""
-
-    def _parse_response(self, data: dict) -> dict:
-        """Parse Spotify lyrics API response."""
-        lyrics = data.get("lyrics", {})
-        sync_type = lyrics.get("syncType", "UNSYNCED")
-
-        lines = []
-        plain_text_lines = []
-
-        for line in lyrics.get("lines", []):
-            words = line.get("words", "")
-            start_time_ms = int(line.get("startTimeMs", 0))
-            end_time_ms = int(line.get("endTimeMs", 0)) if line.get("endTimeMs") else None
-
-            if words.strip():
-                lines.append({
-                    "text": words,
-                    "startTimeMs": start_time_ms,
-                    "endTimeMs": end_time_ms,
-                })
-                plain_text_lines.append(words)
-
-        return {
-            "text": "\n".join(plain_text_lines),
-            "lines": lines if sync_type == "LINE_SYNCED" else None,
-            "source": "spotify",
-            "syncType": "synced" if sync_type == "LINE_SYNCED" else "unsynced",
-            "status": "found" if lines else "not_found",
-        }
-
-
 class LyricsService:
     """
     Unified lyrics service with caching and provider chain.
 
     Priority:
     1. Cache (Redis → PostgreSQL)
-    2. Spotify Synced (if configured)
-    3. Genius Plain Text
+    2. LRCLib (free, legal, synced lyrics)
+    3. Genius Plain Text (fallback)
     """
 
     def __init__(self):
+        self.lrclib = LRCLibLyricsProvider()
         self.genius = GeniusLyricsProvider()
-        self.spotify = SpotifyLyricsProvider()
 
     async def get_lyrics(
         self,
         spotify_track_id: str,
         artist: str,
         title: str,
+        album: Optional[str] = None,
+        duration_sec: Optional[int] = None,
     ) -> dict:
         """
         Get lyrics with hierarchical provider chain and caching.
 
         Args:
-            spotify_track_id: Spotify track ID (for cache key and Spotify API)
-            artist: Artist name (for Genius fallback)
-            title: Song title (for Genius fallback)
+            spotify_track_id: Spotify track ID (for cache key)
+            artist: Artist name
+            title: Song title
+            album: Album name (optional, improves LRCLib matching)
+            duration_sec: Track duration in seconds (optional, improves LRCLib matching)
 
         Returns:
             dict with:
-                - lyrics: Plain text lyrics
+                - text: Plain text lyrics
                 - lines: Synced lyrics array (if available)
                 - syncType: 'synced', 'unsynced', or 'none'
-                - source: 'spotify', 'genius', or 'none'
+                - source: 'lrclib', 'genius', or 'none'
                 - status: 'found', 'not_found', or 'error'
-                - url: Source URL (if available)
                 - cachedAt: Cache timestamp (if cached)
         """
         # 1. Check cache first
@@ -334,24 +416,28 @@ class LyricsService:
         if cached:
             return cached
 
-        # 2. Try Spotify synced lyrics (if configured)
-        if self.spotify.is_configured():
-            result = await self.spotify.get_synced_lyrics(spotify_track_id)
-            if result["status"] == "found":
-                # Cache the result
-                await lyrics_cache_service.set(
-                    spotify_track_id=spotify_track_id,
-                    lyrics_text=result.get("text"),
-                    synced_lines=result.get("lines"),
-                    sync_type=result.get("syncType", "none"),
-                    source=result.get("source", "spotify"),
-                    source_url=result.get("url"),
-                    artist_name=artist,
-                    track_name=title,
-                )
-                return result
+        # 2. Try LRCLib for synced lyrics (free & legal)
+        result = await self.lrclib.get_lyrics(
+            artist=artist,
+            title=title,
+            album=album,
+            duration_sec=duration_sec,
+        )
+        if result["status"] == "found":
+            # Cache the result
+            await lyrics_cache_service.set(
+                spotify_track_id=spotify_track_id,
+                lyrics_text=result.get("text"),
+                synced_lines=result.get("lines"),
+                sync_type=result.get("syncType", "synced"),
+                source=result.get("source", "lrclib"),
+                source_url=None,
+                artist_name=artist,
+                track_name=title,
+            )
+            return result
 
-        # 3. Fallback to Genius
+        # 3. Fallback to Genius (plain text only)
         result = await self.genius.get_lyrics(artist, title)
         if result["status"] == "found":
             # Cache the result

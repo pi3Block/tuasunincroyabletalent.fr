@@ -13,6 +13,7 @@ from app.services.youtube_cache import youtube_cache
 from app.services.search_history import search_history
 from app.services.lyrics import lyrics_service
 from app.services.lyrics_offset import lyrics_offset_service
+from app.services.lyrics_cache import lyrics_cache_service
 from app.services.auto_sync import auto_sync_service
 from app.config import settings
 
@@ -172,6 +173,8 @@ async def start_session(request: StartSessionRequest, background_tasks: Backgrou
         youtube_match["spotify_duration"] = spotify_duration
 
     # Initialize session in Redis
+    album_name = track.get("album", {}).get("name")
+
     session_data = {
         "session_id": session_id,
         "status": "created",
@@ -179,6 +182,7 @@ async def start_session(request: StartSessionRequest, background_tasks: Backgrou
         "spotify_track_id": request.spotify_track_id,
         "track_name": track_name,
         "artist_name": artist_name,
+        "album_name": album_name,
         "duration_ms": duration_ms,
         "youtube_match": youtube_match,
     }
@@ -491,14 +495,14 @@ async def get_session_lyrics(session_id: str):
 
     Uses hierarchical provider chain:
     1. Global cache (Redis → PostgreSQL)
-    2. Spotify synced lyrics (if sp_dc configured)
-    3. Genius plain text lyrics
+    2. LRCLib (free, legal, synced lyrics)
+    3. Genius plain text lyrics (fallback)
 
     Returns:
         - lyrics: Plain text lyrics (for backward compatibility)
         - lines: Array of synced lyrics with timestamps (if available)
         - syncType: 'synced', 'unsynced', or 'none'
-        - source: 'spotify', 'genius', or 'none'
+        - source: 'lrclib', 'genius', or 'none'
         - status: 'found', 'not_found', or 'error'
         - url: Source URL (if available)
         - cachedAt: Cache timestamp (if from cache)
@@ -511,6 +515,8 @@ async def get_session_lyrics(session_id: str):
     spotify_track_id = session.get("spotify_track_id", "")
     artist_name = session.get("artist_name", "")
     track_name = session.get("track_name", "")
+    album_name = session.get("album_name")
+    duration_ms = session.get("duration_ms")
 
     if not spotify_track_id:
         return {
@@ -534,11 +540,16 @@ async def get_session_lyrics(session_id: str):
             "error": "Track info not available",
         }
 
+    # Convert duration to seconds for LRCLib
+    duration_sec = int(duration_ms / 1000) if duration_ms else None
+
     # Fetch lyrics using unified service (handles caching internally)
     lyrics_result = await lyrics_service.get_lyrics(
         spotify_track_id=spotify_track_id,
         artist=artist_name,
         title=track_name,
+        album=album_name,
+        duration_sec=duration_sec,
     )
 
     return {
@@ -647,3 +658,86 @@ async def auto_sync_lyrics(session_id: str):
         applied=result.get("applied", False),
         error=result.get("error"),
     )
+
+
+# ============================================
+# Lyrics Cache Management Endpoints
+# ============================================
+
+@router.get("/lyrics-cache/stats")
+async def get_lyrics_cache_stats():
+    """
+    Get lyrics cache statistics.
+
+    Returns cache metrics including:
+    - Total cached entries
+    - Entries by source (lrclib, genius)
+    - Entries by sync type (synced, unsynced, none)
+    - TTL configuration
+    """
+    stats = await lyrics_cache_service.get_stats()
+    return stats
+
+
+@router.post("/{session_id}/lyrics/refresh")
+async def refresh_session_lyrics(session_id: str):
+    """
+    Force refresh lyrics for the current session's track.
+
+    Invalidates the cache and fetches fresh lyrics from providers.
+    Use this if lyrics are incorrect or a better version is available.
+
+    Returns:
+        Fresh lyrics data
+    """
+    session = await redis_client.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    spotify_track_id = session.get("spotify_track_id", "")
+    artist_name = session.get("artist_name", "")
+    track_name = session.get("track_name", "")
+    album_name = session.get("album_name")
+    duration_ms = session.get("duration_ms")
+
+    if not spotify_track_id:
+        raise HTTPException(status_code=400, detail="Track ID not available")
+
+    # Invalidate existing cache
+    await lyrics_cache_service.invalidate(spotify_track_id)
+
+    # Convert duration to seconds for LRCLib
+    duration_sec = int(duration_ms / 1000) if duration_ms else None
+
+    # Fetch fresh lyrics
+    lyrics_result = await lyrics_service.get_lyrics(
+        spotify_track_id=spotify_track_id,
+        artist=artist_name,
+        title=track_name,
+        album=album_name,
+        duration_sec=duration_sec,
+    )
+
+    return {
+        "session_id": session_id,
+        "refreshed": True,
+        "lyrics": lyrics_result.get("text", ""),
+        "lines": lyrics_result.get("lines"),
+        "syncType": lyrics_result.get("syncType", "none"),
+        "source": lyrics_result.get("source", "none"),
+        "status": lyrics_result.get("status", "not_found"),
+    }
+
+
+@router.post("/lyrics-cache/cleanup")
+async def cleanup_lyrics_cache():
+    """
+    Remove expired entries from the lyrics cache.
+
+    This is typically run automatically, but can be triggered manually.
+
+    Returns:
+        Number of entries cleaned up
+    """
+    deleted = await lyrics_cache_service.cleanup_expired()
+    return {"deleted": deleted, "status": "ok"}

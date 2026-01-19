@@ -49,13 +49,13 @@ class LyricsOffsetService:
         Args:
             spotify_track_id: Spotify track ID
             youtube_video_id: YouTube video ID
-            offset_seconds: Offset in seconds (clamped to -30 to +30)
+            offset_seconds: Offset in seconds (clamped to -300 to +300)
 
         Returns:
             The saved offset value
         """
-        # Clamp to reasonable range
-        offset_seconds = max(-30.0, min(30.0, offset_seconds))
+        # Clamp to reasonable range (±5 minutes)
+        offset_seconds = max(-300.0, min(300.0, offset_seconds))
 
         async with get_db() as session:
             stmt = insert(LyricsOffset).values(

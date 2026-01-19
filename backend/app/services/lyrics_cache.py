@@ -5,13 +5,18 @@ Implements a two-tier caching strategy:
 2. PostgreSQL (persistent, larger capacity) - Second tier
 
 Cache hierarchy:
-Redis Cache (5min TTL) → PostgreSQL Cache (7 days TTL) → External APIs
+Redis Cache (1h TTL) → PostgreSQL Cache (90-365 days TTL) → External APIs
+
+TTL Strategy:
+- Synced lyrics (lrclib): 365 days (stable, reliable source)
+- Unsynced lyrics (genius): 90 days (may get updated)
+- Not found results: 7 days (retry after a week)
 """
 import json
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, func
 from sqlalchemy.dialects.postgresql import insert
 
 from app.config import settings
@@ -22,8 +27,12 @@ from app.models.lyrics_cache import LyricsCache
 
 # Cache configuration
 REDIS_CACHE_PREFIX = "lyrics:"
-REDIS_CACHE_TTL = 300  # 5 minutes (fast layer)
-POSTGRES_CACHE_TTL_DAYS = 7  # 7 days (persistent layer)
+REDIS_CACHE_TTL = 3600  # 1 hour (fast layer, increased from 5min)
+
+# PostgreSQL TTL by source/status (in days)
+POSTGRES_TTL_SYNCED = 365      # 1 year for synced lyrics (stable)
+POSTGRES_TTL_UNSYNCED = 90     # 3 months for unsynced lyrics
+POSTGRES_TTL_NOT_FOUND = 7     # 1 week for not found (retry later)
 
 
 class LyricsCacheService:
@@ -125,6 +134,23 @@ class LyricsCacheService:
             print(f"[LyricsCache] PostgreSQL get error: {e}")
             return None
 
+    def _get_ttl_days(self, sync_type: str, source: str, has_lyrics: bool) -> int:
+        """
+        Determine cache TTL based on lyrics quality/source.
+
+        Strategy:
+        - Synced lyrics from reliable sources: 1 year
+        - Unsynced lyrics: 3 months
+        - Not found: 1 week (retry soon)
+        """
+        if not has_lyrics or source == "none":
+            return POSTGRES_TTL_NOT_FOUND
+
+        if sync_type == "synced":
+            return POSTGRES_TTL_SYNCED
+
+        return POSTGRES_TTL_UNSYNCED
+
     async def set_in_postgres(
         self,
         spotify_track_id: str,
@@ -139,18 +165,25 @@ class LyricsCacheService:
         """
         Store lyrics in PostgreSQL cache with UPSERT.
 
+        TTL varies by lyrics quality:
+        - Synced lyrics: 365 days
+        - Unsynced lyrics: 90 days
+        - Not found: 7 days
+
         Args:
             spotify_track_id: Spotify track ID
             lyrics_text: Plain text lyrics
             synced_lines: Array of synced lyrics lines
             sync_type: 'synced', 'unsynced', or 'none'
-            source: 'spotify', 'genius', or 'none'
+            source: 'lrclib', 'genius', or 'none'
             source_url: URL to lyrics source
             artist_name: Artist name for debugging
             track_name: Track name for debugging
         """
         try:
-            expires_at = datetime.utcnow() + timedelta(days=POSTGRES_CACHE_TTL_DAYS)
+            has_lyrics = bool(lyrics_text) or bool(synced_lines)
+            ttl_days = self._get_ttl_days(sync_type, source, has_lyrics)
+            expires_at = datetime.utcnow() + timedelta(days=ttl_days)
 
             async with get_db() as session:
                 stmt = insert(LyricsCache).values(
@@ -179,7 +212,7 @@ class LyricsCacheService:
                     }
                 )
                 await session.execute(stmt)
-                print(f"[LyricsCache] PostgreSQL SET for {spotify_track_id}")
+                print(f"[LyricsCache] PostgreSQL SET for {spotify_track_id} (TTL: {ttl_days}d, source: {source})")
 
         except Exception as e:
             print(f"[LyricsCache] PostgreSQL set error: {e}")
@@ -216,6 +249,65 @@ class LyricsCacheService:
         except Exception as e:
             print(f"[LyricsCache] Cleanup error: {e}")
             return 0
+
+    async def get_stats(self) -> dict:
+        """
+        Get cache statistics.
+
+        Returns:
+            Dict with cache stats (total entries, by source, by sync type)
+        """
+        try:
+            async with get_db() as session:
+                # Total count
+                total_result = await session.execute(
+                    select(func.count()).select_from(LyricsCache)
+                )
+                total = total_result.scalar() or 0
+
+                # Count by source
+                source_result = await session.execute(
+                    select(
+                        LyricsCache.source,
+                        func.count().label("count")
+                    ).group_by(LyricsCache.source)
+                )
+                by_source = {row.source: row.count for row in source_result}
+
+                # Count by sync type
+                sync_result = await session.execute(
+                    select(
+                        LyricsCache.sync_type,
+                        func.count().label("count")
+                    ).group_by(LyricsCache.sync_type)
+                )
+                by_sync_type = {row.sync_type: row.count for row in sync_result}
+
+                # Expired count
+                expired_result = await session.execute(
+                    select(func.count()).select_from(LyricsCache).where(
+                        LyricsCache.expires_at < datetime.utcnow()
+                    )
+                )
+                expired = expired_result.scalar() or 0
+
+                return {
+                    "total": total,
+                    "valid": total - expired,
+                    "expired": expired,
+                    "by_source": by_source,
+                    "by_sync_type": by_sync_type,
+                    "ttl_config": {
+                        "synced_days": POSTGRES_TTL_SYNCED,
+                        "unsynced_days": POSTGRES_TTL_UNSYNCED,
+                        "not_found_days": POSTGRES_TTL_NOT_FOUND,
+                        "redis_seconds": REDIS_CACHE_TTL,
+                    }
+                }
+
+        except Exception as e:
+            print(f"[LyricsCache] Stats error: {e}")
+            return {"error": str(e)}
 
     # ============================================
     # Unified Cache Interface
