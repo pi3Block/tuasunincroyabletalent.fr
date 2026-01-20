@@ -92,8 +92,8 @@ services:
       - NVIDIA_VISIBLE_DEVICES=1
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # GPU access - use device_ids to select specific GPU (GPU 1 = RTX 3080 with more VRAM)
-    # See: https://github.com/docker/compose/issues/12203
+    # GPU access - try both methods for Coolify compatibility
+    runtime: nvidia
     deploy:
       resources:
         reservations:
