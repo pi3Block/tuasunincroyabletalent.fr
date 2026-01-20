@@ -22,15 +22,6 @@ import { KaraokeWordGroup } from './KaraokeWord'
 // ============================================================================
 
 /**
- * Calculate blur amount based on distance from current line.
- * Disabled: blur was preventing scrolling through lyrics.
- */
-function getBlurStyle(_distance: number, _maxBlur: number): string {
-  // Blur disabled to allow smooth scrolling through lyrics
-  return 'blur(0px)'
-}
-
-/**
  * Calculate opacity based on distance from current line.
  */
 function getOpacity(distance: number, isActive: boolean): number {
@@ -91,15 +82,15 @@ export const LyricLine = memo(forwardRef<HTMLDivElement, LyricLineProps>(
     ref
   ) {
     // Compute styles based on state
+    // Note: blur filter removed to allow smooth scrolling through lyrics
     const containerStyle = useMemo(() => {
       const scale = getScale(isActive)
       const opacity = getOpacity(distance, isActive)
-      const filter = getBlurStyle(distance, DEFAULT_ANIMATION_CONFIG.blurAmount)
 
       return {
         transform: `scale(${scale})`,
         opacity,
-        filter,
+        // No filter/blur - it was preventing scrolling
         // Glow effect for active line
         ...(isActive && DEFAULT_ANIMATION_CONFIG.enableGlow
           ? {
