@@ -89,7 +89,7 @@ services:
       - DATABASE_URL=postgresql://voicejury:${POSTGRES_PASSWORD:-voicejury_secret}@postgres:5432/voicejury
       - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
       - WHISPER_MODEL=${WHISPER_MODEL:-turbo}
-      - NVIDIA_VISIBLE_DEVICES=1
+      # NOTE: GPU selection via device_ids below - GPU 1 becomes GPU 0 inside container
     extra_hosts:
       - "host.docker.internal:host-gateway"
     # GPU access - try both methods for Coolify compatibility

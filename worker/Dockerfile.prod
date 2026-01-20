@@ -16,9 +16,8 @@ RUN apt-get update && apt-get install -y \
 # Add uv to PATH
 ENV PATH="/root/.local/bin:$PATH"
 
-# Use GPU 1 (second GPU with more VRAM)
-# Set before any PyTorch import
-ENV CUDA_VISIBLE_DEVICES=1
+# NOTE: GPU selection is handled by docker-compose device_ids, not CUDA_VISIBLE_DEVICES
+# When Docker maps GPU 1 to the container, it becomes GPU 0 inside the container
 
 # Install Python dependencies (PyTorch already included in base image)
 COPY requirements.txt .
