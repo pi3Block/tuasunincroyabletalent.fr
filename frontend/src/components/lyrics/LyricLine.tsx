@@ -23,13 +23,15 @@ import { KaraokeWordGroup } from './KaraokeWord'
 
 /**
  * Calculate opacity based on distance from current line.
+ * All lines remain readable (minimum 0.5 opacity) to allow scrolling.
  */
 function getOpacity(distance: number, isActive: boolean): number {
   if (isActive) return 1
-  if (distance === 1) return 0.7
-  if (distance === 2) return 0.5
-  if (distance === 3) return 0.35
-  return Math.max(0.15, 0.5 - distance * 0.1)
+  if (distance === 1) return 0.8
+  if (distance === 2) return 0.7
+  if (distance === 3) return 0.6
+  // Minimum 0.5 opacity so all lines remain readable
+  return Math.max(0.5, 0.7 - distance * 0.05)
 }
 
 /**

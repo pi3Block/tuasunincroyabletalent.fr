@@ -104,16 +104,28 @@ function flattenWords(wordLines: WordLine[]): Array<{
 }
 
 /**
- * Assign word timestamps to synced lines based on time overlap.
- * This regroups Whisper's words according to the original lyric line structure.
+ * Normalize text for comparison (lowercase, remove accents and punctuation).
+ */
+function normalizeForComparison(text: string): string {
+  return text
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '') // Remove accents
+    .replace(/[^a-z0-9]/g, '') // Keep only alphanumeric
+}
+
+/**
+ * Assign word timestamps to synced lines.
+ * Uses the ORIGINAL lyrics text but assigns Whisper timestamps to each word.
+ * This ensures we display the correct lyrics while having word-level timing.
  */
 function mergeWordTimestampsWithSyncedLines(
   syncedLines: SyncedLyricLine[],
   wordLines: WordLine[]
 ): LyricLineType[] {
-  // Flatten all words from wordLines
-  const allWords = flattenWords(wordLines)
-  if (allWords.length === 0) {
+  // Flatten all words from wordLines (Whisper transcription)
+  const whisperWords = flattenWords(wordLines)
+  if (whisperWords.length === 0) {
     // No words, fall back to synced lines without word data
     return syncedLines.map((line, index) => ({
       id: `line-${index}`,
@@ -124,44 +136,111 @@ function mergeWordTimestampsWithSyncedLines(
     }))
   }
 
-  let wordIndex = 0
+  let whisperIndex = 0
   const result: LyricLineType[] = []
 
   for (let lineIndex = 0; lineIndex < syncedLines.length; lineIndex++) {
     const line = syncedLines[lineIndex]
     const lineStartMs = line.startTimeMs
-    // Use next line's start time as end, or add 10s buffer for last line
     const nextLine = syncedLines[lineIndex + 1]
     const lineEndMs = nextLine ? nextLine.startTimeMs : lineStartMs + 10000
 
+    // Split original lyrics line into words
+    const originalWords = line.text.split(/\s+/).filter(w => w.length > 0)
     const lineWords: LyricWord[] = []
 
-    // Collect words that fall within this line's time window
-    while (wordIndex < allWords.length) {
-      const w = allWords[wordIndex]
+    // Collect Whisper words that fall within this line's time window
+    const whisperWordsInLine: typeof whisperWords = []
+    const startIdx = whisperIndex
+
+    while (whisperIndex < whisperWords.length) {
+      const w = whisperWords[whisperIndex]
       const wordMidpoint = (w.startMs + w.endMs) / 2
 
-      // Word belongs to this line if its midpoint is within the time window
       if (wordMidpoint >= lineStartMs && wordMidpoint < lineEndMs) {
-        lineWords.push({
-          text: w.word,
-          startTimeMs: w.startMs,
-          endTimeMs: w.endMs,
-          confidence: w.confidence,
-        })
-        wordIndex++
+        whisperWordsInLine.push(w)
+        whisperIndex++
       } else if (wordMidpoint < lineStartMs) {
-        // Word is before this line, skip it (likely overlap from previous)
-        wordIndex++
+        whisperIndex++
       } else {
-        // Word is after this line's time window, stop collecting
         break
+      }
+    }
+
+    // If no Whisper words found for this line, try to distribute timing evenly
+    if (whisperWordsInLine.length === 0 && originalWords.length > 0) {
+      const duration = lineEndMs - lineStartMs
+      const wordDuration = duration / originalWords.length
+
+      for (let i = 0; i < originalWords.length; i++) {
+        lineWords.push({
+          text: originalWords[i],
+          startTimeMs: Math.round(lineStartMs + i * wordDuration),
+          endTimeMs: Math.round(lineStartMs + (i + 1) * wordDuration),
+          confidence: 0.5, // Low confidence for estimated timing
+        })
+      }
+    } else {
+      // Match original words with Whisper timestamps
+      // Strategy: assign timestamps proportionally based on word position
+      for (let i = 0; i < originalWords.length; i++) {
+        const originalWord = originalWords[i]
+
+        // Find best matching Whisper word by position ratio
+        const positionRatio = originalWords.length > 1 ? i / (originalWords.length - 1) : 0
+        const whisperIdx = Math.min(
+          Math.round(positionRatio * (whisperWordsInLine.length - 1)),
+          whisperWordsInLine.length - 1
+        )
+
+        if (whisperIdx >= 0 && whisperWordsInLine[whisperIdx]) {
+          const whisperWord = whisperWordsInLine[whisperIdx]
+
+          // Calculate timing: interpolate between adjacent Whisper words for smoother timing
+          let startMs: number
+          let endMs: number
+
+          if (whisperWordsInLine.length === 1) {
+            // Only one Whisper word, distribute evenly
+            const totalDuration = whisperWord.endMs - whisperWord.startMs
+            const wordDuration = totalDuration / originalWords.length
+            startMs = whisperWord.startMs + i * wordDuration
+            endMs = startMs + wordDuration
+          } else {
+            // Interpolate timing based on position
+            const firstWord = whisperWordsInLine[0]
+            const lastWord = whisperWordsInLine[whisperWordsInLine.length - 1]
+            const totalDuration = lastWord.endMs - firstWord.startMs
+            const wordDuration = totalDuration / originalWords.length
+
+            startMs = firstWord.startMs + i * wordDuration
+            endMs = startMs + wordDuration
+          }
+
+          lineWords.push({
+            text: originalWord, // Use ORIGINAL text, not Whisper transcription
+            startTimeMs: Math.round(startMs),
+            endTimeMs: Math.round(endMs),
+            confidence: whisperWord.confidence,
+          })
+        } else {
+          // Fallback: estimate timing from line boundaries
+          const duration = lineEndMs - lineStartMs
+          const wordDuration = duration / originalWords.length
+
+          lineWords.push({
+            text: originalWord,
+            startTimeMs: Math.round(lineStartMs + i * wordDuration),
+            endTimeMs: Math.round(lineStartMs + (i + 1) * wordDuration),
+            confidence: 0.3,
+          })
+        }
       }
     }
 
     result.push({
       id: `line-${lineIndex}`,
-      text: line.text,
+      text: line.text, // Keep original line text
       startTime: lineStartMs / 1000,
       endTime: line.endTimeMs ? line.endTimeMs / 1000 : undefined,
       words: lineWords.length > 0 ? lineWords : undefined,
