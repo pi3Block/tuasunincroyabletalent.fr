@@ -104,17 +104,6 @@ function flattenWords(wordLines: WordLine[]): Array<{
 }
 
 /**
- * Normalize text for comparison (lowercase, remove accents and punctuation).
- */
-function normalizeForComparison(text: string): string {
-  return text
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '') // Remove accents
-    .replace(/[^a-z0-9]/g, '') // Keep only alphanumeric
-}
-
-/**
  * Assign word timestamps to synced lines.
  * Uses the ORIGINAL lyrics text but assigns Whisper timestamps to each word.
  * This ensures we display the correct lyrics while having word-level timing.
@@ -151,7 +140,6 @@ function mergeWordTimestampsWithSyncedLines(
 
     // Collect Whisper words that fall within this line's time window
     const whisperWordsInLine: typeof whisperWords = []
-    const startIdx = whisperIndex
 
     while (whisperIndex < whisperWords.length) {
       const w = whisperWords[whisperIndex]
