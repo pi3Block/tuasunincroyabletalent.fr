@@ -3,11 +3,12 @@ import { useSessionStore } from '@stores/sessionStore'
 import { TrackSearch } from '@/components/TrackSearch'
 import { YouTubePlayer } from '@/components/YouTubePlayer'
 import { PitchIndicator } from '@/components/PitchIndicator'
-import { LyricsDisplay } from '@/components/LyricsDisplay'
+import { LyricsDisplayPro } from '@/components/lyrics/LyricsDisplayPro'
 import { StudioMode } from '@/audio'
 import { api, type Track } from '@/api/client'
 import { useAudioRecorder } from '@/hooks/useAudioRecorder'
 import { usePitchDetection } from '@/hooks/usePitchDetection'
+import { useWordTimestamps } from '@/hooks/useWordTimestamps'
 
 function formatDuration(ms: number): string {
   const minutes = Math.floor(ms / 60000)
@@ -99,6 +100,19 @@ function App() {
     startAnalysis: startPitchAnalysis,
     stopAnalysis: stopPitchAnalysis,
   } = usePitchDetection()
+
+  // Word timestamps hook for karaoke mode
+  const {
+    wordLines,
+    isGenerating: isGeneratingWordTimestamps,
+    status: wordTimestampsStatus,
+  } = useWordTimestamps({
+    spotifyTrackId: selectedTrack?.id || null,
+    youtubeVideoId: youtubeMatch?.id || null,
+    artistName: selectedTrack?.artists?.[0],
+    trackName: selectedTrack?.name,
+    autoGenerate: true, // Auto-generate when not cached
+  })
 
   // Track analysis task ID
   const analysisTaskIdRef = useRef<string | null>(null)
@@ -637,15 +651,30 @@ function App() {
 
                   {/* Lyrics display - synced with YouTube playback */}
                   {lyrics && lyricsStatus === 'found' && (
-                    <LyricsDisplay
+                    <LyricsDisplayPro
                       lyrics={lyrics}
                       syncedLines={lyricsLines}
+                      wordLines={wordLines}
                       currentTime={playbackTime}
                       isPlaying={isVideoPlaying}
+                      displayMode={wordLines ? 'karaoke' : 'line'}
                       offset={lyricsOffset}
                       onOffsetChange={handleOffsetChange}
                       showOffsetControls={true}
                     />
+                  )}
+                  {/* Word timestamps generation indicator */}
+                  {isGeneratingWordTimestamps && (
+                    <div className="flex items-center justify-center gap-2 text-blue-400 text-xs mt-2">
+                      <div className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+                      <span>Génération du mode karaoké...</span>
+                    </div>
+                  )}
+                  {wordTimestampsStatus === 'found' && wordLines && (
+                    <div className="flex items-center justify-center gap-2 text-purple-400 text-xs mt-2">
+                      <span>🎤</span>
+                      <span>Mode karaoké mot par mot actif</span>
+                    </div>
                   )}
                 </div>
               </div>
@@ -690,11 +719,13 @@ function App() {
               {/* Right side: Lyrics */}
               <div className="flex-1">
                 {lyrics && (
-                  <LyricsDisplay
+                  <LyricsDisplayPro
                     lyrics={lyrics}
                     syncedLines={lyricsLines}
+                    wordLines={wordLines}
                     currentTime={playbackTime}
                     isPlaying={isVideoPlaying}
+                    displayMode={wordLines ? 'karaoke' : 'line'}
                     offset={lyricsOffset}
                     onOffsetChange={handleOffsetChange}
                     showOffsetControls={true}

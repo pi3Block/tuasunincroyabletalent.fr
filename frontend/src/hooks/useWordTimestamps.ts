@@ -9,7 +9,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { api, WordTimestampsResponse, WordLine } from '@/api/client'
+import { api, type WordLine } from '@/api/client'
 
 interface UseWordTimestampsOptions {
   /** Spotify track ID */
@@ -79,7 +79,7 @@ export function useWordTimestamps({
   const [quality, setQuality] = useState<{ confidence?: number; word_count?: number } | null>(null)
 
   const taskIdRef = useRef<string | null>(null)
-  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // Cleanup polling on unmount
   useEffect(() => {

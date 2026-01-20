@@ -112,10 +112,11 @@ services:
       - voicejury-network
 
   # ============================================
-  # Worker Pool - GPUs additionnels (scaling dynamique)
+  # Worker Pool - GPU secondaire (optionnel)
   # ============================================
-  # Pool of workers for additional GPUs
-  # Set GPU_POOL_COUNT=0 for single GPU setup, 1 for 2 GPUs, 2 for 3 GPUs, etc.
+  # Second GPU worker for light tasks (CREPE pitch analysis)
+  # Set GPU_POOL_ENABLED=true and GPU_POOL_ID=1 to enable
+  # For single GPU setup: leave GPU_POOL_ENABLED unset or false
   worker-pool:
     build:
       context: ./worker
@@ -133,13 +134,14 @@ services:
       - "host.docker.internal:host-gateway"
     runtime: nvidia
     deploy:
-      replicas: ${GPU_POOL_COUNT:-1}
       resources:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
+              device_ids: ['${GPU_POOL_ID:-1}']
               capabilities: [gpu, compute, utility]
+    profiles:
+      - multi-gpu
     depends_on:
       redis:
         condition: service_healthy

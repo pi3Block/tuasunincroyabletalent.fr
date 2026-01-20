@@ -170,11 +170,14 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
     [lyrics, syncedLines, wordLines]
   )
 
-  // Check if we have word-level data
+  // Check if we have word-level data (for automatic mode switching)
   const hasWordData = useMemo(
     () => lines.length > 0 && lines[0].words && lines[0].words.length > 0,
     [lines]
   )
+
+  // Auto-switch display mode to karaoke when word data is available
+  const effectiveDisplayMode = hasWordData && displayMode === 'line' ? 'karaoke' : displayMode
 
   // Determine if we have timestamps
   const hasSyncedTimestamps = useMemo(
@@ -192,8 +195,8 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
     lines,
     currentTime,
     offset,
-    displayMode,
-    enableWordTracking: displayMode === 'karaoke' || displayMode === 'word',
+    displayMode: effectiveDisplayMode,
+    enableWordTracking: effectiveDisplayMode === 'karaoke' || effectiveDisplayMode === 'word',
   })
 
   // Use scroll hook for smart auto-scrolling
@@ -389,7 +392,7 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
                 isActive={isActive}
                 isPast={isPast}
                 distance={distance}
-                displayMode={displayMode}
+                displayMode={effectiveDisplayMode}
                 currentWordIndex={currentWordIndex}
                 wordProgress={wordProgress}
                 onClick={() => handleLineTap(index)}
