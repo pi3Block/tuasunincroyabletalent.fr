@@ -82,6 +82,9 @@ export function useWordTimestamps({
 
   const taskIdRef = useRef<string | null>(null)
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  // Refs to always have the latest functions (avoids stale closure issues in intervals)
+  const fetchWordTimestampsRef = useRef<() => Promise<void>>(() => Promise.resolve())
+  const triggerGenerationRef = useRef<() => Promise<void>>(() => Promise.resolve())
 
   // Cleanup polling on unmount
   useEffect(() => {
@@ -118,9 +121,9 @@ export function useWordTimestamps({
         setStatus('not_found')
         setWordLines(null)
 
-        // Auto-generate if enabled
+        // Auto-generate if enabled (use ref to get latest function)
         if (autoGenerate && youtubeVideoId) {
-          await triggerGeneration()
+          await triggerGenerationRef.current()
         }
       }
     } catch (err) {
@@ -132,7 +135,10 @@ export function useWordTimestamps({
     }
   }, [spotifyTrackId, youtubeVideoId, autoGenerate])
 
-  // Trigger generation
+  // Keep ref updated with latest fetchWordTimestamps
+  fetchWordTimestampsRef.current = fetchWordTimestamps
+
+  // Trigger generation (defined after fetchWordTimestamps so ref is updated below)
   const triggerGeneration = useCallback(async () => {
     if (!spotifyTrackId || !youtubeVideoId) {
       setError('Missing track or video ID')
@@ -153,8 +159,8 @@ export function useWordTimestamps({
       })
 
       if (response.status === 'cached') {
-        // Already cached, fetch it
-        await fetchWordTimestamps()
+        // Already cached, fetch it using ref to get latest function
+        await fetchWordTimestampsRef.current()
         return
       }
 
@@ -174,8 +180,8 @@ export function useWordTimestamps({
               }
 
               if (taskStatus.successful) {
-                // Fetch the new data
-                await fetchWordTimestamps()
+                // Fetch the new data using ref to get latest function
+                await fetchWordTimestampsRef.current()
               } else {
                 setError(taskStatus.error || 'Generation failed')
                 setStatus('error')
@@ -197,7 +203,10 @@ export function useWordTimestamps({
       setStatus('error')
       setIsGenerating(false)
     }
-  }, [spotifyTrackId, youtubeVideoId, artistName, trackName, language, pollInterval, fetchWordTimestamps])
+  }, [spotifyTrackId, youtubeVideoId, artistName, trackName, language, pollInterval])
+
+  // Keep ref updated with latest triggerGeneration
+  triggerGenerationRef.current = triggerGeneration
 
   // Force regeneration (invalidate cache first, then regenerate)
   const regenerate = useCallback(async () => {
@@ -241,8 +250,9 @@ export function useWordTimestamps({
               }
 
               if (taskStatus.successful) {
-                // Fetch the new data
-                await fetchWordTimestamps()
+                // Fetch the new data using ref to get latest function
+                console.log('[useWordTimestamps] Task successful, fetching new data...')
+                await fetchWordTimestampsRef.current()
               } else {
                 setError(taskStatus.error || 'Regeneration failed')
                 setStatus('error')
@@ -264,7 +274,7 @@ export function useWordTimestamps({
       setStatus('error')
       setIsGenerating(false)
     }
-  }, [spotifyTrackId, youtubeVideoId, artistName, trackName, language, pollInterval, fetchWordTimestamps])
+  }, [spotifyTrackId, youtubeVideoId, artistName, trackName, language, pollInterval])
 
   // Initial fetch when IDs change
   useEffect(() => {
