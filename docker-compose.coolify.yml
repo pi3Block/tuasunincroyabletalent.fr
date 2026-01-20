@@ -75,14 +75,15 @@ services:
       start_period: 40s
 
   # ============================================
-  # Worker - Celery + GPU (NVIDIA CUDA)
+  # Worker Heavy - GPU haute VRAM (Demucs, Whisper)
   # ============================================
-  # Multi-GPU support: set GPU_COUNT in Coolify env vars
-  # Each replica gets 1 GPU assigned automatically
-  worker:
+  # Dedicated worker for heavy tasks on best GPU (RTX 3080 10GB)
+  # Listens to gpu-heavy (priority) AND gpu (fallback when idle)
+  worker-heavy:
     build:
       context: ./worker
       dockerfile: Dockerfile.prod
+    command: ["celery", "-A", "tasks.celery_app", "worker", "--loglevel=info", "--pool=solo", "-Q", "gpu-heavy,gpu", "-n", "heavy@%h"]
     volumes:
       - audio-data:/app/audio_files
       - model-cache:/root/.cache
@@ -95,7 +96,44 @@ services:
       - "host.docker.internal:host-gateway"
     runtime: nvidia
     deploy:
-      replicas: ${GPU_COUNT:-1}
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['${GPU_HEAVY_ID:-0}']
+              capabilities: [gpu, compute, utility]
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - voicejury-network
+
+  # ============================================
+  # Worker Pool - GPUs additionnels (scaling dynamique)
+  # ============================================
+  # Pool of workers for additional GPUs
+  # Set GPU_POOL_COUNT=0 for single GPU setup, 1 for 2 GPUs, 2 for 3 GPUs, etc.
+  worker-pool:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile.prod
+    command: ["celery", "-A", "tasks.celery_app", "worker", "--loglevel=info", "--pool=solo", "-Q", "gpu", "-n", "pool@%h"]
+    volumes:
+      - audio-data:/app/audio_files
+      - model-cache:/root/.cache
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://voicejury:${POSTGRES_PASSWORD:-voicejury_secret}@postgres:5432/voicejury
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
+      - WHISPER_MODEL=${WHISPER_MODEL:-turbo}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    runtime: nvidia
+    deploy:
+      replicas: ${GPU_POOL_COUNT:-1}
       resources:
         reservations:
           devices:

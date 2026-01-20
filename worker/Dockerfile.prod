@@ -27,7 +27,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Copy source (changes frequently)
 COPY . .
 
-# Run Celery worker with production settings
-# IMPORTANT: Must listen to 'gpu' queue where analyze tasks are routed!
+# Default CMD - overridden by docker-compose command for each worker type
+# worker-heavy: listens to gpu-heavy,gpu (priority tasks + fallback)
+# worker-pool: listens to gpu only (standard GPU tasks)
 # Using --pool=solo to avoid fork issues with CUDA (fork + CUDA = crash)
-CMD ["celery", "-A", "tasks.celery_app", "worker", "--loglevel=info", "--pool=solo", "-Q", "gpu,celery"]
+CMD ["celery", "-A", "tasks.celery_app", "worker", "--loglevel=info", "--pool=solo", "-Q", "gpu"]

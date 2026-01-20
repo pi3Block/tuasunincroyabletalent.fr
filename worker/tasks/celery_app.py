@@ -54,11 +54,19 @@ celery_app.conf.update(
     task_reject_on_worker_lost=True,
 )
 
-# Task routes - separate queues for different task types
+# Task routes - prioritize heavy tasks to high-VRAM GPU
+# gpu-heavy: Worker with best GPU (more VRAM) listens first
+# gpu: All GPU workers listen (pool workers + heavy worker as fallback)
 celery_app.conf.task_routes = {
-    "tasks.audio_separation.*": {"queue": "gpu"},
+    # Heavy tasks → gpu-heavy queue (Demucs ~4GB, Whisper ~2-6GB)
+    "tasks.audio_separation.*": {"queue": "gpu-heavy"},
+    "tasks.transcription.*": {"queue": "gpu-heavy"},
+    "tasks.pipeline.*": {"queue": "gpu-heavy"},  # Pipeline runs Demucs+Whisper
+
+    # Light tasks → gpu queue (CREPE ~1GB)
     "tasks.pitch_analysis.*": {"queue": "gpu"},
-    "tasks.transcription.*": {"queue": "gpu"},
+
+    # CPU tasks → default queue
     "tasks.scoring.*": {"queue": "default"},
-    "tasks.pipeline.*": {"queue": "gpu"},  # Pipeline orchestrates GPU tasks
+    "tasks.lyrics.*": {"queue": "default"},
 }

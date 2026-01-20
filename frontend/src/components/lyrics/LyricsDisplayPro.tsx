@@ -29,8 +29,9 @@ import { Button } from '@/components/ui/button'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-import type { LyricLine as LyricLineType } from '@/types/lyrics'
+import type { LyricLine as LyricLineType, LyricWord } from '@/types/lyrics'
 import { OFFSET_CONFIG } from '@/types/lyrics'
+import type { WordLine } from '@/api/client'
 
 // Local props type to avoid type conflicts with SyncedLyricLine
 interface LyricsDisplayProProps {
@@ -38,6 +39,8 @@ interface LyricsDisplayProProps {
   lyrics: string
   /** Synced lyrics with timestamps */
   syncedLines?: SyncedLyricLine[] | null
+  /** Word-level timestamps for karaoke mode */
+  wordLines?: WordLine[] | null
   /** Current playback time in seconds */
   currentTime?: number
   /** Whether audio is playing */
@@ -72,25 +75,42 @@ import type { SyncedLyricLine } from '@/api/client'
 
 /**
  * Parse raw lyrics into structured LyricLine array.
- * Handles both synced and plain text lyrics.
+ * Handles synced lines, word-level lines, and plain text lyrics.
  */
 function parseLyrics(
   lyrics: string,
-  syncedLines?: SyncedLyricLine[] | null
+  syncedLines?: SyncedLyricLine[] | null,
+  wordLines?: WordLine[] | null
 ): LyricLineType[] {
-  // Use synced lines if available
+  // Priority 1: Use word-level lines if available (karaoke mode)
+  if (wordLines && wordLines.length > 0) {
+    return wordLines.map((line, index) => ({
+      id: `line-${index}`,
+      text: line.text,
+      startTime: line.startMs / 1000,
+      endTime: line.endMs / 1000,
+      // Convert word timestamps to LyricWord format
+      words: line.words.map((word): LyricWord => ({
+        text: word.word,
+        startTimeMs: word.startMs,
+        endTimeMs: word.endMs,
+        confidence: word.confidence,
+      })),
+    }))
+  }
+
+  // Priority 2: Use line-synced lines
   if (syncedLines && syncedLines.length > 0) {
     return syncedLines.map((line, index) => ({
       id: `line-${index}`,
       text: line.text,
       startTime: line.startTimeMs / 1000,
       endTime: line.endTimeMs ? line.endTimeMs / 1000 : undefined,
-      // TODO: Parse word-level timing if available in the future
       words: undefined,
     }))
   }
 
-  // Fallback to plain text parsing
+  // Fallback: Plain text parsing
   if (!lyrics) return []
 
   return lyrics
@@ -130,6 +150,7 @@ function parseLyrics(
 export const LyricsDisplayPro = memo(function LyricsDisplayPro({
   lyrics,
   syncedLines,
+  wordLines,
   currentTime = 0,
   isPlaying = false,
   displayMode = 'line',
@@ -143,10 +164,16 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
 }: LyricsDisplayProProps) {
   const containerRef = useRef<HTMLDivElement>(null)
 
-  // Parse lyrics into structured format
+  // Parse lyrics into structured format (wordLines take priority for karaoke mode)
   const lines = useMemo(
-    () => parseLyrics(lyrics, syncedLines),
-    [lyrics, syncedLines]
+    () => parseLyrics(lyrics, syncedLines, wordLines),
+    [lyrics, syncedLines, wordLines]
+  )
+
+  // Check if we have word-level data
+  const hasWordData = useMemo(
+    () => lines.length > 0 && lines[0].words && lines[0].words.length > 0,
+    [lines]
   )
 
   // Determine if we have timestamps

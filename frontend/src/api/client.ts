@@ -101,6 +101,50 @@ export interface SyncedLyricLine {
   endTimeMs?: number
 }
 
+// Word-level timestamps for karaoke mode
+export interface WordTimestamp {
+  word: string
+  startMs: number
+  endMs: number
+  confidence?: number
+}
+
+export interface WordLine {
+  startMs: number
+  endMs: number
+  text: string
+  words: WordTimestamp[]
+}
+
+export interface WordTimestampsResponse {
+  syncType: 'WORD_SYNCED' | 'LINE_SYNCED' | 'none'
+  words?: WordTimestamp[]
+  lines?: WordLine[]
+  source: string  // 'musixmatch_word', 'whisper_timestamped', 'lrclib', 'none'
+  language?: string
+  status: 'found' | 'generating' | 'not_found' | 'error'
+  quality?: {
+    confidence?: number
+    word_count?: number
+  }
+  cachedAt?: string
+}
+
+export interface GenerateWordTimestampsRequest {
+  spotify_track_id: string
+  youtube_video_id: string
+  artist_name?: string
+  track_name?: string
+  language?: string
+  force_regenerate?: boolean
+}
+
+export interface GenerateWordTimestampsResponse {
+  status: 'queued' | 'cached' | 'error'
+  task_id?: string
+  message: string
+}
+
 export interface LyricsResponse {
   session_id: string
   lyrics: string
@@ -258,6 +302,44 @@ class ApiClient {
     trackType: 'vocals' | 'instrumentals' | 'original'
   ): string {
     return `${this.baseUrl}/api/audio/${sessionId}/${source}/${trackType}`
+  }
+
+  // Word timestamps endpoints (karaoke mode)
+  async getWordTimestamps(
+    spotifyTrackId: string,
+    youtubeVideoId?: string
+  ): Promise<WordTimestampsResponse> {
+    const params = youtubeVideoId
+      ? new URLSearchParams({ youtube_video_id: youtubeVideoId })
+      : ''
+    return this.request<WordTimestampsResponse>(
+      `/api/lyrics/word-timestamps/${spotifyTrackId}${params ? `?${params}` : ''}`
+    )
+  }
+
+  async generateWordTimestamps(
+    request: GenerateWordTimestampsRequest
+  ): Promise<GenerateWordTimestampsResponse> {
+    return this.request<GenerateWordTimestampsResponse>(
+      '/api/lyrics/word-timestamps/generate',
+      {
+        method: 'POST',
+        body: JSON.stringify(request),
+      }
+    )
+  }
+
+  async getWordTimestampsTaskStatus(
+    taskId: string
+  ): Promise<{
+    task_id: string
+    status: string
+    ready: boolean
+    successful?: boolean
+    result?: unknown
+    error?: string
+  }> {
+    return this.request(`/api/lyrics/word-timestamps/task/${taskId}`)
   }
 }
 
