@@ -9,10 +9,18 @@ Provides endpoints for:
 from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
 from pydantic import BaseModel
 from typing import Optional
+from celery import Celery
 
 from app.services.lyrics import lyrics_service
 from app.services.word_timestamps_cache import word_timestamps_cache_service
+from app.config import settings
 
+# Celery app for triggering tasks (same config as session.py)
+celery_app = Celery(
+    "voicejury",
+    broker=settings.redis_url,
+    backend=settings.redis_url,
+)
 
 router = APIRouter()
 
@@ -186,6 +194,8 @@ async def generate_word_timestamps(
     - Reference audio must already be downloaded (via session start)
     - YouTube video ID is required for matching timestamps to video
     """
+    from app.services.youtube_cache import youtube_cache
+
     # Check if already cached (unless force_regenerate)
     if not request.force_regenerate:
         exists = await word_timestamps_cache_service.exists(
@@ -198,13 +208,8 @@ async def generate_word_timestamps(
                 message="Word timestamps already cached",
             )
 
-    # Import Celery task
     try:
-        from worker.tasks.word_timestamps import generate_word_timestamps_cached
-
         # Get reference audio path from YouTube cache
-        from app.services.youtube_cache import youtube_cache
-
         cached_ref = await youtube_cache.get_cached_reference(request.youtube_video_id)
         if not cached_ref:
             raise HTTPException(
@@ -214,14 +219,17 @@ async def generate_word_timestamps(
 
         reference_path = cached_ref["reference_path"]
 
-        # Queue Celery task
-        task = generate_word_timestamps_cached.delay(
-            reference_path=reference_path,
-            spotify_track_id=request.spotify_track_id,
-            youtube_video_id=request.youtube_video_id,
-            language=request.language,
-            artist_name=request.artist_name,
-            track_name=request.track_name,
+        # Queue Celery task using send_task (no import needed)
+        task = celery_app.send_task(
+            "tasks.word_timestamps.generate_word_timestamps_cached",
+            kwargs={
+                "reference_path": reference_path,
+                "spotify_track_id": request.spotify_track_id,
+                "youtube_video_id": request.youtube_video_id,
+                "language": request.language,
+                "artist_name": request.artist_name,
+                "track_name": request.track_name,
+            }
         )
 
         return GenerateResponse(
@@ -230,11 +238,8 @@ async def generate_word_timestamps(
             message="Word timestamp generation queued",
         )
 
-    except ImportError as e:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Celery worker not available: {e}"
-        )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -249,8 +254,8 @@ async def get_task_status(task_id: str):
     """
     try:
         from celery.result import AsyncResult
-        from worker.tasks.celery_app import celery_app
 
+        # Use the celery_app defined at module level
         result = AsyncResult(task_id, app=celery_app)
 
         return {

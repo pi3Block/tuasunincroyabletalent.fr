@@ -270,7 +270,6 @@ def generate_word_timestamps_cached(
     """
     import torch
     import torchaudio
-    import asyncio
     from demucs.apply import apply_model
     from tasks.audio_separation import get_demucs_model, convert_to_wav
 
@@ -354,33 +353,28 @@ def generate_word_timestamps_cached(
     })
 
     try:
-        # Run async cache operation in sync context
-        from app.services.word_timestamps_cache import word_timestamps_cache_service
+        # Use direct PostgreSQL access (no async needed)
+        from tasks.word_timestamps_db import store_word_timestamps
 
-        async def store_in_cache():
-            await word_timestamps_cache_service.set(
-                spotify_track_id=spotify_track_id,
-                youtube_video_id=youtube_video_id,
-                words=result["words"],
-                lines=result["lines"],
-                source="whisper_timestamped",
-                language=result.get("language"),
-                model_version=result.get("model_version"),
-                confidence_avg=result.get("confidence_avg"),
-                artist_name=artist_name,
-                track_name=track_name,
-            )
+        success = store_word_timestamps(
+            spotify_track_id=spotify_track_id,
+            youtube_video_id=youtube_video_id,
+            words=result["words"],
+            lines=result["lines"],
+            source="whisper_timestamped",
+            language=result.get("language"),
+            model_version=result.get("model_version"),
+            confidence_avg=result.get("confidence_avg"),
+            artist_name=artist_name,
+            track_name=track_name,
+        )
 
-        # Run the async function
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(store_in_cache())
-        finally:
-            loop.close()
-
-        print(f"[WordTimestampsCached] Stored in PostgreSQL cache")
-        result["cached_in_postgres"] = True
+        if success:
+            print(f"[WordTimestampsCached] Stored in PostgreSQL cache")
+            result["cached_in_postgres"] = True
+        else:
+            result["cached_in_postgres"] = False
+            result["cache_error"] = "Failed to store in PostgreSQL"
 
     except Exception as e:
         print(f"[WordTimestampsCached] Failed to cache in PostgreSQL: {e}")

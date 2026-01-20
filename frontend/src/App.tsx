@@ -417,6 +417,10 @@ function App() {
             <p className="text-gray-400 max-w-xs mx-auto">
               Choisis une chanson, chante, et laisse notre jury IA te donner son verdict !
             </p>
+            
+            <p className="text-gray-400 max-w-xs mx-auto">
+              Utilise notre mode studio pour écouter ta voix seule ou avec l'instrumental.
+            </p>
 
             <button
               onClick={() => startSession()}
