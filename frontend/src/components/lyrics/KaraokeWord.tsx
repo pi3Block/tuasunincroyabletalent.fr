@@ -15,16 +15,16 @@ import type { KaraokeWordProps } from '@/types/lyrics'
 // CONSTANTS
 // ============================================================================
 
-/** Colors for the gradient fill */
+/** Colors for the gradient fill - Apple Music style */
 const COLORS = {
-  /** Active/highlighted color - bright cyan/electric blue */
-  active: '#22d3ee',
+  /** Active/highlighted color - bright yellow/gold like Apple Music */
+  active: '#facc15',
   /** Active glow color */
-  activeGlow: '#06b6d4',
-  /** Inactive/upcoming color */
-  inactive: '#6b7280',
-  /** Past color - golden/sung */
-  past: '#fbbf24',
+  activeGlow: '#eab308',
+  /** Inactive/upcoming color - lighter gray for better contrast */
+  inactive: '#9ca3af',
+  /** Past color - white/sung */
+  past: '#ffffff',
 } as const
 
 // ============================================================================
@@ -56,13 +56,14 @@ export const KaraokeWord = memo(function KaraokeWord({
   isPast,
   progress,
 }: KaraokeWordProps) {
-  // Calculate gradient style for active word
+  // Calculate gradient style for active word - Apple Music style progressive fill
   const wordStyle = useMemo(() => {
     if (isActive) {
       // Clamp progress to 0-1
       const p = Math.max(0, Math.min(1, progress)) * 100
 
       return {
+        // Progressive gradient fill from left to right
         background: `linear-gradient(90deg,
           ${COLORS.active} 0%,
           ${COLORS.active} ${p}%,
@@ -71,10 +72,8 @@ export const KaraokeWord = memo(function KaraokeWord({
         WebkitBackgroundClip: 'text',
         WebkitTextFillColor: 'transparent',
         backgroundClip: 'text',
-        // Add glow effect
-        filter: `drop-shadow(0 0 8px ${COLORS.activeGlow})`,
-        // Subtle scale for emphasis
-        transform: 'scale(1.05)',
+        // Subtle glow effect via text-shadow (no filter to avoid rectangle)
+        textShadow: `0 0 20px ${COLORS.activeGlow}, 0 0 40px ${COLORS.activeGlow}50`,
       } as React.CSSProperties
     }
 
@@ -82,7 +81,7 @@ export const KaraokeWord = memo(function KaraokeWord({
       return {
         color: COLORS.past,
         // Subtle glow on past words
-        textShadow: `0 0 4px ${COLORS.past}40`,
+        textShadow: `0 0 8px rgba(255, 255, 255, 0.3)`,
       } as React.CSSProperties
     }
 
@@ -105,16 +104,12 @@ export const KaraokeWord = memo(function KaraokeWord({
   return (
     <span
       className={cn(
-        'inline-block transition-all duration-100 ease-out',
-        textClass,
-        // Pulse animation on active word
-        isActive && 'animate-pulse-subtle'
+        'inline-block transition-colors duration-75 ease-out',
+        textClass
       )}
       style={wordStyle}
     >
       {word.text}
-      {/* Space after word */}
-      <span className="text-transparent"> </span>
     </span>
   )
 })
@@ -144,15 +139,17 @@ export const KaraokeWordGroup = memo(function KaraokeWordGroup({
   className,
 }: KaraokeWordGroupProps) {
   return (
-    <span className={cn('inline-flex flex-wrap justify-center gap-x-1', className)}>
+    <span className={cn('inline', className)}>
       {words.map((word, index) => (
-        <KaraokeWord
-          key={`${word.text}-${index}`}
-          word={word}
-          isActive={index === currentWordIndex}
-          isPast={index < currentWordIndex}
-          progress={index === currentWordIndex ? wordProgress : 0}
-        />
+        <React.Fragment key={`${word.text}-${index}`}>
+          <KaraokeWord
+            word={word}
+            isActive={index === currentWordIndex}
+            isPast={index < currentWordIndex}
+            progress={index === currentWordIndex ? wordProgress : 0}
+          />
+          {index < words.length - 1 && ' '}
+        </React.Fragment>
       ))}
     </span>
   )
