@@ -865,7 +865,15 @@ function App() {
 
       {/* Footer */}
       <footer className="p-4 text-center text-gray-500 text-sm">
-        Powered by AI 🤖
+        Powered by AI 🤖 et{' '}
+        <a
+          href="https://pierrelegrand.fr"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-purple-400 hover:text-purple-300 underline"
+        >
+          pierrelegrand.fr
+        </a>
       </footer>
     </div>
   )

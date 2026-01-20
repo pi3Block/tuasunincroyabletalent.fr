@@ -220,6 +220,7 @@ async def generate_word_timestamps(
         reference_path = cached_ref["reference_path"]
 
         # Queue Celery task using send_task (no import needed)
+        # Route to gpu-heavy queue for Demucs + Whisper processing
         task = celery_app.send_task(
             "tasks.word_timestamps.generate_word_timestamps_cached",
             kwargs={
@@ -229,7 +230,8 @@ async def generate_word_timestamps(
                 "language": request.language,
                 "artist_name": request.artist_name,
                 "track_name": request.track_name,
-            }
+            },
+            queue="gpu-heavy",
         )
 
         return GenerateResponse(

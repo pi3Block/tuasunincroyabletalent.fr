@@ -33,5 +33,5 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Copy source (changes frequently, so last)
 COPY . .
 
-# Run Celery worker - listen to both gpu and default queues
-CMD ["celery", "-A", "tasks.celery_app", "worker", "--loglevel=info", "--concurrency=2", "-Q", "gpu,default"]
+# Run Celery worker - listen to all queues (gpu-heavy for Demucs/Whisper, gpu for CREPE, default for CPU tasks)
+CMD ["celery", "-A", "tasks.celery_app", "worker", "--loglevel=info", "--concurrency=2", "-Q", "gpu-heavy,gpu,default"]

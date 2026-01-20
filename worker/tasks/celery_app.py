@@ -37,6 +37,7 @@ celery_app = Celery(
         "tasks.scoring",
         "tasks.lyrics",
         "tasks.pipeline",
+        "tasks.word_timestamps",
     ],
 )
 
@@ -62,6 +63,7 @@ celery_app.conf.task_routes = {
     "tasks.audio_separation.*": {"queue": "gpu-heavy"},
     "tasks.transcription.*": {"queue": "gpu-heavy"},
     "tasks.pipeline.*": {"queue": "gpu-heavy"},  # Pipeline runs Demucs+Whisper
+    "tasks.word_timestamps.*": {"queue": "gpu-heavy"},  # Demucs + Whisper-timestamped
 
     # Light tasks → gpu queue (CREPE ~1GB)
     "tasks.pitch_analysis.*": {"queue": "gpu"},
