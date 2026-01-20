@@ -100,7 +100,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ['${GPU_HEAVY_ID:-0}']
+              device_ids: ['0']
               capabilities: [gpu, compute, utility]
     depends_on:
       redis:
@@ -115,8 +115,8 @@ services:
   # Worker Pool - GPU secondaire (optionnel)
   # ============================================
   # Second GPU worker for light tasks (CREPE pitch analysis)
-  # Set GPU_POOL_ENABLED=true and GPU_POOL_ID=1 to enable
-  # For single GPU setup: leave GPU_POOL_ENABLED unset or false
+  # Activate with COMPOSE_PROFILES=multi-gpu
+  # For single GPU setup: don't set COMPOSE_PROFILES
   worker-pool:
     build:
       context: ./worker
@@ -138,7 +138,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ['${GPU_POOL_ID:-1}']
+              device_ids: ['1']
               capabilities: [gpu, compute, utility]
     profiles:
       - multi-gpu

@@ -114,8 +114,8 @@ function App() {
     autoGenerate: true, // Auto-generate when not cached
   })
 
-  // Track analysis task ID
-  const analysisTaskIdRef = useRef<string | null>(null)
+  // Track analysis task ID (using state so useEffect re-runs when it changes)
+  const [analysisTaskId, setAnalysisTaskId] = useState<string | null>(null)
   const mediaStreamRef = useRef<MediaStream | null>(null)
   const saveOffsetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -244,7 +244,7 @@ function App() {
 
   // Poll analysis status when analyzing
   useEffect(() => {
-    if (!sessionId || status !== 'analyzing' || !analysisTaskIdRef.current) {
+    if (!sessionId || status !== 'analyzing' || !analysisTaskId) {
       return
     }
 
@@ -258,11 +258,11 @@ function App() {
 
         if (analysisStatus.analysis_status === 'SUCCESS' && analysisStatus.results) {
           setResults(analysisStatus.results)
-          analysisTaskIdRef.current = null
+          setAnalysisTaskId(null)
         } else if (analysisStatus.analysis_status === 'FAILURE') {
           setError(analysisStatus.error || 'Analyse échouée')
           setStatus('ready')
-          analysisTaskIdRef.current = null
+          setAnalysisTaskId(null)
         }
       } catch (err) {
         console.error('Failed to poll analysis:', err)
@@ -273,7 +273,7 @@ function App() {
     pollAnalysis() // Initial check
 
     return () => clearInterval(interval)
-  }, [sessionId, status, setAnalysisProgress, setResults, setError, setStatus])
+  }, [sessionId, status, analysisTaskId, setAnalysisProgress, setResults, setError, setStatus])
 
   const handleTrackSelect = useCallback(async (track: Track) => {
     selectTrack(track)
@@ -362,7 +362,7 @@ function App() {
       // Start analysis
       setStatus('analyzing')
       const analysisResponse = await api.startAnalysis(sessionId)
-      analysisTaskIdRef.current = analysisResponse.task_id
+      setAnalysisTaskId(analysisResponse.task_id)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erreur lors de l\'envoi')
       setStatus('ready')
@@ -377,7 +377,7 @@ function App() {
       mediaStreamRef.current.getTracks().forEach(track => track.stop())
       mediaStreamRef.current = null
     }
-    analysisTaskIdRef.current = null
+    setAnalysisTaskId(null)
     setAnalysisProgress(null)
     reset()
   }, [stopPitchAnalysis, resetRecording, setAnalysisProgress, reset])
