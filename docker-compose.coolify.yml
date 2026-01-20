@@ -77,6 +77,8 @@ services:
   # ============================================
   # Worker - Celery + GPU (NVIDIA CUDA)
   # ============================================
+  # Multi-GPU support: set GPU_COUNT in Coolify env vars
+  # Each replica gets 1 GPU assigned automatically
   worker:
     build:
       context: ./worker
@@ -89,17 +91,16 @@ services:
       - DATABASE_URL=postgresql://voicejury:${POSTGRES_PASSWORD:-voicejury_secret}@postgres:5432/voicejury
       - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
       - WHISPER_MODEL=${WHISPER_MODEL:-turbo}
-      # NOTE: GPU selection via device_ids below - GPU 1 becomes GPU 0 inside container
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # GPU access - try both methods for Coolify compatibility
     runtime: nvidia
     deploy:
+      replicas: ${GPU_COUNT:-1}
       resources:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ['1']
+              count: 1
               capabilities: [gpu, compute, utility]
     depends_on:
       redis:

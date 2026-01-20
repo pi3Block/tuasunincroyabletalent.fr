@@ -219,11 +219,9 @@ def analyze_performance(
     update_progress(self, "jury_voting", 95, "Le jury vote...")
     update_progress(self, "completed", 100, "Verdict rendu !")
 
-    return {
-        "session_id": session_id,
-        "status": "completed",
-        "results": results,
-    }
+    # Return results directly (contains session_id, score, pitch_accuracy, etc.)
+    # The frontend expects this flat structure, not nested under "results"
+    return results
 
 
 @shared_task(bind=True, name="tasks.pipeline.prepare_reference")
