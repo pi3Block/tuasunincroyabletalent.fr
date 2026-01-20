@@ -15,12 +15,10 @@ import type { KaraokeWordProps } from '@/types/lyrics'
 // CONSTANTS
 // ============================================================================
 
-/** Colors for the gradient fill - Apple Music style */
+/** Colors for karaoke display */
 const COLORS = {
-  /** Active/highlighted color - bright yellow/gold like Apple Music */
-  active: '#facc15',
-  /** Active glow color */
-  activeGlow: '#eab308',
+  /** Active/highlighted color - bright pink/magenta */
+  active: '#f472b6',
   /** Inactive/upcoming color - lighter gray for better contrast */
   inactive: '#9ca3af',
   /** Past color - white/sung */

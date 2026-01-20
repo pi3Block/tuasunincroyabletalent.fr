@@ -274,6 +274,8 @@ export function useLyricsSync({
   }, [currentLineIndex])
 
   // Calculate word index with hysteresis (prevents micro-jumps)
+  // IMPORTANT: Word index can only move FORWARD, never backward (except on line change)
+  // This prevents jumps caused by inconsistent Whisper timestamps
   const currentWordIndex = useMemo(() => {
     if (!shouldTrackWords || !currentLine) return -1
 
@@ -287,7 +289,15 @@ export function useLyricsSync({
       return rawIndex
     }
 
-    // If new word detected, apply hysteresis
+    // CRITICAL: Never go backward - only allow forward movement
+    // This prevents the "jump to middle then back to start" bug
+    if (rawIndex < prevWordIndexRef.current && prevWordIndexRef.current >= 0) {
+      // Whisper gave us an earlier word - ignore it, stay on current
+      wordIndexChangeTimeRef.current = 0
+      return prevWordIndexRef.current
+    }
+
+    // If new word detected (moving forward), apply hysteresis
     if (wordIndexChangeTimeRef.current === 0) {
       // First detection of new word, start timer
       wordIndexChangeTimeRef.current = now
