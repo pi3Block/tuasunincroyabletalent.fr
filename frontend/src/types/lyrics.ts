@@ -296,8 +296,8 @@ export const OFFSET_CONFIG = {
  * Performance configuration.
  */
 export const PERFORMANCE_CONFIG = {
-  /** Max lines to render (virtualization window) */
-  RENDER_WINDOW: 10,
+  /** Max lines to render (virtualization window) - high value to allow scrolling all lyrics */
+  RENDER_WINDOW: 100,
   /** Scroll debounce in ms */
   SCROLL_DEBOUNCE_MS: 100,
   /** Binary search threshold for line lookup */
