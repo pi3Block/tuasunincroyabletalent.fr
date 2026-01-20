@@ -11,9 +11,19 @@
  * - Stable references for downstream consumers
  */
 
-import { useMemo, useCallback, useRef } from 'react'
+import { useMemo, useCallback, useRef, useEffect } from 'react'
 import type { LyricLine, LyricsSyncState, LyricsDisplayMode } from '@/types/lyrics'
 import { PERFORMANCE_CONFIG } from '@/types/lyrics'
+
+// ============================================================================
+// SMOOTHING CONSTANTS
+// ============================================================================
+
+/** Hysteresis: minimum ms before changing to a new word (prevents micro-jumps) */
+const WORD_CHANGE_DELAY_MS = 80
+
+/** EMA smoothing factor for word progress (0 = very smooth, 1 = no smoothing) */
+const PROGRESS_SMOOTHING = 0.3
 
 // ============================================================================
 // TYPES
@@ -208,6 +218,12 @@ export function useLyricsSync({
   // Cache previous line index for stability
   const prevLineIndexRef = useRef<number>(-1)
 
+  // Smoothing refs for word tracking
+  const prevWordIndexRef = useRef<number>(-1)
+  const wordIndexChangeTimeRef = useRef<number>(0)
+  const smoothedProgressRef = useRef<number>(0)
+  const lastLineIndexRef = useRef<number>(-1)
+
   // Calculate adjusted time (with offset)
   const adjustedTime = useMemo(
     () => currentTime + offset,
@@ -247,16 +263,64 @@ export function useLyricsSync({
     currentLine?.words &&
     currentLine.words.length > 0
 
+  // Reset smoothing when line changes
+  useEffect(() => {
+    if (currentLineIndex !== lastLineIndexRef.current) {
+      lastLineIndexRef.current = currentLineIndex
+      prevWordIndexRef.current = -1
+      wordIndexChangeTimeRef.current = 0
+      smoothedProgressRef.current = 0
+    }
+  }, [currentLineIndex])
+
+  // Calculate word index with hysteresis (prevents micro-jumps)
   const currentWordIndex = useMemo(() => {
     if (!shouldTrackWords || !currentLine) return -1
+
     const timeMs = adjustedTime * 1000
-    return findWordIndex(currentLine, timeMs)
+    const rawIndex = findWordIndex(currentLine, timeMs)
+    const now = Date.now()
+
+    // If same word as before, keep it
+    if (rawIndex === prevWordIndexRef.current) {
+      wordIndexChangeTimeRef.current = 0
+      return rawIndex
+    }
+
+    // If new word detected, apply hysteresis
+    if (wordIndexChangeTimeRef.current === 0) {
+      // First detection of new word, start timer
+      wordIndexChangeTimeRef.current = now
+    }
+
+    // Only change if new word has been stable for WORD_CHANGE_DELAY_MS
+    if (now - wordIndexChangeTimeRef.current >= WORD_CHANGE_DELAY_MS) {
+      prevWordIndexRef.current = rawIndex
+      wordIndexChangeTimeRef.current = 0
+      // Reset progress smoothing when word changes
+      smoothedProgressRef.current = 0
+      return rawIndex
+    }
+
+    // Stay on previous word during hysteresis period
+    return prevWordIndexRef.current >= 0 ? prevWordIndexRef.current : rawIndex
   }, [shouldTrackWords, currentLine, adjustedTime])
 
+  // Calculate word progress with EMA smoothing
   const wordProgress = useMemo(() => {
     if (!shouldTrackWords || !currentLine || currentWordIndex < 0) return 0
+
     const timeMs = adjustedTime * 1000
-    return calculateWordProgress(currentLine, currentWordIndex, timeMs)
+    const rawProgress = calculateWordProgress(currentLine, currentWordIndex, timeMs)
+
+    // Apply EMA smoothing: smoothed = α * raw + (1-α) * prev
+    const smoothed = PROGRESS_SMOOTHING * rawProgress +
+      (1 - PROGRESS_SMOOTHING) * smoothedProgressRef.current
+
+    // Update ref for next frame
+    smoothedProgressRef.current = smoothed
+
+    return smoothed
   }, [shouldTrackWords, currentLine, currentWordIndex, adjustedTime])
 
   // Line progress

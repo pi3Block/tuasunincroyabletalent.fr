@@ -72,16 +72,13 @@ export const KaraokeWord = memo(function KaraokeWord({
         WebkitBackgroundClip: 'text',
         WebkitTextFillColor: 'transparent',
         backgroundClip: 'text',
-        // Subtle glow effect via text-shadow (no filter to avoid rectangle)
-        textShadow: `0 0 20px ${COLORS.activeGlow}, 0 0 40px ${COLORS.activeGlow}50`,
+        // No textShadow - it creates visible rectangles with background-clip: text
       } as React.CSSProperties
     }
 
     if (isPast) {
       return {
         color: COLORS.past,
-        // Subtle glow on past words
-        textShadow: `0 0 8px rgba(255, 255, 255, 0.3)`,
       } as React.CSSProperties
     }
 
@@ -104,7 +101,7 @@ export const KaraokeWord = memo(function KaraokeWord({
   return (
     <span
       className={cn(
-        'inline-block transition-colors duration-75 ease-out',
+        'transition-colors duration-75 ease-out',
         textClass
       )}
       style={wordStyle}

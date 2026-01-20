@@ -375,13 +375,13 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
   })
 
   // Use scroll hook for smart auto-scrolling
-  // Shows 3 lines ahead so the singer can read upcoming lyrics
+  // Scrolls current line to 'start' position - CSS padding handles vertical offset
   const { currentLineRef, scrollTargetRef, scrollTargetIndex, enableAutoScroll } = useLyricsScroll({
     currentLineIndex,
     totalLines: lines.length,
     isPlaying,
     containerRef: containerRef as React.RefObject<HTMLElement>,
-    linesAhead: 3,
+    block: 'start',
   })
 
   // Notify parent of line changes
@@ -535,8 +535,8 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
           aria-label="Synchronized lyrics"
           aria-live="polite"
         >
-          {/* Top padding for vertical centering */}
-          <div className="h-[30%] min-h-[100px]" aria-hidden="true" />
+          {/* Top padding - positions current line at ~35% from top on mobile */}
+          <div className="h-[20vh] md:h-[25vh]" aria-hidden="true" />
 
           {lines.map((line, index) => {
             const isActive = index === currentLineIndex
@@ -575,8 +575,8 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
             )
           })}
 
-          {/* Bottom padding */}
-          <div className="h-[30%] min-h-[100px]" aria-hidden="true" />
+          {/* Bottom padding - allows last lines to scroll up properly */}
+          <div className="h-[50vh] md:h-[60vh]" aria-hidden="true" />
         </div>
       </ScrollArea>
 

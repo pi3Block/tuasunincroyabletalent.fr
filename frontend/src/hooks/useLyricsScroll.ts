@@ -18,7 +18,7 @@ import { PERFORMANCE_CONFIG } from '@/types/lyrics'
 interface UseLyricsScrollOptions {
   /** Current line index to scroll to */
   currentLineIndex: number
-  /** Total number of lines */
+  /** Total number of lines (reserved for future use) */
   totalLines?: number
   /** Whether playback is active */
   isPlaying: boolean
@@ -28,20 +28,18 @@ interface UseLyricsScrollOptions {
   enabled?: boolean
   /** Scroll behavior */
   behavior?: ScrollBehavior
-  /** Block position */
+  /** Block position - where to align current line ('start' recommended for karaoke) */
   block?: ScrollLogicalPosition
   /** Debounce delay in ms */
   debounceMs?: number
-  /** Number of lines to show ahead of current line (default: 3) */
-  linesAhead?: number
 }
 
 interface UseLyricsScrollReturn {
   /** Ref to attach to the current line element */
   currentLineRef: React.RefObject<HTMLDivElement>
-  /** Ref to attach to the target scroll line (current + linesAhead) */
+  /** Ref to attach to the scroll target line (same as current) */
   scrollTargetRef: React.RefObject<HTMLDivElement>
-  /** Index of the line that should be used as scroll target */
+  /** Index of the line used as scroll target (equals currentLineIndex) */
   scrollTargetIndex: number
   /** Whether auto-scroll is currently enabled */
   autoScrollEnabled: boolean
@@ -85,15 +83,16 @@ interface UseLyricsScrollReturn {
  */
 export function useLyricsScroll({
   currentLineIndex,
-  totalLines = 0,
+  totalLines: _totalLines = 0,
   isPlaying,
   containerRef,
   enabled = true,
   behavior = 'smooth',
-  block = 'center',
+  block = 'start',
   debounceMs = PERFORMANCE_CONFIG.SCROLL_DEBOUNCE_MS,
-  linesAhead = 3,
 }: UseLyricsScrollOptions): UseLyricsScrollReturn {
+  // totalLines reserved for future virtualization
+  void _totalLines
   const currentLineRef = useRef<HTMLDivElement>(null)
   const scrollTargetRef = useRef<HTMLDivElement>(null)
   const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -103,8 +102,8 @@ export function useLyricsScroll({
 
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(enabled)
 
-  // Calculate scroll target index (current line + lines ahead, clamped to total)
-  const scrollTargetIndex = Math.min(currentLineIndex + linesAhead, totalLines - 1)
+  // Scroll directly to current line (not ahead) - positioning handled by CSS padding
+  const scrollTargetIndex = currentLineIndex
 
   // Detect user scroll interaction
   useEffect(() => {
@@ -152,8 +151,8 @@ export function useLyricsScroll({
     }
   }, [isPlaying])
 
-  // Debounced scroll to target line (current + linesAhead)
-  // This ensures the singer always sees several lines ahead
+  // Debounced scroll to current line
+  // CSS padding in the container positions the line at ~35% from top
   useEffect(() => {
     if (!autoScrollEnabled || !enabled) return
 
@@ -174,8 +173,8 @@ export function useLyricsScroll({
       // Mark this as a programmatic scroll
       lastScrollTimeRef.current = Date.now()
 
-      // Scroll so that the target line (current + linesAhead) is centered
-      // This puts the current line near the top with linesAhead visible below
+      // Scroll current line to 'start' position
+      // The container's top padding positions it visually at ~35% from top
       element.scrollIntoView({
         behavior,
         block,
