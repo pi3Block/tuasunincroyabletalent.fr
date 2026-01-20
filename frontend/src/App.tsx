@@ -5,6 +5,7 @@ import { YouTubePlayer } from '@/components/YouTubePlayer'
 import { PitchIndicator } from '@/components/PitchIndicator'
 import { LyricsDisplayPro } from '@/components/lyrics/LyricsDisplayPro'
 import { LandscapeRecordingLayout } from '@/components/LandscapeRecordingLayout'
+import { LandingPage } from '@/components/landing'
 import { StudioMode } from '@/audio'
 import { api, type Track } from '@/api/client'
 import { useAudioRecorder } from '@/hooks/useAudioRecorder'
@@ -389,6 +390,11 @@ function App() {
     reset()
   }, [stopPitchAnalysis, resetRecording, setAnalysisProgress, reset])
 
+  // Landing page is a full-screen component, render it separately
+  if (status === 'idle') {
+    return <LandingPage onStart={startSession} />
+  }
+
   return (
     <div className="min-h-screen flex flex-col safe-area-top safe-area-bottom">
       {/* Header */}
@@ -407,34 +413,6 @@ function App() {
         {error && (
           <div className="w-full max-w-md md:max-w-2xl lg:max-w-4xl mb-4 bg-red-500/20 border border-red-500 rounded-lg p-3 text-red-300 text-sm text-center">
             {error}
-          </div>
-        )}
-
-        {/* IDLE - Landing Screen */}
-        {status === 'idle' && (
-          <div className="text-center space-y-6">
-            <div className="w-32 h-32 mx-auto bg-gradient-to-br from-gold-400 to-gold-600 rounded-full flex items-center justify-center shadow-lg">
-              <span className="text-6xl">🎤</span>
-            </div>
-
-            <h2 className="text-xl font-semibold">
-              Prêt à montrer ton talent ?
-            </h2>
-
-            <p className="text-gray-400 max-w-xs mx-auto">
-              Choisis une chanson, chante, et laisse notre jury IA te donner son verdict !
-            </p>
-            
-            <p className="text-gray-400 max-w-xs mx-auto">
-              Utilise notre mode studio pour écouter ta voix seule ou avec l'instrumental.
-            </p>
-
-            <button
-              onClick={() => startSession()}
-              className="bg-primary-500 hover:bg-primary-600 text-white font-bold py-4 px-8 rounded-full text-lg shadow-lg transform transition hover:scale-105 active:scale-95"
-            >
-              Commencer
-            </button>
           </div>
         )}
 

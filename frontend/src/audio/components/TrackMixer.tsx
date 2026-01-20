@@ -8,15 +8,49 @@ import { getTrackKey } from '../core/AudioPlayerFactory'
 import { cn } from '@/lib/utils'
 import type { TrackId } from '../types'
 
+/** Download an audio track from its URL */
+async function downloadAudioTrack(url: string, filename: string): Promise<void> {
+  try {
+    const response = await fetch(url)
+    if (!response.ok) {
+      throw new Error('Échec du téléchargement')
+    }
+    const blob = await response.blob()
+    const downloadUrl = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = downloadUrl
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(downloadUrl)
+  } catch (error) {
+    console.error('Download failed:', error)
+    throw error
+  }
+}
+
+/** Generate a meaningful filename for download */
+const TRACK_FILENAMES: Record<string, string> = {
+  'ref:vocals': 'voix_originale.wav',
+  'ref:instrumentals': 'instrumental.wav',
+  'ref:original': 'original.wav',
+  'user:vocals': 'ma_voix.wav',
+  'user:instrumentals': 'mon_instrumental.wav',
+  'user:original': 'mon_enregistrement.wav',
+}
+
 interface TrackMixerProps {
   compact?: boolean
   showMaster?: boolean
+  showDownload?: boolean
   className?: string
 }
 
 export function TrackMixer({
   compact = false,
   showMaster = true,
+  showDownload = false,
   className,
 }: TrackMixerProps) {
   const tracks = useTracks()
@@ -48,6 +82,12 @@ export function TrackMixer({
     if (track) {
       setTrackSolo(id, !track.solo)
     }
+  }
+
+  const handleDownload = (id: TrackId, url: string) => () => {
+    const key = getTrackKey(id)
+    const filename = TRACK_FILENAMES[key] || `${key.replace(':', '_')}.wav`
+    downloadAudioTrack(url, filename)
   }
 
   if (trackEntries.length === 0) {
@@ -105,6 +145,7 @@ export function TrackMixer({
                   onVolumeChange={handleVolumeChange(state.id)}
                   onMuteToggle={handleMuteToggle(state.id)}
                   onSoloToggle={handleSoloToggle(state.id)}
+                  onDownload={showDownload ? handleDownload(state.id, state.url) : undefined}
                   compact={compact}
                 />
               ))}
@@ -127,6 +168,7 @@ export function TrackMixer({
                   onVolumeChange={handleVolumeChange(state.id)}
                   onMuteToggle={handleMuteToggle(state.id)}
                   onSoloToggle={handleSoloToggle(state.id)}
+                  onDownload={showDownload ? handleDownload(state.id, state.url) : undefined}
                   compact={compact}
                 />
               ))}

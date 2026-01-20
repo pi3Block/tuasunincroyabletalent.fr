@@ -265,7 +265,7 @@ export function StudioMode({
       <TransportBar onPlay={play} onPause={pause} onStop={stop} onSeek={seek} />
 
       {/* Track mixer */}
-      <TrackMixer />
+      <TrackMixer showDownload={context === 'results'} />
     </div>
   )
 }

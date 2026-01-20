@@ -23,18 +23,28 @@ import { KaraokeWordGroup } from './KaraokeWord'
 
 /**
  * Calculate opacity based on distance from current line.
- * All lines remain readable (minimum 0.5 opacity) to allow scrolling.
- * Next line (isNext=true) gets higher opacity to help singers read ahead.
+ * All lines remain readable to allow scrolling and reading ahead.
+ * Upcoming lines (not past) get higher opacity to help singers read ahead.
  */
-function getOpacity(distance: number, isActive: boolean, isNext: boolean): number {
+function getOpacity(distance: number, isActive: boolean, isNext: boolean, isPast: boolean): number {
   if (isActive) return 1
-  // Next line should be very visible for reading ahead
-  if (isNext) return 0.9
-  if (distance === 1) return 0.7
-  if (distance === 2) return 0.6
-  if (distance === 3) return 0.55
-  // Minimum 0.5 opacity so all lines remain readable
-  return Math.max(0.5, 0.6 - distance * 0.03)
+
+  // Upcoming lines (not past) should be more visible for reading ahead
+  if (!isPast) {
+    if (isNext) return 1 // Next line fully visible
+    if (distance === 2) return 0.85
+    if (distance === 3) return 0.75
+    if (distance === 4) return 0.65
+    // Minimum 0.55 for distant future lines
+    return Math.max(0.55, 0.7 - distance * 0.03)
+  }
+
+  // Past lines can be dimmer
+  if (distance === 1) return 0.6
+  if (distance === 2) return 0.5
+  if (distance === 3) return 0.45
+  // Minimum 0.4 for distant past lines
+  return Math.max(0.4, 0.5 - distance * 0.03)
 }
 
 /**
@@ -97,7 +107,7 @@ export const LyricLine = memo(forwardRef<HTMLDivElement, LyricLineProps>(
     // Note: blur filter removed to allow smooth scrolling through lyrics
     const containerStyle = useMemo(() => {
       const scale = getScale(isActive, isNext)
-      const opacity = getOpacity(distance, isActive, isNext)
+      const opacity = getOpacity(distance, isActive, isNext, isPast)
 
       return {
         transform: `scale(${scale})`,
@@ -110,7 +120,7 @@ export const LyricLine = memo(forwardRef<HTMLDivElement, LyricLineProps>(
             }
           : {}),
       } as React.CSSProperties
-    }, [isActive, isNext, distance])
+    }, [isActive, isNext, isPast, distance])
 
     // Determine text classes based on state
     // Reduced sizes for better readability and more lines visible

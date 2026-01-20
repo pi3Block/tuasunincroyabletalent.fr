@@ -4,7 +4,7 @@
 import React from 'react'
 import { cn } from '@/lib/utils'
 import { VolumeSlider } from './VolumeSlider'
-import { Mic, Music, Disc, Loader2 } from 'lucide-react'
+import { Mic, Music, Disc, Loader2, Download } from 'lucide-react'
 import type { TrackId, TrackState } from '../types'
 import { getTrackKey } from '../core/AudioPlayerFactory'
 
@@ -14,6 +14,7 @@ interface AudioTrackProps {
   onVolumeChange: (volume: number) => void
   onMuteToggle: () => void
   onSoloToggle: () => void
+  onDownload?: () => void
   compact?: boolean
 }
 
@@ -38,6 +39,7 @@ export const AudioTrack = React.memo(function AudioTrack({
   onVolumeChange,
   onMuteToggle,
   onSoloToggle,
+  onDownload,
   compact = false,
 }: AudioTrackProps) {
   const key = getTrackKey(id)
@@ -162,6 +164,23 @@ export const AudioTrack = React.memo(function AudioTrack({
         >
           M
         </button>
+
+        {/* Download button */}
+        {onDownload && (
+          <button
+            type="button"
+            onClick={onDownload}
+            className={cn(
+              'h-8 w-8 rounded transition-all',
+              'flex items-center justify-center',
+              'touch-manipulation active:scale-95',
+              'bg-muted/50 text-muted-foreground hover:bg-primary/20 hover:text-primary'
+            )}
+            title="Télécharger cette piste"
+          >
+            <Download className="h-4 w-4" />
+          </button>
+        )}
       </div>
     </div>
   )

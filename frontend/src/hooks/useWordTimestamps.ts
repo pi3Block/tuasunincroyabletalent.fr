@@ -26,6 +26,8 @@ interface UseWordTimestampsOptions {
   autoGenerate?: boolean
   /** Polling interval in ms */
   pollInterval?: number
+  /** Whether the reference audio is ready (required for generation) */
+  referenceReady?: boolean
 }
 
 interface UseWordTimestampsResult {
