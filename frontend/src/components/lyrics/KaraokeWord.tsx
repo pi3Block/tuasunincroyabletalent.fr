@@ -54,8 +54,10 @@ export const KaraokeWord = memo(function KaraokeWord({
   word,
   isActive,
   isPast,
-  progress,
+  progress: _progress,
 }: KaraokeWordProps) {
+  // progress reserved for future within-word gradient animation
+  void _progress
   // Calculate style for word based on state
   // Note: We avoid background-clip:text as it has rendering issues
   // Instead, we use simple color transitions
