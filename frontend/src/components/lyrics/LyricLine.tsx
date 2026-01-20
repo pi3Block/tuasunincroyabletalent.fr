@@ -124,19 +124,21 @@ export const LyricLine = memo(forwardRef<HTMLDivElement, LyricLineProps>(
 
     // Determine text classes based on state
     // Reduced sizes for better readability and more lines visible
-    // Colors: white for current, gray for past/future (high contrast)
-    // Next line is larger to help singers read ahead
+    // Colors: white/light for current and upcoming, darker for past
+    // Next line is larger and white to help singers read ahead
     const textClasses = useMemo(() => {
       if (isActive) {
         return 'text-xl sm:text-2xl md:text-2xl lg:text-3xl font-bold text-white drop-shadow-[0_0_8px_rgba(255,255,255,0.4)]'
       }
-      // Next line: larger and brighter for easier reading
+      // Next line: larger and WHITE for maximum readability
       if (isNext) {
-        return 'text-lg sm:text-xl md:text-xl lg:text-2xl font-semibold text-gray-300'
+        return 'text-lg sm:text-xl md:text-xl lg:text-2xl font-semibold text-white'
       }
-      if (isPast) {
-        return 'text-base md:text-lg lg:text-xl text-gray-500'
+      // Upcoming lines (not past): light gray to be readable
+      if (!isPast) {
+        return 'text-base md:text-lg lg:text-xl text-gray-200'
       }
+      // Past lines: darker
       return 'text-base md:text-lg lg:text-xl text-gray-400'
     }, [isActive, isNext, isPast])
 
