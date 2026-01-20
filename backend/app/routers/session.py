@@ -91,7 +91,7 @@ async def prepare_reference_audio(session_id: str, youtube_url: str, youtube_id:
             celery_app.send_task(
                 "tasks.pipeline.prepare_reference",
                 args=[session_id, cached["reference_path"]],
-                queue="gpu",
+                queue="gpu-heavy",  # Demucs requires high VRAM
             )
             print(f"[Session {session_id}] Queued GPU separation for StudioMode")
             return
@@ -132,7 +132,7 @@ async def prepare_reference_audio(session_id: str, youtube_url: str, youtube_id:
         celery_app.send_task(
             "tasks.pipeline.prepare_reference",
             args=[session_id, str(audio_path)],
-            queue="gpu",
+            queue="gpu-heavy",  # Demucs requires high VRAM
         )
         print(f"[Session {session_id}] Queued GPU separation for StudioMode")
 
