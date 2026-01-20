@@ -137,10 +137,25 @@ export const LyricLine = memo(forwardRef<HTMLDivElement, LyricLineProps>(
       const useWordMode = hasWords && (displayMode === 'karaoke' || displayMode === 'word')
 
       if (useWordMode && line.words) {
+        // Determine word index based on line state:
+        // - Active line: use actual currentWordIndex
+        // - Past line: all words are "past" (sung) → index = words.length
+        // - Future line: no words are "past" yet → index = -1
+        let effectiveWordIndex: number
+        if (isActive) {
+          effectiveWordIndex = currentWordIndex
+        } else if (isPast) {
+          // All words in a past line should be white (sung)
+          effectiveWordIndex = line.words.length
+        } else {
+          // Future line - no words sung yet
+          effectiveWordIndex = -1
+        }
+
         return (
           <KaraokeWordGroup
             words={line.words}
-            currentWordIndex={isActive ? currentWordIndex : -1}
+            currentWordIndex={effectiveWordIndex}
             wordProgress={isActive ? wordProgress : 0}
           />
         )

@@ -263,21 +263,20 @@ export function useLyricsSync({
     currentLine?.words &&
     currentLine.words.length > 0
 
-  // Reset smoothing when line changes
-  useEffect(() => {
+  // Calculate word index with hysteresis (prevents micro-jumps)
+  // IMPORTANT: Word index can only move FORWARD, never backward (except on line change)
+  // This prevents jumps caused by inconsistent Whisper timestamps
+  const currentWordIndex = useMemo(() => {
+    if (!shouldTrackWords || !currentLine) return -1
+
+    // CRITICAL: Detect line change INSIDE useMemo to avoid timing issues with useEffect
+    // useEffect runs AFTER render, so the first render would have stale refs
     if (currentLineIndex !== lastLineIndexRef.current) {
       lastLineIndexRef.current = currentLineIndex
       prevWordIndexRef.current = -1
       wordIndexChangeTimeRef.current = 0
       smoothedProgressRef.current = 0
     }
-  }, [currentLineIndex])
-
-  // Calculate word index with hysteresis (prevents micro-jumps)
-  // IMPORTANT: Word index can only move FORWARD, never backward (except on line change)
-  // This prevents jumps caused by inconsistent Whisper timestamps
-  const currentWordIndex = useMemo(() => {
-    if (!shouldTrackWords || !currentLine) return -1
 
     const timeMs = adjustedTime * 1000
     const rawIndex = findWordIndex(currentLine, timeMs)
@@ -338,7 +337,7 @@ export function useLyricsSync({
 
     // Stay on previous word during hysteresis period
     return prevWordIndexRef.current
-  }, [shouldTrackWords, currentLine, adjustedTime])
+  }, [shouldTrackWords, currentLine, currentLineIndex, adjustedTime])
 
   // Calculate word progress with EMA smoothing
   const wordProgress = useMemo(() => {

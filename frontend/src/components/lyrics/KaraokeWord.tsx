@@ -129,17 +129,26 @@ export const KaraokeWordGroup = memo(function KaraokeWordGroup({
 }: KaraokeWordGroupProps) {
   return (
     <span className={cn('inline', className)}>
-      {words.map((word, index) => (
-        <React.Fragment key={`${word.text}-${index}`}>
-          <KaraokeWord
-            word={word}
-            isActive={index === currentWordIndex}
-            isPast={index < currentWordIndex}
-            progress={index === currentWordIndex ? wordProgress : 0}
-          />
-          {index < words.length - 1 && ' '}
-        </React.Fragment>
-      ))}
+      {words.map((word, index) => {
+        const isCurrentWord = index === currentWordIndex
+        const isLastWord = index === words.length - 1
+
+        // Special case: last word that's almost done should appear as "past" (white)
+        // This ensures the last word transitions to white before we change lines
+        const isLastWordFinished = isCurrentWord && isLastWord && wordProgress >= 0.85
+
+        return (
+          <React.Fragment key={`${word.text}-${index}`}>
+            <KaraokeWord
+              word={word}
+              isActive={isCurrentWord && !isLastWordFinished}
+              isPast={index < currentWordIndex || isLastWordFinished}
+              progress={isCurrentWord ? wordProgress : 0}
+            />
+            {index < words.length - 1 && ' '}
+          </React.Fragment>
+        )
+      })}
     </span>
   )
 })
