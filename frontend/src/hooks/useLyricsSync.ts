@@ -283,6 +283,17 @@ export function useLyricsSync({
     const rawIndex = findWordIndex(currentLine, timeMs)
     const now = Date.now()
 
+    // CRITICAL FIX: When starting a new line (prev is -1), ALWAYS start at word 0
+    // This prevents Whisper's bad timestamps from jumping to middle of phrase
+    if (prevWordIndexRef.current === -1) {
+      // New line - start at beginning, only move forward from there
+      // If rawIndex > 0, it means Whisper has bad timestamps - ignore and start at 0
+      prevWordIndexRef.current = 0
+      wordIndexChangeTimeRef.current = 0
+      smoothedProgressRef.current = 0
+      return 0
+    }
+
     // If same word as before, keep it
     if (rawIndex === prevWordIndexRef.current) {
       wordIndexChangeTimeRef.current = 0
@@ -291,13 +302,26 @@ export function useLyricsSync({
 
     // CRITICAL: Never go backward - only allow forward movement
     // This prevents the "jump to middle then back to start" bug
-    if (rawIndex < prevWordIndexRef.current && prevWordIndexRef.current >= 0) {
+    if (rawIndex < prevWordIndexRef.current) {
       // Whisper gave us an earlier word - ignore it, stay on current
       wordIndexChangeTimeRef.current = 0
       return prevWordIndexRef.current
     }
 
-    // If new word detected (moving forward), apply hysteresis
+    // Only allow moving forward by 1 word at a time (prevents big jumps)
+    const nextExpectedWord = prevWordIndexRef.current + 1
+    const targetIndex = Math.min(rawIndex, nextExpectedWord)
+
+    // If trying to jump ahead, cap at next word
+    if (targetIndex !== rawIndex) {
+      // Whisper wants to skip words - only advance by 1
+      prevWordIndexRef.current = targetIndex
+      wordIndexChangeTimeRef.current = 0
+      smoothedProgressRef.current = 0
+      return targetIndex
+    }
+
+    // If new word detected (moving forward by 1), apply hysteresis
     if (wordIndexChangeTimeRef.current === 0) {
       // First detection of new word, start timer
       wordIndexChangeTimeRef.current = now
@@ -313,7 +337,7 @@ export function useLyricsSync({
     }
 
     // Stay on previous word during hysteresis period
-    return prevWordIndexRef.current >= 0 ? prevWordIndexRef.current : rawIndex
+    return prevWordIndexRef.current
   }, [shouldTrackWords, currentLine, adjustedTime])
 
   // Calculate word progress with EMA smoothing

@@ -24,21 +24,28 @@ import { KaraokeWordGroup } from './KaraokeWord'
 /**
  * Calculate opacity based on distance from current line.
  * All lines remain readable (minimum 0.5 opacity) to allow scrolling.
+ * Next line (isNext=true) gets higher opacity to help singers read ahead.
  */
-function getOpacity(distance: number, isActive: boolean): number {
+function getOpacity(distance: number, isActive: boolean, isNext: boolean): number {
   if (isActive) return 1
-  if (distance === 1) return 0.8
-  if (distance === 2) return 0.7
-  if (distance === 3) return 0.6
+  // Next line should be very visible for reading ahead
+  if (isNext) return 0.9
+  if (distance === 1) return 0.7
+  if (distance === 2) return 0.6
+  if (distance === 3) return 0.55
   // Minimum 0.5 opacity so all lines remain readable
-  return Math.max(0.5, 0.7 - distance * 0.05)
+  return Math.max(0.5, 0.6 - distance * 0.03)
 }
 
 /**
  * Get scale based on active state.
+ * Next line gets slightly larger scale to help singers read ahead.
  */
-function getScale(isActive: boolean, config = DEFAULT_ANIMATION_CONFIG): number {
-  return isActive ? config.activeScale : config.inactiveScale
+function getScale(isActive: boolean, isNext: boolean, config = DEFAULT_ANIMATION_CONFIG): number {
+  if (isActive) return config.activeScale
+  // Next line slightly larger than other inactive lines
+  if (isNext) return config.inactiveScale + 0.02
+  return config.inactiveScale
 }
 
 // ============================================================================
@@ -83,11 +90,14 @@ export const LyricLine = memo(forwardRef<HTMLDivElement, LyricLineProps>(
     },
     ref
   ) {
+    // Check if this is the next line (distance 1, not past)
+    const isNext = distance === 1 && !isPast
+
     // Compute styles based on state
     // Note: blur filter removed to allow smooth scrolling through lyrics
     const containerStyle = useMemo(() => {
-      const scale = getScale(isActive)
-      const opacity = getOpacity(distance, isActive)
+      const scale = getScale(isActive, isNext)
+      const opacity = getOpacity(distance, isActive, isNext)
 
       return {
         transform: `scale(${scale})`,
@@ -100,20 +110,25 @@ export const LyricLine = memo(forwardRef<HTMLDivElement, LyricLineProps>(
             }
           : {}),
       } as React.CSSProperties
-    }, [isActive, distance])
+    }, [isActive, isNext, distance])
 
     // Determine text classes based on state
     // Reduced sizes for better readability and more lines visible
     // Colors: white for current, gray for past/future (high contrast)
+    // Next line is larger to help singers read ahead
     const textClasses = useMemo(() => {
       if (isActive) {
         return 'text-xl sm:text-2xl md:text-2xl lg:text-3xl font-bold text-white drop-shadow-[0_0_8px_rgba(255,255,255,0.4)]'
+      }
+      // Next line: larger and brighter for easier reading
+      if (isNext) {
+        return 'text-lg sm:text-xl md:text-xl lg:text-2xl font-semibold text-gray-300'
       }
       if (isPast) {
         return 'text-base md:text-lg lg:text-xl text-gray-500'
       }
       return 'text-base md:text-lg lg:text-xl text-gray-400'
-    }, [isActive, isPast])
+    }, [isActive, isNext, isPast])
 
     // Render content based on display mode
     const content = useMemo(() => {
