@@ -182,15 +182,16 @@ def get_lyrics_for_alignment(
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-        # Fetch from lyrics_cache table (LINE_SYNCED or UNSYNCED)
+        # Fetch from lyrics_cache table
+        # Column names: lyrics_text (plain text), synced_lines (JSONB array)
         cursor.execute("""
-            SELECT plain_lyrics, synced_lyrics, sync_type
+            SELECT lyrics_text, synced_lines, sync_type
             FROM lyrics_cache
             WHERE spotify_track_id = %s
             ORDER BY
                 CASE sync_type
-                    WHEN 'LINE_SYNCED' THEN 1
-                    WHEN 'UNSYNCED' THEN 2
+                    WHEN 'synced' THEN 1
+                    WHEN 'unsynced' THEN 2
                     ELSE 3
                 END
             LIMIT 1
@@ -204,15 +205,15 @@ def get_lyrics_for_alignment(
             print(f"[WordTimestampsDB] No lyrics found for {spotify_track_id}")
             return None, None
 
-        lyrics_text = row.get("plain_lyrics")
-        synced_lyrics = row.get("synced_lyrics")
+        lyrics_text = row.get("lyrics_text")
+        synced_lines_data = row.get("synced_lines")
         sync_type = row.get("sync_type")
 
         # Parse synced_lines if available
         synced_lines = None
-        if synced_lyrics and sync_type == "LINE_SYNCED":
+        if synced_lines_data and sync_type == "synced":
             try:
-                synced_lines = synced_lyrics if isinstance(synced_lyrics, list) else json.loads(synced_lyrics)
+                synced_lines = synced_lines_data if isinstance(synced_lines_data, list) else json.loads(synced_lines_data)
                 # Extract text from synced lines to build lyrics_text if not available
                 if not lyrics_text and synced_lines:
                     lyrics_text = "\n".join(
@@ -221,7 +222,7 @@ def get_lyrics_for_alignment(
                         if line.get("words") or line.get("text")
                     )
             except (json.JSONDecodeError, TypeError) as e:
-                print(f"[WordTimestampsDB] Error parsing synced_lyrics: {e}")
+                print(f"[WordTimestampsDB] Error parsing synced_lines: {e}")
 
         print(f"[WordTimestampsDB] Found lyrics for {spotify_track_id}: {len(lyrics_text or '')} chars, sync_type={sync_type}")
         return lyrics_text, synced_lines

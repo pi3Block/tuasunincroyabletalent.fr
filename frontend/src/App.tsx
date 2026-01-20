@@ -83,6 +83,7 @@ function App() {
   const [youtubeUrl, setYoutubeUrl] = useState('')
   const [submittingFallback, setSubmittingFallback] = useState(false)
   const [practiceMode, setPracticeMode] = useState(false)
+  const [karaokeMode, setKaraokeMode] = useState(true) // Toggle between karaoke (word) and line mode
 
   // Audio recorder hook
   const {
@@ -658,10 +659,10 @@ function App() {
                     <LyricsDisplayPro
                       lyrics={lyrics}
                       syncedLines={lyricsLines}
-                      wordLines={wordLines}
+                      wordLines={karaokeMode ? wordLines : null}
                       currentTime={playbackTime}
                       isPlaying={isVideoPlaying}
-                      displayMode={wordLines ? 'karaoke' : 'line'}
+                      displayMode={karaokeMode && wordLines ? 'karaoke' : 'line'}
                       offset={lyricsOffset}
                       onOffsetChange={handleOffsetChange}
                       showOffsetControls={true}
@@ -674,11 +675,20 @@ function App() {
                       <span>Génération du mode karaoké...</span>
                     </div>
                   )}
+                  {/* Karaoke mode toggle */}
                   {wordTimestampsStatus === 'found' && wordLines && (
-                    <div className="flex items-center justify-center gap-2 text-purple-400 text-xs mt-2">
-                      <span>🎤</span>
-                      <span>Mode karaoké mot par mot actif</span>
-                    </div>
+                    <button
+                      onClick={() => setKaraokeMode(!karaokeMode)}
+                      className={`flex items-center justify-center gap-2 text-xs mt-2 px-3 py-1.5 rounded-full transition-colors ${
+                        karaokeMode
+                          ? 'bg-purple-500/20 text-purple-400 hover:bg-purple-500/30'
+                          : 'bg-gray-500/20 text-gray-400 hover:bg-gray-500/30'
+                      }`}
+                    >
+                      <span>{karaokeMode ? '🎤' : '📝'}</span>
+                      <span>{karaokeMode ? 'Mode karaoké actif' : 'Mode ligne actif'}</span>
+                      <span className="text-[10px] opacity-70">(cliquer pour changer)</span>
+                    </button>
                   )}
                 </div>
               </div>
@@ -726,10 +736,10 @@ function App() {
                   <LyricsDisplayPro
                     lyrics={lyrics}
                     syncedLines={lyricsLines}
-                    wordLines={wordLines}
+                    wordLines={karaokeMode ? wordLines : null}
                     currentTime={playbackTime}
                     isPlaying={isVideoPlaying}
-                    displayMode={wordLines ? 'karaoke' : 'line'}
+                    displayMode={karaokeMode && wordLines ? 'karaoke' : 'line'}
                     offset={lyricsOffset}
                     onOffsetChange={handleOffsetChange}
                     showOffsetControls={true}
