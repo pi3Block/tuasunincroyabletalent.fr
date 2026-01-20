@@ -92,8 +92,15 @@ services:
       - NVIDIA_VISIBLE_DEVICES=1
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # GPU access - use runtime for broader compatibility
+    # GPU access - multiple syntaxes for Coolify compatibility
     runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['1']
+              capabilities: [gpu]
     depends_on:
       redis:
         condition: service_healthy
