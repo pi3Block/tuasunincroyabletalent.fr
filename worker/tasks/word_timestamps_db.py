@@ -71,7 +71,6 @@ def store_word_timestamps(
                 words JSONB NOT NULL,
                 lines JSONB NOT NULL,
                 source VARCHAR(32) NOT NULL,
-                source_priority INTEGER NOT NULL DEFAULT 3,
                 language VARCHAR(8),
                 model_version VARCHAR(64),
                 confidence_avg FLOAT,
@@ -88,18 +87,17 @@ def store_word_timestamps(
         # Upsert the data
         cursor.execute("""
             INSERT INTO word_timestamps_cache (
-                spotify_track_id, youtube_video_id, words, lines, source, source_priority,
+                spotify_track_id, youtube_video_id, words, lines, source,
                 language, model_version, confidence_avg, word_count, duration_ms,
                 artist_name, track_name, created_at, expires_at
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             )
             ON CONFLICT ON CONSTRAINT uq_word_timestamps_track_video
             DO UPDATE SET
                 words = EXCLUDED.words,
                 lines = EXCLUDED.lines,
                 source = EXCLUDED.source,
-                source_priority = EXCLUDED.source_priority,
                 language = EXCLUDED.language,
                 model_version = EXCLUDED.model_version,
                 confidence_avg = EXCLUDED.confidence_avg,
@@ -115,7 +113,6 @@ def store_word_timestamps(
             Json(words),
             Json(lines),
             source,
-            3,  # source_priority for whisper
             language,
             model_version,
             confidence_avg,
