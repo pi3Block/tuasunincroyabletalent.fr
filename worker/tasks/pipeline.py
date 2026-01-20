@@ -229,45 +229,38 @@ def prepare_reference(self, session_id: str, reference_audio_path: str) -> dict:
     """
     Pre-process reference audio (separate vocals, extract pitch).
     Called after YouTube download completes.
+
+    Files are stored in {session_id}_ref/ directory to match the API's expected paths:
+    - {session_id}_ref/vocals.wav
+    - {session_id}_ref/instrumentals.wav
+    This allows the StudioMode to access reference tracks before analysis.
     """
     from tasks.audio_separation import do_separate_audio
     from tasks.pitch_analysis import do_extract_pitch
 
-    output_dir = Path(os.getenv("AUDIO_OUTPUT_DIR", "/app/audio_files")) / session_id
-    output_dir.mkdir(parents=True, exist_ok=True)
+    base_dir = Path(os.getenv("AUDIO_OUTPUT_DIR", "/app/audio_files"))
+    # Use {session_id}_ref format to match API endpoint expectations
+    ref_dir = base_dir / f"{session_id}_ref"
+    ref_dir.mkdir(parents=True, exist_ok=True)
 
     self.update_state(state="PROGRESS", meta={"step": "separating", "progress": 30})
 
-    # Separate vocals from reference
-    separation_result = do_separate_audio(reference_audio_path, session_id)
+    # Separate vocals from reference - outputs to {session_id}_ref/
+    separation_result = do_separate_audio(reference_audio_path, f"{session_id}_ref")
 
-    # Rename outputs to reference_*
-    vocals_path = Path(separation_result["vocals_path"])
-    instrumentals_path = Path(separation_result["instrumentals_path"])
-
-    ref_vocals_path = output_dir / "reference_vocals.wav"
-    ref_instrumentals_path = output_dir / "reference_instrumentals.wav"
-
-    if vocals_path.exists():
-        vocals_path.rename(ref_vocals_path)
-    if instrumentals_path.exists():
-        instrumentals_path.rename(ref_instrumentals_path)
+    # Files are already in correct location: {session_id}_ref/vocals.wav
+    ref_vocals_path = Path(separation_result["vocals_path"])
+    ref_instrumentals_path = Path(separation_result["instrumentals_path"])
 
     self.update_state(state="PROGRESS", meta={"step": "extracting_pitch", "progress": 70})
 
     # Extract pitch from reference vocals
-    pitch_result = do_extract_pitch(str(ref_vocals_path), session_id)
-
-    # Rename pitch file
-    pitch_path = Path(pitch_result["pitch_path"])
-    ref_pitch_path = output_dir / "reference_pitch.npz"
-    if pitch_path.exists():
-        pitch_path.rename(ref_pitch_path)
+    pitch_result = do_extract_pitch(str(ref_vocals_path), f"{session_id}_ref")
 
     return {
         "session_id": session_id,
         "status": "ready",
         "reference_vocals_path": str(ref_vocals_path),
         "reference_instrumentals_path": str(ref_instrumentals_path),
-        "reference_pitch_path": str(ref_pitch_path),
+        "reference_pitch_path": pitch_result["pitch_path"],
     }

@@ -74,7 +74,9 @@ class LyricsOffsetResponse(BaseModel):
 
 
 async def prepare_reference_audio(session_id: str, youtube_url: str, youtube_id: str):
-    """Background task to download reference audio from YouTube (with caching)."""
+    """Background task to download reference audio from YouTube (with caching)
+    and trigger GPU separation (Demucs) for StudioMode.
+    """
     try:
         # Check cache first
         cached = await youtube_cache.get_cached_reference(youtube_id)
@@ -83,8 +85,15 @@ async def prepare_reference_audio(session_id: str, youtube_url: str, youtube_id:
             await redis_client.update_session(session_id, {
                 "reference_status": "ready",
                 "reference_path": cached["reference_path"],
-                "youtube_id": youtube_id,  # Ensure youtube_id is always stored for worker cache
+                "youtube_id": youtube_id,
             })
+            # Trigger GPU separation for StudioMode (uses its own cache internally)
+            celery_app.send_task(
+                "tasks.pipeline.prepare_reference",
+                args=[session_id, cached["reference_path"]],
+                queue="gpu",
+            )
+            print(f"[Session {session_id}] Queued GPU separation for StudioMode")
             return
 
         # Update status to downloading
@@ -110,14 +119,22 @@ async def prepare_reference_audio(session_id: str, youtube_url: str, youtube_id:
             "youtube_url": youtube_url,
         })
 
-        # Mark as ready - GPU processing (Demucs, CREPE) will happen during analysis
+        # Mark as ready for recording
         await redis_client.update_session(session_id, {
             "reference_status": "ready",
             "reference_path": str(audio_path),
-            "youtube_id": youtube_id,  # Ensure youtube_id is always stored for worker cache
+            "youtube_id": youtube_id,
         })
 
         print(f"[Session {session_id}] Reference ready (cached for future use)")
+
+        # Trigger GPU separation for StudioMode (Demucs + CREPE)
+        celery_app.send_task(
+            "tasks.pipeline.prepare_reference",
+            args=[session_id, str(audio_path)],
+            queue="gpu",
+        )
+        print(f"[Session {session_id}] Queued GPU separation for StudioMode")
 
     except Exception as e:
         print(f"[Session {session_id}] Error: {e}")
