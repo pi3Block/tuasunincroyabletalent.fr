@@ -11,7 +11,7 @@
  * - Stable references for downstream consumers
  */
 
-import { useMemo, useCallback, useRef, useEffect } from 'react'
+import { useMemo, useCallback, useRef } from 'react'
 import type { LyricLine, LyricsSyncState, LyricsDisplayMode } from '@/types/lyrics'
 import { PERFORMANCE_CONFIG } from '@/types/lyrics'
 
