@@ -88,11 +88,12 @@ export function useLyricsScroll({
   containerRef,
   enabled = true,
   behavior = 'smooth',
-  block = 'start',
+  block: _block = 'start',
   debounceMs = PERFORMANCE_CONFIG.SCROLL_DEBOUNCE_MS,
 }: UseLyricsScrollOptions): UseLyricsScrollReturn {
-  // totalLines reserved for future virtualization
+  // Reserved for future use
   void _totalLines
+  void _block
   const currentLineRef = useRef<HTMLDivElement>(null)
   const scrollTargetRef = useRef<HTMLDivElement>(null)
   const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -152,7 +153,7 @@ export function useLyricsScroll({
   }, [isPlaying])
 
   // Debounced scroll to current line
-  // CSS padding in the container positions the line at ~35% from top
+  // Positions the line at ~30% from top of visible area (ideal for karaoke)
   useEffect(() => {
     if (!autoScrollEnabled || !enabled) return
 
@@ -168,16 +169,30 @@ export function useLyricsScroll({
     // Debounce scroll
     scrollTimeoutRef.current = setTimeout(() => {
       const element = scrollTargetRef.current || currentLineRef.current
-      if (!element) return
+      const container = containerRef.current
+      if (!element || !container) return
 
       // Mark this as a programmatic scroll
       lastScrollTimeRef.current = Date.now()
 
-      // Scroll current line to 'start' position
-      // The container's top padding positions it visually at ~35% from top
-      element.scrollIntoView({
+      // Find the actual scrollable viewport (Radix ScrollArea uses a nested viewport)
+      const viewport = container.querySelector('[data-radix-scroll-area-viewport]') as HTMLElement
+      const scrollContainer = viewport || container
+
+      // Calculate position to place line at ~30% from top of visible area
+      const containerRect = scrollContainer.getBoundingClientRect()
+      const elementRect = element.getBoundingClientRect()
+
+      // Target offset: 30% from top of container
+      const targetOffset = containerRect.height * 0.30
+
+      // Calculate the scroll position needed
+      const elementTopRelativeToContainer = elementRect.top - containerRect.top + scrollContainer.scrollTop
+      const targetScrollTop = elementTopRelativeToContainer - targetOffset
+
+      scrollContainer.scrollTo({
+        top: Math.max(0, targetScrollTop),
         behavior,
-        block,
       })
     }, debounceMs)
 
@@ -186,7 +201,7 @@ export function useLyricsScroll({
         clearTimeout(scrollTimeoutRef.current)
       }
     }
-  }, [currentLineIndex, scrollTargetIndex, autoScrollEnabled, enabled, behavior, block, debounceMs])
+  }, [currentLineIndex, scrollTargetIndex, autoScrollEnabled, enabled, behavior, debounceMs, containerRef])
 
   // Manual controls
   const enableAutoScroll = useCallback(() => {

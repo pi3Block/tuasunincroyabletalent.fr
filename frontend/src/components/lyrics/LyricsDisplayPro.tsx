@@ -535,8 +535,8 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
           aria-label="Synchronized lyrics"
           aria-live="polite"
         >
-          {/* Top padding - positions current line at ~35% from top on mobile */}
-          <div className="h-[20vh] md:h-[25vh]" aria-hidden="true" />
+          {/* Top padding - provides scroll space before first line */}
+          <div className="h-[30%] min-h-[80px]" aria-hidden="true" />
 
           {lines.map((line, index) => {
             const isActive = index === currentLineIndex
@@ -575,8 +575,8 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
             )
           })}
 
-          {/* Bottom padding - allows last lines to scroll up properly */}
-          <div className="h-[50vh] md:h-[60vh]" aria-hidden="true" />
+          {/* Bottom padding - allows last lines to scroll up to 30% position */}
+          <div className="h-[70%] min-h-[200px]" aria-hidden="true" />
         </div>
       </ScrollArea>
 

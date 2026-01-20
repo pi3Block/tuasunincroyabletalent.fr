@@ -56,23 +56,15 @@ export const KaraokeWord = memo(function KaraokeWord({
   isPast,
   progress,
 }: KaraokeWordProps) {
-  // Calculate gradient style for active word - Apple Music style progressive fill
+  // Calculate style for word based on state
+  // Note: We avoid background-clip:text as it has rendering issues
+  // Instead, we use simple color transitions
   const wordStyle = useMemo(() => {
     if (isActive) {
-      // Clamp progress to 0-1
-      const p = Math.max(0, Math.min(1, progress)) * 100
-
+      // For active word, show it in the active color (fully highlighted)
+      // The progress is shown by which word is active, not within-word gradient
       return {
-        // Progressive gradient fill from left to right
-        background: `linear-gradient(90deg,
-          ${COLORS.active} 0%,
-          ${COLORS.active} ${p}%,
-          ${COLORS.inactive} ${p}%,
-          ${COLORS.inactive} 100%)`,
-        WebkitBackgroundClip: 'text',
-        WebkitTextFillColor: 'transparent',
-        backgroundClip: 'text',
-        // No textShadow - it creates visible rectangles with background-clip: text
+        color: COLORS.active,
       } as React.CSSProperties
     }
 
@@ -85,7 +77,7 @@ export const KaraokeWord = memo(function KaraokeWord({
     return {
       color: COLORS.inactive,
     } as React.CSSProperties
-  }, [isActive, isPast, progress])
+  }, [isActive, isPast])
 
   // Determine text class based on state
   const textClass = useMemo(() => {
