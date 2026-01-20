@@ -19,7 +19,7 @@ export const FooterSection = memo(function FooterSection() {
             viewport={{ once: true }}
           >
             <span className="text-2xl">🎤</span>
-            <span className="text-lg font-bold text-white">The AI Voice Jury</span>
+            <span className="text-lg font-bold text-white">Tu as un incroyable talent ?</span>
           </motion.div>
 
           {/* Made with love */}
@@ -37,7 +37,15 @@ export const FooterSection = memo(function FooterSection() {
             >
               <Heart className="w-4 h-4 text-red-500 fill-red-500" />
             </motion.span>
-            <span>et beaucoup d'IA</span>
+            <span>et beaucoup d'IA par</span>
+            <a
+              href="https://pierrelegrand.fr"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-purple-400 hover:text-purple-300 hover:underline transition-colors"
+            >
+              pierrelegrand.fr
+            </a>
           </motion.div>
 
           {/* Social links */}
@@ -49,7 +57,7 @@ export const FooterSection = memo(function FooterSection() {
             transition={{ delay: 0.2 }}
           >
             <motion.a
-              href="https://github.com"
+              href="https://github.com/pi3Block/"
               target="_blank"
               rel="noopener noreferrer"
               className="p-2 rounded-full bg-white/5 border border-white/10 text-gray-400 hover:text-white hover:bg-white/10 transition-colors"
@@ -59,7 +67,7 @@ export const FooterSection = memo(function FooterSection() {
               <Github className="w-5 h-5" />
             </motion.a>
             <motion.a
-              href="https://twitter.com"
+              href="https://x.com/Pi3r2Dev"
               target="_blank"
               rel="noopener noreferrer"
               className="p-2 rounded-full bg-white/5 border border-white/10 text-gray-400 hover:text-white hover:bg-white/10 transition-colors"
@@ -79,7 +87,7 @@ export const FooterSection = memo(function FooterSection() {
           viewport={{ once: true }}
           transition={{ delay: 0.3 }}
         >
-          <p>&copy; {new Date().getFullYear()} The AI Voice Jury. Tous droits réservés.</p>
+          <p>&copy; {new Date().getFullYear()} Tu as un incroyable talent ? Tous droits réservés.</p>
           <p className="mt-1">
             Propulsé par{' '}
             <a href="https://ollama.ai" target="_blank" rel="noopener noreferrer" className="text-purple-400 hover:underline">

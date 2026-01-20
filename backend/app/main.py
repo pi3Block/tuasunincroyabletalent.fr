@@ -1,5 +1,5 @@
 """
-The AI Voice Jury - FastAPI Backend
+Tu as un incroyable talent ? - FastAPI Backend
 """
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -13,7 +13,7 @@ from app.routers import session, results, search, audio, lyrics
 async def lifespan(app: FastAPI):
     """Startup and shutdown events."""
     # Startup
-    print(f"🚀 Starting The AI Voice Jury API (debug={settings.debug})")
+    print(f"🚀 Starting Tu as un incroyable talent ? API (debug={settings.debug})")
 
     # Initialize database tables
     from app.services.database import init_db, close_db
@@ -30,7 +30,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="The AI Voice Jury",
+    title="Tu as un incroyable talent ?",
     description="API pour l'évaluation vocale par IA",
     version="0.1.0",
     lifespan=lifespan,
@@ -62,7 +62,7 @@ app.include_router(lyrics.router, prefix="/api/lyrics", tags=["Lyrics"])
 @app.get("/")
 async def root():
     """Health check endpoint."""
-    return {"status": "ok", "service": "The AI Voice Jury"}
+    return {"status": "ok", "service": "Tu as un incroyable talent ?"}
 
 
 @app.get("/health")

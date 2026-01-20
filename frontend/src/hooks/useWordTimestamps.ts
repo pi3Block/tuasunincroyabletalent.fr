@@ -73,6 +73,7 @@ export function useWordTimestamps({
   language = 'fr',
   autoGenerate = false,
   pollInterval = 3000,
+  referenceReady = false,
 }: UseWordTimestampsOptions): UseWordTimestampsResult {
   const [wordLines, setWordLines] = useState<WordLine[] | null>(null)
   const [isLoading, setIsLoading] = useState(false)
@@ -123,8 +124,9 @@ export function useWordTimestamps({
         setStatus('not_found')
         setWordLines(null)
 
-        // Auto-generate if enabled (use ref to get latest function)
-        if (autoGenerate && youtubeVideoId) {
+        // Auto-generate if enabled AND reference audio is ready
+        // (reference must be downloaded before Whisper can process it)
+        if (autoGenerate && youtubeVideoId && referenceReady) {
           await triggerGenerationRef.current()
         }
       }
@@ -135,7 +137,7 @@ export function useWordTimestamps({
     } finally {
       setIsLoading(false)
     }
-  }, [spotifyTrackId, youtubeVideoId, autoGenerate])
+  }, [spotifyTrackId, youtubeVideoId, autoGenerate, referenceReady])
 
   // Keep ref updated with latest fetchWordTimestamps
   fetchWordTimestampsRef.current = fetchWordTimestamps

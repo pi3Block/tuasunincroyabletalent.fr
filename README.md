@@ -1,4 +1,4 @@
-# The AI Voice Jury - Karaoke AI Singing Evaluation Platform
+# Tu as un incroyable talent ? - Karaoke AI Singing Evaluation Platform
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11](https://img.shields.io/badge/Python-3.11-blue.svg)](https://www.python.org/downloads/)
@@ -87,7 +87,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    THE AI VOICE JURY PIPELINE                   │
+│                    Tu as un incroyable talent ? PIPELINE                   │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
 │  1. SETUP                    2. PRACTICE (Optional)             │
@@ -392,7 +392,7 @@ WHISPER_MODEL=turbo
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                   PIPELINE THE AI VOICE JURY                    │
+│                   PIPELINE Tu as un incroyable talent ?                    │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
 │  1. PRÉPARATION              2. PRATIQUE (Optionnel)            │

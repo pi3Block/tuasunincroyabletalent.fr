@@ -50,7 +50,7 @@ Voici la structure de la documentation finale intégrant tout cela. C'est la bas
 
 ---
 
-# 📘 The AI Voice Jury - Documentation Technique V1.0
+# 📘 Tu as un incroyable talent ? - Documentation Technique V1.0
 
 ## 1. Vue d'ensemble
 

@@ -109,6 +109,7 @@ function App() {
   } = usePitchDetection()
 
   // Word timestamps hook for karaoke mode
+  // referenceReady ensures we wait for the audio download before generating timestamps
   const {
     wordLines,
     isGenerating: isGeneratingWordTimestamps,
@@ -120,6 +121,7 @@ function App() {
     artistName: selectedTrack?.artists?.[0],
     trackName: selectedTrack?.name,
     autoGenerate: true, // Auto-generate when not cached
+    referenceReady: status === 'ready' || status === 'recording' || status === 'results',
   })
 
   // Track analysis task ID (using state so useEffect re-runs when it changes)
@@ -400,7 +402,7 @@ function App() {
       {/* Header */}
       <header className="bg-gradient-to-r from-primary-600 to-primary-500 p-4 text-center">
         <h1 className="text-2xl font-bold tracking-tight">
-          The AI Voice Jury
+          Tu as un incroyable talent ?
         </h1>
         <p className="text-sm text-primary-100 mt-1">
           Fais-toi juger par l'IA !

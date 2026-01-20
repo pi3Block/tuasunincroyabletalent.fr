@@ -2,7 +2,7 @@
  * Audio Module - Public exports
  *
  * This module provides a professional multi-track audio player system
- * for the AI Voice Jury application.
+ * for Tu as un incroyable talent ? application.
  */
 
 // Types

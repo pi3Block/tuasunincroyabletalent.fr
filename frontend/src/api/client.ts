@@ -1,5 +1,5 @@
 /**
- * API client for The AI Voice Jury backend
+ * API client for Tu as un incroyable talent ? backend
  */
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'

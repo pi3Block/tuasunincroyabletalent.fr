@@ -1,4 +1,4 @@
-# Campagne Twitter/X pour The AI Voice Jury
+# Campagne Twitter/X pour Tu as un incroyable talent ?
 
 ## Informations clés
 - **Compte Twitter** : @Pi3r2Dev
@@ -82,7 +82,7 @@ Créer une série de posts Twitter/X optimisés pour l'algorithme afin de promou
 
 ### Post 1 : Lancement principal (Vidéo)
 ```
-I just shipped The AI Voice Jury
+I just shipped Tu as un incroyable talent ?
 
 A karaoke app that judges you like Got Talent... except the jury is 100% AI
 
@@ -106,7 +106,7 @@ tuasunincroyabletalent.fr
 ```
 Comment j'ai créé un jury IA qui analyse ta voix en <60 secondes
 
-Un thread sur la stack technique derrière The AI Voice Jury
+Un thread sur la stack technique derrière Tu as un incroyable talent ?
 
 1/8
 ```
@@ -318,7 +318,7 @@ Drop your war stories below
 
 ### Post 10 : Open source call
 ```
-The AI Voice Jury is now open source
+Tu as un incroyable talent ? is now open source
 
 What's included:
 - Full-stack React + FastAPI app

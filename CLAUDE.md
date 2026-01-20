@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**The AI Voice Jury** - Application web type "Show TV" permettant d'évaluer le chant d'un utilisateur en temps réel par rapport à une version originale (Spotify/YouTube), avec feedback généré par des Personas IA (jury style "Incroyable Talent").
+**Tu as un incroyable talent ?** - Application web type "Show TV" permettant d'évaluer le chant d'un utilisateur en temps réel par rapport à une version originale (Spotify/YouTube), avec feedback généré par des Personas IA (jury style "Incroyable Talent").
 
 **Mobile-First**: L'application est conçue 100% mobile-friendly en priorité. Toutes les interfaces (sélection chanson, enregistrement, résultats) doivent être optimisées pour smartphones.
 
