@@ -23,11 +23,11 @@ import { KaraokeWordGroup } from './KaraokeWord'
 
 /**
  * Calculate blur amount based on distance from current line.
+ * Disabled: blur was preventing scrolling through lyrics.
  */
-function getBlurStyle(distance: number, maxBlur: number): string {
-  if (distance === 0) return 'blur(0px)'
-  const blur = Math.min(distance * 0.5, maxBlur)
-  return `blur(${blur}px)`
+function getBlurStyle(_distance: number, _maxBlur: number): string {
+  // Blur disabled to allow smooth scrolling through lyrics
+  return 'blur(0px)'
 }
 
 /**

@@ -45,6 +45,8 @@ interface UseWordTimestampsResult {
   quality: { confidence?: number; word_count?: number } | null
   /** Manually trigger generation */
   triggerGeneration: () => Promise<void>
+  /** Force regeneration (invalidate cache and regenerate) */
+  regenerate: () => Promise<void>
   /** Refresh data */
   refresh: () => Promise<void>
 }
@@ -197,6 +199,73 @@ export function useWordTimestamps({
     }
   }, [spotifyTrackId, youtubeVideoId, artistName, trackName, language, pollInterval, fetchWordTimestamps])
 
+  // Force regeneration (invalidate cache first, then regenerate)
+  const regenerate = useCallback(async () => {
+    if (!spotifyTrackId || !youtubeVideoId) {
+      setError('Missing track or video ID')
+      return
+    }
+
+    setIsGenerating(true)
+    setStatus('generating')
+    setError(null)
+
+    try {
+      // First invalidate the cache
+      await api.invalidateWordTimestamps(spotifyTrackId, youtubeVideoId)
+      console.log('[useWordTimestamps] Cache invalidated, regenerating...')
+
+      // Then trigger generation with force_regenerate flag
+      const response = await api.generateWordTimestamps({
+        spotify_track_id: spotifyTrackId,
+        youtube_video_id: youtubeVideoId,
+        artist_name: artistName,
+        track_name: trackName,
+        language,
+        force_regenerate: true,
+      })
+
+      if (response.status === 'queued' && response.task_id) {
+        taskIdRef.current = response.task_id
+
+        // Start polling for completion
+        pollIntervalRef.current = setInterval(async () => {
+          try {
+            const taskStatus = await api.getWordTimestampsTaskStatus(response.task_id!)
+
+            if (taskStatus.ready) {
+              // Stop polling
+              if (pollIntervalRef.current) {
+                clearInterval(pollIntervalRef.current)
+                pollIntervalRef.current = null
+              }
+
+              if (taskStatus.successful) {
+                // Fetch the new data
+                await fetchWordTimestamps()
+              } else {
+                setError(taskStatus.error || 'Regeneration failed')
+                setStatus('error')
+                setIsGenerating(false)
+              }
+            }
+          } catch (pollError) {
+            console.error('[useWordTimestamps] Poll error:', pollError)
+          }
+        }, pollInterval)
+      } else {
+        setError(response.message || 'Failed to start regeneration')
+        setStatus('error')
+        setIsGenerating(false)
+      }
+    } catch (err) {
+      console.error('[useWordTimestamps] Regeneration error:', err)
+      setError(err instanceof Error ? err.message : 'Failed to regenerate word timestamps')
+      setStatus('error')
+      setIsGenerating(false)
+    }
+  }, [spotifyTrackId, youtubeVideoId, artistName, trackName, language, pollInterval, fetchWordTimestamps])
+
   // Initial fetch when IDs change
   useEffect(() => {
     if (spotifyTrackId) {
@@ -216,6 +285,7 @@ export function useWordTimestamps({
     status,
     quality,
     triggerGeneration,
+    regenerate,
     refresh: fetchWordTimestamps,
   }
 }

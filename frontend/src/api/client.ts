@@ -341,6 +341,19 @@ class ApiClient {
   }> {
     return this.request(`/api/lyrics/word-timestamps/task/${taskId}`)
   }
+
+  async invalidateWordTimestamps(
+    spotifyTrackId: string,
+    youtubeVideoId?: string
+  ): Promise<{ status: string; spotify_track_id: string }> {
+    const params = youtubeVideoId
+      ? new URLSearchParams({ youtube_video_id: youtubeVideoId })
+      : ''
+    return this.request(
+      `/api/lyrics/word-timestamps/${spotifyTrackId}${params ? `?${params}` : ''}`,
+      { method: 'DELETE' }
+    )
+  }
 }
 
 export const api = new ApiClient(API_URL)

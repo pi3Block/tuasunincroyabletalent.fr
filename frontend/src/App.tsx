@@ -107,6 +107,7 @@ function App() {
     wordLines,
     isGenerating: isGeneratingWordTimestamps,
     status: wordTimestampsStatus,
+    regenerate: regenerateWordTimestamps,
   } = useWordTimestamps({
     spotifyTrackId: selectedTrack?.id || null,
     youtubeVideoId: youtubeMatch?.id || null,
@@ -675,20 +676,30 @@ function App() {
                       <span>Génération du mode karaoké...</span>
                     </div>
                   )}
-                  {/* Karaoke mode toggle */}
+                  {/* Karaoke mode toggle + regenerate button */}
                   {wordTimestampsStatus === 'found' && wordLines && (
-                    <button
-                      onClick={() => setKaraokeMode(!karaokeMode)}
-                      className={`flex items-center justify-center gap-2 text-xs mt-2 px-3 py-1.5 rounded-full transition-colors ${
-                        karaokeMode
-                          ? 'bg-purple-500/20 text-purple-400 hover:bg-purple-500/30'
-                          : 'bg-gray-500/20 text-gray-400 hover:bg-gray-500/30'
-                      }`}
-                    >
-                      <span>{karaokeMode ? '🎤' : '📝'}</span>
-                      <span>{karaokeMode ? 'Mode karaoké actif' : 'Mode ligne actif'}</span>
-                      <span className="text-[10px] opacity-70">(cliquer pour changer)</span>
-                    </button>
+                    <div className="flex items-center justify-center gap-2 mt-2">
+                      <button
+                        onClick={() => setKaraokeMode(!karaokeMode)}
+                        className={`flex items-center gap-2 text-xs px-3 py-1.5 rounded-full transition-colors ${
+                          karaokeMode
+                            ? 'bg-purple-500/20 text-purple-400 hover:bg-purple-500/30'
+                            : 'bg-gray-500/20 text-gray-400 hover:bg-gray-500/30'
+                        }`}
+                      >
+                        <span>{karaokeMode ? '🎤' : '📝'}</span>
+                        <span>{karaokeMode ? 'Mode karaoké' : 'Mode ligne'}</span>
+                      </button>
+                      <button
+                        onClick={regenerateWordTimestamps}
+                        disabled={isGeneratingWordTimestamps}
+                        className="flex items-center gap-1 text-xs px-2 py-1.5 rounded-full bg-orange-500/20 text-orange-400 hover:bg-orange-500/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        title="Régénérer les timestamps karaoké"
+                      >
+                        <span>🔄</span>
+                        <span>Régénérer</span>
+                      </button>
+                    </div>
                   )}
                 </div>
               </div>

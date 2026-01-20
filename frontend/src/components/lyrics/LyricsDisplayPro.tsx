@@ -74,22 +74,130 @@ import type { SyncedLyricLine } from '@/api/client'
 // ============================================================================
 
 /**
+ * Flatten all words from wordLines into a single array for matching.
+ */
+function flattenWords(wordLines: WordLine[]): Array<{
+  word: string
+  startMs: number
+  endMs: number
+  confidence?: number
+}> {
+  const allWords: Array<{
+    word: string
+    startMs: number
+    endMs: number
+    confidence?: number
+  }> = []
+
+  for (const line of wordLines) {
+    for (const w of line.words) {
+      allWords.push({
+        word: w.word,
+        startMs: w.startMs,
+        endMs: w.endMs,
+        confidence: w.confidence,
+      })
+    }
+  }
+
+  return allWords
+}
+
+/**
+ * Assign word timestamps to synced lines based on time overlap.
+ * This regroups Whisper's words according to the original lyric line structure.
+ */
+function mergeWordTimestampsWithSyncedLines(
+  syncedLines: SyncedLyricLine[],
+  wordLines: WordLine[]
+): LyricLineType[] {
+  // Flatten all words from wordLines
+  const allWords = flattenWords(wordLines)
+  if (allWords.length === 0) {
+    // No words, fall back to synced lines without word data
+    return syncedLines.map((line, index) => ({
+      id: `line-${index}`,
+      text: line.text,
+      startTime: line.startTimeMs / 1000,
+      endTime: line.endTimeMs ? line.endTimeMs / 1000 : undefined,
+      words: undefined,
+    }))
+  }
+
+  let wordIndex = 0
+  const result: LyricLineType[] = []
+
+  for (let lineIndex = 0; lineIndex < syncedLines.length; lineIndex++) {
+    const line = syncedLines[lineIndex]
+    const lineStartMs = line.startTimeMs
+    // Use next line's start time as end, or add 10s buffer for last line
+    const nextLine = syncedLines[lineIndex + 1]
+    const lineEndMs = nextLine ? nextLine.startTimeMs : lineStartMs + 10000
+
+    const lineWords: LyricWord[] = []
+
+    // Collect words that fall within this line's time window
+    while (wordIndex < allWords.length) {
+      const w = allWords[wordIndex]
+      const wordMidpoint = (w.startMs + w.endMs) / 2
+
+      // Word belongs to this line if its midpoint is within the time window
+      if (wordMidpoint >= lineStartMs && wordMidpoint < lineEndMs) {
+        lineWords.push({
+          text: w.word,
+          startTimeMs: w.startMs,
+          endTimeMs: w.endMs,
+          confidence: w.confidence,
+        })
+        wordIndex++
+      } else if (wordMidpoint < lineStartMs) {
+        // Word is before this line, skip it (likely overlap from previous)
+        wordIndex++
+      } else {
+        // Word is after this line's time window, stop collecting
+        break
+      }
+    }
+
+    result.push({
+      id: `line-${lineIndex}`,
+      text: line.text,
+      startTime: lineStartMs / 1000,
+      endTime: line.endTimeMs ? line.endTimeMs / 1000 : undefined,
+      words: lineWords.length > 0 ? lineWords : undefined,
+    })
+  }
+
+  return result
+}
+
+/**
  * Parse raw lyrics into structured LyricLine array.
  * Handles synced lines, word-level lines, and plain text lyrics.
+ *
+ * When both syncedLines and wordLines are available, merges them:
+ * - Uses syncedLines for line structure (proper phrase grouping)
+ * - Uses wordLines for word-level timestamps (karaoke highlighting)
  */
 function parseLyrics(
   lyrics: string,
   syncedLines?: SyncedLyricLine[] | null,
   wordLines?: WordLine[] | null
 ): LyricLineType[] {
-  // Priority 1: Use word-level lines if available (karaoke mode)
+  // Priority 1: Merge word timestamps with synced lines (best quality)
+  // This uses the original line structure but adds word-level timing
+  if (syncedLines && syncedLines.length > 0 && wordLines && wordLines.length > 0) {
+    return mergeWordTimestampsWithSyncedLines(syncedLines, wordLines)
+  }
+
+  // Priority 2: Use word-level lines directly (Whisper-only segmentation)
+  // Note: Whisper's segments may not match natural phrase boundaries
   if (wordLines && wordLines.length > 0) {
     return wordLines.map((line, index) => ({
       id: `line-${index}`,
       text: line.text,
       startTime: line.startMs / 1000,
       endTime: line.endMs / 1000,
-      // Convert word timestamps to LyricWord format
       words: line.words.map((word): LyricWord => ({
         text: word.word,
         startTimeMs: word.startMs,
@@ -99,7 +207,7 @@ function parseLyrics(
     }))
   }
 
-  // Priority 2: Use line-synced lines
+  // Priority 3: Use line-synced lines (no word-level timing)
   if (syncedLines && syncedLines.length > 0) {
     return syncedLines.map((line, index) => ({
       id: `line-${index}`,
