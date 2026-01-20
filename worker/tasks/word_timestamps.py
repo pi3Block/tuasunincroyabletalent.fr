@@ -37,37 +37,83 @@ def transcribe_with_word_timestamps(
     vocals_path: str,
     language: str = "fr",
     use_vad: bool = True,
+    lyrics_text: str | None = None,
+    synced_lines: list[dict] | None = None,
 ) -> dict:
     """
-    Transcribe audio with precise word-level timestamps.
+    Align lyrics to audio with precise word-level timestamps.
+
+    If lyrics_text is provided, uses forced alignment (much more accurate).
+    Otherwise falls back to free transcription.
 
     Args:
         vocals_path: Path to vocals audio file (ideally Demucs-separated)
         language: Language code
         use_vad: Use Voice Activity Detection to reduce hallucinations
+        lyrics_text: Full lyrics text to align (from LRCLib/Genius)
+        synced_lines: Line-synced lyrics [{startTimeMs, text}, ...] for better alignment
 
     Returns:
         dict with words, lines, and metadata
     """
     import whisper_timestamped as whisper
 
-    print(f"[WhisperTimestamped] Transcribing: {vocals_path}")
+    print(f"[WhisperTimestamped] Processing: {vocals_path}")
 
     model = get_whisper_timestamped_model()
 
-    # Transcribe with whisper-timestamped for better word alignment
-    result = whisper.transcribe(
-        model,
-        vocals_path,
-        language=language,
-        vad=use_vad,  # VAD reduces hallucinations on silence
-        compute_word_confidence=True,
-        include_punctuation_in_confidence=False,
-        refine_whisper_precision=0.5,  # Refine timestamps by 0.5s
-        min_word_duration=0.02,  # Minimum 20ms per word
-        detect_disfluencies=False,  # Don't mark hesitations
-        verbose=False,
-    )
+    # If we have lyrics, use them for forced alignment
+    if lyrics_text:
+        print(f"[WhisperTimestamped] Using FORCED ALIGNMENT with provided lyrics ({len(lyrics_text)} chars)")
+
+        # Clean lyrics for alignment
+        clean_lyrics = lyrics_text.strip()
+
+        # whisper-timestamped supports forced alignment via initial_prompt
+        # This guides Whisper to recognize these words
+        result = whisper.transcribe(
+            model,
+            vocals_path,
+            language=language,
+            vad=use_vad,
+            compute_word_confidence=True,
+            include_punctuation_in_confidence=False,
+            refine_whisper_precision=0.5,
+            min_word_duration=0.04,
+            detect_disfluencies=False,
+            verbose=False,
+            beam_size=5,
+            best_of=5,
+            temperature=0.0,  # More deterministic for alignment
+            initial_prompt=clean_lyrics,  # Guide Whisper with actual lyrics!
+            condition_on_previous_text=True,
+            no_speech_threshold=0.6,
+            compression_ratio_threshold=2.4,
+        )
+    else:
+        print(f"[WhisperTimestamped] No lyrics provided, using FREE TRANSCRIPTION")
+
+        result = whisper.transcribe(
+            model,
+            vocals_path,
+            language=language,
+            vad=use_vad,
+            compute_word_confidence=True,
+            include_punctuation_in_confidence=False,
+            refine_whisper_precision=0.5,
+            min_word_duration=0.04,
+            detect_disfluencies=False,
+            verbose=False,
+            beam_size=5,
+            best_of=5,
+            temperature=(0.0, 0.2, 0.4),
+            no_speech_threshold=0.5,
+            compression_ratio_threshold=2.0,
+            condition_on_previous_text=True,
+        )
+
+    # Words to filter out (hallucinations)
+    HALLUCINATION_WORDS = {'...', '..', '.', '♪', '♫', '[Musique]', '[Music]', '[Applause]', '(musique)', '*', '(Musique)'}
 
     # Extract word-level data
     words = []
@@ -79,15 +125,27 @@ def transcribe_with_word_timestamps(
         segment_text_parts = []
 
         for word_info in segment.get("words", []):
+            word_text = word_info["text"].strip()
+
+            # Skip hallucination words
+            if word_text in HALLUCINATION_WORDS or not word_text:
+                continue
+
+            # Skip very low confidence words (likely hallucinations) - but be less strict with forced alignment
+            confidence = word_info.get("confidence", 1.0)
+            min_confidence = 0.2 if lyrics_text else 0.3
+            if confidence < min_confidence:
+                continue
+
             word_data = {
-                "word": word_info["text"].strip(),
+                "word": word_text,
                 "startMs": int(word_info["start"] * 1000),
                 "endMs": int(word_info["end"] * 1000),
-                "confidence": round(word_info.get("confidence", 1.0), 3),
+                "confidence": round(confidence, 3),
             }
             words.append(word_data)
             segment_words.append(word_data)
-            segment_text_parts.append(word_info["text"].strip())
+            segment_text_parts.append(word_text)
             total_confidence += word_data["confidence"]
 
         if segment_words:
@@ -125,6 +183,8 @@ def do_generate_word_timestamps(
     language: str = "fr",
     artist_name: str | None = None,
     track_name: str | None = None,
+    lyrics_text: str | None = None,
+    synced_lines: list[dict] | None = None,
 ) -> dict:
     """
     Core logic: Generate word timestamps with caching.
@@ -139,15 +199,19 @@ def do_generate_word_timestamps(
         language: Language code
         artist_name: For debugging/metadata
         track_name: For debugging/metadata
+        lyrics_text: Full lyrics text for forced alignment (from LRCLib/Genius)
+        synced_lines: Line-synced lyrics for better alignment
 
     Returns:
         dict with word timestamps data
     """
-    # Generate timestamps
+    # Generate timestamps with forced alignment if lyrics available
     result = transcribe_with_word_timestamps(
         vocals_path=vocals_path,
         language=language,
         use_vad=True,
+        lyrics_text=lyrics_text,
+        synced_lines=synced_lines,
     )
 
     # Save to file for backup
@@ -331,7 +395,21 @@ def generate_word_timestamps_cached(
     else:
         print(f"[WordTimestampsCached] Using cached vocals: {vocals_path}")
 
-    # Step 2: Generate word timestamps
+    # Step 2: Fetch existing lyrics for forced alignment
+    self.update_state(state="PROGRESS", meta={
+        "step": "fetching_lyrics",
+        "spotify_track_id": spotify_track_id,
+    })
+
+    from tasks.word_timestamps_db import get_lyrics_for_alignment
+
+    lyrics_text, synced_lines = get_lyrics_for_alignment(spotify_track_id)
+    if lyrics_text:
+        print(f"[WordTimestampsCached] Found lyrics for forced alignment: {len(lyrics_text)} chars")
+    else:
+        print(f"[WordTimestampsCached] No lyrics found, will use free transcription")
+
+    # Step 3: Generate word timestamps with forced alignment
     self.update_state(state="PROGRESS", meta={
         "step": "generating_timestamps",
         "spotify_track_id": spotify_track_id,
@@ -344,9 +422,11 @@ def generate_word_timestamps_cached(
         language=language,
         artist_name=artist_name,
         track_name=track_name,
+        lyrics_text=lyrics_text,
+        synced_lines=synced_lines,
     )
 
-    # Step 3: Store in PostgreSQL cache
+    # Step 4: Store in PostgreSQL cache
     self.update_state(state="PROGRESS", meta={
         "step": "caching_results",
         "spotify_track_id": spotify_track_id,
