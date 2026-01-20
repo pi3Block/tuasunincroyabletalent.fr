@@ -3,13 +3,15 @@ Celery application configuration.
 """
 import os
 from celery import Celery
+from celery.signals import worker_process_init
 
 # Redis URL from environment
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 
-def _log_gpu_init():
-    """Log GPU status once at worker startup (minimal overhead)."""
+@worker_process_init.connect
+def _log_gpu_on_worker_init(**kwargs):
+    """Log GPU status once per worker process (after fork, safe for CUDA)."""
     try:
         import torch
         if torch.cuda.is_available():
@@ -23,9 +25,6 @@ def _log_gpu_init():
     except Exception as e:
         print(f"[INIT] GPU check failed: {e}")
 
-
-# Log GPU status at import time (once per worker process)
-_log_gpu_init()
 
 celery_app = Celery(
     "voicejury",
