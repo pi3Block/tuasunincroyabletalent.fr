@@ -37,7 +37,7 @@ services:
   worker:
     build:
       context: ./worker
-      dockerfile: Dockerfile.prod
+      dockerfile: Dockerfile.optimized
     environment:
       - OLLAMA_HOST=http://host.docker.internal:11434
     deploy:

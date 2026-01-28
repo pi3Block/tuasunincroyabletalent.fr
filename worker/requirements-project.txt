@@ -1,0 +1,36 @@
+# ===========================================
+# tuasunincroyabletalent.fr Worker - Project-Specific Dependencies
+# ===========================================
+# Base image (gpu-worker-base) already includes:
+# - torch, torchaudio
+# - openai-whisper, whisper-timestamped
+# - librosa, scipy, numpy, soundfile, pydub
+# - onnxruntime
+# ===========================================
+
+# Celery & Redis
+celery[redis]>=5.4.0
+redis>=5.2.0
+
+# Database
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.9
+
+# Audio Separation (unique to this project)
+demucs>=4.0.1
+
+# Pitch Detection (unique to this project)
+torchcrepe>=0.0.22
+
+# Audio codec handling
+torchcodec>=0.1.0
+
+# Evaluation Metrics
+fastdtw>=0.3.4
+jiwer>=3.0.0
+
+# Ollama Client
+httpx>=0.28.0
+
+# Utils
+python-dotenv>=1.0.1

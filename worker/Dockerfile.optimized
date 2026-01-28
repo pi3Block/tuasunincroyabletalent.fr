@@ -1,0 +1,39 @@
+# ===========================================
+# tuasunincroyabletalent.fr GPU Worker - OPTIMIZED VERSION
+# Uses shared base image for fast builds (~2min vs ~15min)
+# ===========================================
+#
+# Prerequisites:
+# 1. Ensure ghcr.io/pi3block/gpu-worker-base:latest exists
+#    (Build from D:\SourceFast\gpu-worker-base)
+#
+# 2. In Coolify, change Dockerfile path:
+#    worker/Dockerfile -> worker/Dockerfile.optimized
+# ===========================================
+
+FROM ghcr.io/pi3block/gpu-worker-base:latest
+
+WORKDIR /app
+
+# ===========================================
+# Project-Specific Python Dependencies
+# (Base already has: torch, torchaudio, whisper, librosa, etc.)
+# ===========================================
+COPY requirements-project.txt .
+RUN uv pip install --system --no-cache -r requirements-project.txt
+
+# Copy source
+COPY . .
+
+# Create cache directories for models
+RUN mkdir -p /root/.cache/whisper /root/.cache/torch/hub
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD python -c "import whisper; import demucs; import torchcrepe; print('OK')" || exit 1
+
+# Run Celery worker
+# gpu-heavy: Demucs, Whisper (resource-intensive)
+# gpu: CREPE pitch analysis
+# default: CPU-bound tasks
+CMD ["celery", "-A", "tasks.celery_app", "worker", "--loglevel=info", "--concurrency=2", "-Q", "gpu-heavy,gpu,default"]
