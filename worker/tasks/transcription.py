@@ -1,44 +1,79 @@
 """
 Speech-to-text transcription using Whisper.
 Extracts lyrics from user vocals.
+
+Primary: HTTP call to shared-whisper microservice (Faster Whisper, GPU 3)
+Fallback: Local PyTorch Whisper (if shared-whisper is down)
 """
 import os
+import json
 from pathlib import Path
 from celery import shared_task
 
-# Lazy load Whisper model
+SHARED_WHISPER_URL = os.getenv("SHARED_WHISPER_URL", "http://shared-whisper:9000")
+SHARED_WHISPER_TIMEOUT = int(os.getenv("SHARED_WHISPER_TIMEOUT", "120"))
+
+# Lazy load Whisper model (fallback only)
 _whisper_model = None
 
 
 def get_whisper_model():
-    """Lazy load Whisper model."""
+    """Lazy load Whisper model (fallback when shared-whisper is down)."""
     global _whisper_model
     if _whisper_model is None:
         import whisper
 
         model_name = os.getenv("WHISPER_MODEL", "turbo")
-        print(f"[Whisper] Loading model: {model_name}")
+        print(f"[WhisperFallback] Loading local model: {model_name}")
         _whisper_model = whisper.load_model(model_name)
     return _whisper_model
 
 
-def do_transcribe_audio(vocals_path: str, session_id: str, language: str = "fr") -> dict:
-    """
-    Core logic: Transcribe vocals to text using Whisper.
+def _transcribe_via_http(vocals_path: str, language: str = "fr") -> dict:
+    """Transcribe via shared-whisper HTTP microservice."""
+    import httpx
 
-    Args:
-        vocals_path: Path to vocals audio file
-        session_id: Session identifier
-        language: Language code (default: French)
+    print(f"[SharedWhisper] Transcribing via {SHARED_WHISPER_URL}: {vocals_path}")
 
-    Returns:
-        dict with transcription data
-    """
-    print(f"[Whisper] Transcribing: {vocals_path}")
+    with open(vocals_path, "rb") as f:
+        response = httpx.post(
+            f"{SHARED_WHISPER_URL}/asr",
+            params={
+                "language": language,
+                "output": "json",
+                "task": "transcribe",
+                "word_timestamps": "true",
+            },
+            files={"audio_file": (os.path.basename(vocals_path), f, "audio/mpeg")},
+            timeout=SHARED_WHISPER_TIMEOUT,
+        )
+
+    response.raise_for_status()
+    data = response.json()
+
+    # Extract words from segments
+    words = []
+    for segment in data.get("segments", []):
+        for word_info in segment.get("words", []):
+            words.append({
+                "word": word_info.get("word", "").strip(),
+                "start": word_info.get("start", 0.0),
+                "end": word_info.get("end", 0.0),
+                "confidence": word_info.get("probability", 1.0),
+            })
+
+    return {
+        "text": data.get("text", ""),
+        "language": data.get("language", language),
+        "words": words,
+    }
+
+
+def _transcribe_via_local(vocals_path: str, language: str = "fr") -> dict:
+    """Fallback: local PyTorch Whisper transcription."""
+    print(f"[WhisperFallback] Processing locally: {vocals_path}")
 
     model = get_whisper_model()
-
-    # Transcribe with word-level timestamps
     result = model.transcribe(
         vocals_path,
         language=language,
@@ -47,7 +82,6 @@ def do_transcribe_audio(vocals_path: str, session_id: str, language: str = "fr")
         verbose=False,
     )
 
-    # Extract word-level data for alignment
     words = []
     for segment in result.get("segments", []):
         for word_info in segment.get("words", []):
@@ -58,24 +92,38 @@ def do_transcribe_audio(vocals_path: str, session_id: str, language: str = "fr")
                 "confidence": word_info.get("probability", 1.0),
             })
 
+    return {
+        "text": result["text"],
+        "language": result["language"],
+        "words": words,
+    }
+
+
+def do_transcribe_audio(vocals_path: str, session_id: str, language: str = "fr") -> dict:
+    """
+    Core logic: Transcribe vocals to text.
+    Primary: shared-whisper HTTP. Fallback: local PyTorch.
+    """
+    # Primary: shared-whisper HTTP
+    try:
+        data = _transcribe_via_http(vocals_path, language)
+    except Exception as e:
+        print(f"[SharedWhisper] HTTP failed ({e}), falling back to local")
+        data = _transcribe_via_local(vocals_path, language)
+
     # Save transcription
     output_dir = Path(vocals_path).parent
     transcription_path = output_dir / "transcription.json"
 
-    import json
     with open(transcription_path, "w", encoding="utf-8") as f:
-        json.dump({
-            "text": result["text"],
-            "language": result["language"],
-            "words": words,
-        }, f, ensure_ascii=False, indent=2)
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
-    print(f"[Whisper] Transcription complete: {result['text'][:100]}...")
+    print(f"[Whisper] Transcription complete: {data['text'][:100]}...")
 
     return {
         "session_id": session_id,
-        "text": result["text"],
-        "word_count": len(words),
+        "text": data["text"],
+        "word_count": len(data["words"]),
         "transcription_path": str(transcription_path),
         "status": "completed",
     }
@@ -83,9 +131,6 @@ def do_transcribe_audio(vocals_path: str, session_id: str, language: str = "fr")
 
 @shared_task(bind=True, name="tasks.transcription.transcribe_audio")
 def transcribe_audio(self, vocals_path: str, session_id: str, language: str = "fr") -> dict:
-    """
-    Celery task wrapper for transcription.
-    """
-    self.update_state(state="PROGRESS", meta={"step": "loading_model"})
-    result = do_transcribe_audio(vocals_path, session_id, language)
-    return result
+    """Celery task wrapper for transcription."""
+    self.update_state(state="PROGRESS", meta={"step": "transcribing"})
+    return do_transcribe_audio(vocals_path, session_id, language)

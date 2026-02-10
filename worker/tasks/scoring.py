@@ -19,7 +19,8 @@ import librosa
 from jiwer import wer
 
 
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11435")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:4b")
 
 
 def do_generate_feedback(
@@ -430,7 +431,7 @@ Réponds UNIQUEMENT avec le commentaire, sans préfixe."""
             response = httpx.post(
                 f"{OLLAMA_HOST}/api/generate",
                 json={
-                    "model": "llama3.2:3b",  # Llama 3.2 3B model
+                    "model": OLLAMA_MODEL,
                     "prompt": prompt,
                     "stream": False,
                     "options": {

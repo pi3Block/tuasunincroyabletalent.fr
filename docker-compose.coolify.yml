@@ -44,7 +44,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://voicejury:${POSTGRES_PASSWORD:-voicejury_secret}@postgres:5432/voicejury
       - REDIS_URL=redis://redis:6379/0
-      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11435}
       - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}
       - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
       - GENIUS_API_TOKEN=${GENIUS_API_TOKEN:-}
@@ -75,10 +75,11 @@ services:
       start_period: 40s
 
   # ============================================
-  # Worker Heavy - GPU haute VRAM (Demucs, Whisper)
+  # Worker Heavy - GPU (Demucs, CREPE, Whisper fallback)
   # ============================================
-  # Dedicated worker for heavy tasks on best GPU (RTX 3080 10GB)
-  # Listens to gpu-heavy (priority) AND gpu (fallback when idle)
+  # Dedicated worker on RTX 3080 (10 Go, GPU-bdb1f5e4)
+  # Whisper via shared-whisper HTTP, Demucs + CREPE local
+  # Ollama via light instance on host (:11435, qwen3:4b)
   worker-heavy:
     build:
       context: ./worker
@@ -90,18 +91,21 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql://voicejury:${POSTGRES_PASSWORD:-voicejury_secret}@postgres:5432/voicejury
-      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11435}
+      - SHARED_WHISPER_URL=${SHARED_WHISPER_URL:-http://shared-whisper:9000}
       - WHISPER_MODEL=${WHISPER_MODEL:-turbo}
+      - CUDA_VISIBLE_DEVICES=0
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    runtime: nvidia
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ['1']
-              capabilities: [gpu, compute, utility]
+              device_ids: ['GPU-bdb1f5e4-d03c-b5c1-bb9c-59f3d08d161d']
+              capabilities: [gpu]
+        limits:
+          memory: 6G
     depends_on:
       redis:
         condition: service_healthy
@@ -110,6 +114,7 @@ services:
     restart: unless-stopped
     networks:
       - voicejury-network
+      - coolify
 
   # ============================================
   # Worker Pool - GPU secondaire (optionnel)
@@ -128,18 +133,18 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql://voicejury:${POSTGRES_PASSWORD:-voicejury_secret}@postgres:5432/voicejury
-      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11435}
+      - SHARED_WHISPER_URL=${SHARED_WHISPER_URL:-http://shared-whisper:9000}
       - WHISPER_MODEL=${WHISPER_MODEL:-turbo}
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    runtime: nvidia
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ['0']
-              capabilities: [gpu, compute, utility]
+              device_ids: ['GPU-bdb1f5e4-d03c-b5c1-bb9c-59f3d08d161d']
+              capabilities: [gpu]
     profiles:
       - multi-gpu
     depends_on:
