@@ -10,6 +10,11 @@
 # - Redis: uses augmenter-redis (redis:7-alpine)
 #   DB index 2 (broker), DB index 7 (results)
 # - Both accessed via coolify network DNS
+#
+# BUILD OPTIMIZATION:
+# - .dockerignore in each service dir (reduces context by ~200MB)
+# - Worker uses gpu-worker-base shared image (~2min vs ~15min)
+# - BuildKit cache mounts for npm/pip
 
 services:
   # ============================================
@@ -82,10 +87,11 @@ services:
   # Dedicated worker on RTX 3080 (10 Go, GPU-bdb1f5e4)
   # Whisper via shared-whisper HTTP, Demucs + CREPE local
   # Ollama via light instance on host (:11435, qwen3:4b)
+  # Uses gpu-worker-base shared image for fast builds (~2min vs ~15min)
   worker-heavy:
     build:
       context: ./worker
-      dockerfile: Dockerfile.prod
+      dockerfile: Dockerfile.optimized
     command: ["celery", "-A", "tasks.celery_app", "worker", "--loglevel=info", "--pool=solo", "-Q", "gpu-heavy,gpu", "-n", "heavy@%h"]
     volumes:
       - audio-data:/app/audio_files
@@ -122,7 +128,7 @@ services:
   worker-pool:
     build:
       context: ./worker
-      dockerfile: Dockerfile.prod
+      dockerfile: Dockerfile.optimized
     command: ["celery", "-A", "tasks.celery_app", "worker", "--loglevel=info", "--pool=solo", "-Q", "gpu", "-n", "pool@%h"]
     volumes:
       - audio-data:/app/audio_files
