@@ -6,7 +6,7 @@
 #
 # SHARED INFRASTRUCTURE (2026-02-11):
 # - PostgreSQL: uses augmenter-db (pgvector/pgvector:pg16)
-#   Database: voicejury, User: voicejury
+#   Database: voicejury_db, User: augmenter (shared superuser)
 # - Redis: uses augmenter-redis (redis:7-alpine)
 #   DB index 2 (broker), DB index 7 (results)
 # - Both accessed via coolify network DNS
@@ -54,7 +54,7 @@ services:
     volumes:
       - audio-data:/app/audio_files
     environment:
-      - DATABASE_URL=postgresql://voicejury:${POSTGRES_PASSWORD:-voicejury_secret}@augmenter-db-d80w4sgsw4sk4c00cw80ggw8:5432/voicejury
+      - DATABASE_URL=postgresql://augmenter:${AUGMENTER_DB_PASSWORD}@augmenter-db-d80w4sgsw4sk4c00cw80ggw8:5432/voicejury_db
       - REDIS_URL=redis://:${AUGMENTER_REDIS_PASSWORD}@augmenter-redis-d80w4sgsw4sk4c00cw80ggw8:6379/2
       - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11435}
       - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}
@@ -98,7 +98,7 @@ services:
       - model-cache:/root/.cache
     environment:
       - REDIS_URL=redis://:${AUGMENTER_REDIS_PASSWORD}@augmenter-redis-d80w4sgsw4sk4c00cw80ggw8:6379/2
-      - DATABASE_URL=postgresql://voicejury:${POSTGRES_PASSWORD:-voicejury_secret}@augmenter-db-d80w4sgsw4sk4c00cw80ggw8:5432/voicejury
+      - DATABASE_URL=postgresql://augmenter:${AUGMENTER_DB_PASSWORD}@augmenter-db-d80w4sgsw4sk4c00cw80ggw8:5432/voicejury_db
       - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11435}
       - SHARED_WHISPER_URL=${SHARED_WHISPER_URL:-http://shared-whisper:9000}
       - WHISPER_MODEL=${WHISPER_MODEL:-turbo}
@@ -135,7 +135,7 @@ services:
       - model-cache:/root/.cache
     environment:
       - REDIS_URL=redis://:${AUGMENTER_REDIS_PASSWORD}@augmenter-redis-d80w4sgsw4sk4c00cw80ggw8:6379/2
-      - DATABASE_URL=postgresql://voicejury:${POSTGRES_PASSWORD:-voicejury_secret}@augmenter-db-d80w4sgsw4sk4c00cw80ggw8:5432/voicejury
+      - DATABASE_URL=postgresql://augmenter:${AUGMENTER_DB_PASSWORD}@augmenter-db-d80w4sgsw4sk4c00cw80ggw8:5432/voicejury_db
       - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11435}
       - SHARED_WHISPER_URL=${SHARED_WHISPER_URL:-http://shared-whisper:9000}
       - WHISPER_MODEL=${WHISPER_MODEL:-turbo}
