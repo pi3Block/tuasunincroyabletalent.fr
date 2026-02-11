@@ -3,6 +3,13 @@
 # ===========================================
 # Single self-contained file for Coolify deployment
 # GPU NVIDIA required for worker service
+#
+# SHARED INFRASTRUCTURE (2026-02-11):
+# - PostgreSQL: uses augmenter-db (pgvector/pgvector:pg16)
+#   Database: voicejury, User: voicejury
+# - Redis: uses augmenter-redis (redis:7-alpine)
+#   DB index 2 (broker), DB index 7 (results)
+# - Both accessed via coolify network DNS
 
 services:
   # ============================================
@@ -42,8 +49,8 @@ services:
     volumes:
       - audio-data:/app/audio_files
     environment:
-      - DATABASE_URL=postgresql://voicejury:${POSTGRES_PASSWORD:-voicejury_secret}@postgres:5432/voicejury
-      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://voicejury:${POSTGRES_PASSWORD:-voicejury_secret}@augmenter-db-d80w4sgsw4sk4c00cw80ggw8:5432/voicejury
+      - REDIS_URL=redis://:${AUGMENTER_REDIS_PASSWORD}@augmenter-redis-d80w4sgsw4sk4c00cw80ggw8:6379/2
       - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11435}
       - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}
       - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
@@ -52,11 +59,6 @@ services:
       - DEBUG=false
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
     restart: unless-stopped
     networks:
       - voicejury-network
@@ -89,8 +91,8 @@ services:
       - audio-data:/app/audio_files
       - model-cache:/root/.cache
     environment:
-      - REDIS_URL=redis://redis:6379/0
-      - DATABASE_URL=postgresql://voicejury:${POSTGRES_PASSWORD:-voicejury_secret}@postgres:5432/voicejury
+      - REDIS_URL=redis://:${AUGMENTER_REDIS_PASSWORD}@augmenter-redis-d80w4sgsw4sk4c00cw80ggw8:6379/2
+      - DATABASE_URL=postgresql://voicejury:${POSTGRES_PASSWORD:-voicejury_secret}@augmenter-db-d80w4sgsw4sk4c00cw80ggw8:5432/voicejury
       - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11435}
       - SHARED_WHISPER_URL=${SHARED_WHISPER_URL:-http://shared-whisper:9000}
       - WHISPER_MODEL=${WHISPER_MODEL:-turbo}
@@ -106,11 +108,6 @@ services:
               capabilities: [gpu]
         limits:
           memory: 6G
-    depends_on:
-      redis:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
     restart: unless-stopped
     networks:
       - voicejury-network
@@ -131,8 +128,8 @@ services:
       - audio-data:/app/audio_files
       - model-cache:/root/.cache
     environment:
-      - REDIS_URL=redis://redis:6379/0
-      - DATABASE_URL=postgresql://voicejury:${POSTGRES_PASSWORD:-voicejury_secret}@postgres:5432/voicejury
+      - REDIS_URL=redis://:${AUGMENTER_REDIS_PASSWORD}@augmenter-redis-d80w4sgsw4sk4c00cw80ggw8:6379/2
+      - DATABASE_URL=postgresql://voicejury:${POSTGRES_PASSWORD:-voicejury_secret}@augmenter-db-d80w4sgsw4sk4c00cw80ggw8:5432/voicejury
       - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11435}
       - SHARED_WHISPER_URL=${SHARED_WHISPER_URL:-http://shared-whisper:9000}
       - WHISPER_MODEL=${WHISPER_MODEL:-turbo}
@@ -147,57 +144,15 @@ services:
               capabilities: [gpu]
     profiles:
       - multi-gpu
-    depends_on:
-      redis:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
     restart: unless-stopped
     networks:
       - voicejury-network
-
-  # ============================================
-  # PostgreSQL - Database
-  # ============================================
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      - POSTGRES_USER=voicejury
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-voicejury_secret}
-      - POSTGRES_DB=voicejury
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U voicejury"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-    networks:
-      - voicejury-network
-
-  # ============================================
-  # Redis - Cache + Message Queue
-  # ============================================
-  redis:
-    image: redis:7-alpine
-    volumes:
-      - redis-data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-    networks:
-      - voicejury-network
+      - coolify
 
 # ============================================
 # Volumes (Persistent Data)
 # ============================================
 volumes:
-  postgres-data:
-  redis-data:
   audio-data:
   model-cache:
 
