@@ -84,7 +84,7 @@ services:
   # ============================================
   # Worker Heavy - GPU (Demucs, CREPE, Whisper fallback)
   # ============================================
-  # Dedicated worker on RTX 3080 (10 Go, GPU-bdb1f5e4)
+  # Dedicated worker on RTX 3070 (8 Go, GPU-85c38fae, GPU 0)
   # Whisper via shared-whisper HTTP, Demucs + CREPE local
   # Ollama via light instance on host (:11435, qwen3:4b)
   # Uses gpu-worker-base shared image for fast builds (~2min vs ~15min)
@@ -103,6 +103,12 @@ services:
       - SHARED_WHISPER_URL=${SHARED_WHISPER_URL:-http://shared-whisper:9000}
       - WHISPER_MODEL=${WHISPER_MODEL:-turbo}
       - CUDA_VISIBLE_DEVICES=0
+      # Langfuse tracing (shared with augmenter.pro)
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
+      - LANGFUSE_BASE_URL=http://langfuse-d80w4sgsw4sk4c00cw80ggw8:3000
+      # LiteLLM proxy fallback for jury generation
+      - LITELLM_HOST=${LITELLM_HOST:-http://host.docker.internal:4000}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     deploy:
@@ -110,7 +116,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ['GPU-bdb1f5e4-d03c-b5c1-bb9c-59f3d08d161d']
+              device_ids: ['GPU-85c38fae-1bcf-d15b-4f36-e1f581acd76e']
               capabilities: [gpu]
         limits:
           memory: 6G
@@ -146,7 +152,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ['GPU-bdb1f5e4-d03c-b5c1-bb9c-59f3d08d161d']
+              device_ids: ['GPU-85c38fae-1bcf-d15b-4f36-e1f581acd76e']
               capabilities: [gpu]
     profiles:
       - multi-gpu

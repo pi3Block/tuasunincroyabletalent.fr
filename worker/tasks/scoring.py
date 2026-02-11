@@ -6,21 +6,33 @@ Phase 1 - Scoring Avancé:
 - Pitch DTW (Dynamic Time Warping) pour alignement temporel
 - Rhythm Onset Detection via librosa
 - Lyrics WER (Word Error Rate) via jiwer
+
+Improvements (2026-02-11):
+- Parallel jury generation (asyncio.gather, 3x faster)
+- LLM fallback chain: Ollama → LiteLLM/Groq → heuristic
+- Langfuse tracing for all LLM calls
+- Structured logging (logging module)
 """
 import os
+import asyncio
 import json
+import time
+import logging
 from pathlib import Path
 from celery import shared_task
 import httpx
 import numpy as np
 from fastdtw import fastdtw
 from scipy.spatial.distance import euclidean
-import librosa
 from jiwer import wer
 
+from .tracing import trace_jury_comment, TracingSpan
+
+logger = logging.getLogger(__name__)
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11435")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:4b")
+LITELLM_HOST = os.getenv("LITELLM_HOST", "http://host.docker.internal:4000")
 
 
 def do_generate_feedback(
@@ -30,6 +42,7 @@ def do_generate_feedback(
     user_lyrics: str,
     reference_lyrics: str,
     song_title: str,
+    pipeline_span: TracingSpan = None,
 ) -> dict:
     """
     Core logic: Generate final scores and jury feedback.
@@ -41,11 +54,12 @@ def do_generate_feedback(
         user_lyrics: Transcribed user lyrics
         reference_lyrics: Original song lyrics
         song_title: Name of the song
+        pipeline_span: Optional Langfuse pipeline trace for child spans
 
     Returns:
         dict with scores and jury comments
     """
-    print(f"[Scoring] Calculating scores for session {session_id}")
+    logger.info("Calculating scores for session %s", session_id)
 
     # Load pitch data
     user_pitch = np.load(user_pitch_path)
@@ -75,16 +89,19 @@ def do_generate_feedback(
         lyrics_accuracy * 0.3
     )
 
-    print(f"[Scoring] Scores: pitch={pitch_accuracy}, rhythm={rhythm_accuracy}, "
-          f"lyrics={lyrics_accuracy}, overall={overall_score}")
+    logger.info(
+        "Scores: pitch=%.1f, rhythm=%.1f, lyrics=%.1f, overall=%d",
+        pitch_accuracy, rhythm_accuracy, lyrics_accuracy, overall_score,
+    )
 
-    # Generate jury comments via Ollama
+    # Generate jury comments via Ollama (parallel, with fallback)
     jury_comments = generate_jury_comments(
         song_title=song_title,
         overall_score=overall_score,
         pitch_accuracy=pitch_accuracy,
         rhythm_accuracy=rhythm_accuracy,
         lyrics_accuracy=lyrics_accuracy,
+        pipeline_span=pipeline_span,
     )
 
     # Save results
@@ -103,7 +120,7 @@ def do_generate_feedback(
     with open(results_path, "w", encoding="utf-8") as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
 
-    print(f"[Scoring] Results saved to {results_path}")
+    logger.info("Results saved to %s", results_path)
 
     return results
 
@@ -149,7 +166,7 @@ def calculate_pitch_accuracy(user_freq: np.ndarray, ref_freq: np.ndarray) -> flo
 
     # Need minimum samples for meaningful comparison
     if len(user_voiced) < 10 or len(ref_voiced) < 10:
-        print("[Scoring] Not enough voiced samples for pitch comparison")
+        logger.debug("Not enough voiced samples for pitch comparison")
         return 50.0
 
     # Convert to cents (logarithmic scale, semitone = 100 cents)
@@ -166,7 +183,7 @@ def calculate_pitch_accuracy(user_freq: np.ndarray, ref_freq: np.ndarray) -> flo
             dist=euclidean
         )
     except Exception as e:
-        print(f"[Scoring] DTW error: {e}")
+        logger.warning("DTW error: %s", e)
         return 50.0
 
     # Normalize by path length to get average cents difference
@@ -179,7 +196,7 @@ def calculate_pitch_accuracy(user_freq: np.ndarray, ref_freq: np.ndarray) -> flo
     # 200 cents diff (whole tone) = 0 points
     score = max(0, 100 - avg_distance / 2)
 
-    print(f"[Scoring] Pitch DTW: avg_distance={avg_distance:.1f} cents, score={score:.1f}")
+    logger.debug("Pitch DTW: avg_distance=%.1f cents, score=%.1f", avg_distance, score)
     return round(score, 1)
 
 
@@ -202,6 +219,8 @@ def calculate_rhythm_accuracy_from_audio(
     Returns:
         Score 0-100 where 100 = perfect timing
     """
+    import librosa
+
     # Ensure mono audio
     if user_audio.ndim > 1:
         user_audio = user_audio.mean(axis=0)
@@ -223,11 +242,11 @@ def calculate_rhythm_accuracy_from_audio(
             backtrack=True
         )
     except Exception as e:
-        print(f"[Scoring] Onset detection error: {e}")
+        logger.warning("Onset detection error: %s", e)
         return 50.0
 
     if len(user_onsets) == 0 or len(ref_onsets) == 0:
-        print("[Scoring] No onsets detected for rhythm analysis")
+        logger.debug("No onsets detected for rhythm analysis")
         return 50.0
 
     # For each user onset, find closest reference onset
@@ -246,8 +265,10 @@ def calculate_rhythm_accuracy_from_audio(
     # 200ms error = 0 points (badly off-beat)
     score = max(0, 100 - avg_error_ms / 2)
 
-    print(f"[Scoring] Rhythm: {len(user_onsets)} onsets, "
-          f"avg_error={avg_error_ms:.1f}ms, score={score:.1f}")
+    logger.debug(
+        "Rhythm: %d onsets, avg_error=%.1fms, score=%.1f",
+        len(user_onsets), avg_error_ms, score,
+    )
     return round(score, 1)
 
 
@@ -285,7 +306,7 @@ def calculate_rhythm_accuracy(
     ref_onsets = get_voice_onsets(ref_freq, ref_time)
 
     if len(user_onsets) == 0 or len(ref_onsets) == 0:
-        print("[Scoring] No voice onsets detected for rhythm analysis")
+        logger.debug("No voice onsets detected for rhythm analysis")
         return 50.0
 
     # Match user onsets to closest reference onsets
@@ -300,8 +321,10 @@ def calculate_rhythm_accuracy(
     # Same scoring curve as audio-based method
     score = max(0, 100 - avg_error_ms / 2)
 
-    print(f"[Scoring] Rhythm (pitch-based): {len(user_onsets)} onsets, "
-          f"avg_error={avg_error_ms:.1f}ms, score={score:.1f}")
+    logger.debug(
+        "Rhythm (pitch-based): %d onsets, avg_error=%.1fms, score=%.1f",
+        len(user_onsets), avg_error_ms, score,
+    )
     return round(score, 1)
 
 
@@ -325,12 +348,12 @@ def calculate_lyrics_accuracy(user_lyrics: str, ref_lyrics: str) -> float:
 
     # Handle missing reference lyrics
     if not ref_clean:
-        print("[Scoring] No reference lyrics available, using neutral score")
+        logger.debug("No reference lyrics available, using neutral score")
         return 50.0
 
     # Handle empty user transcription
     if not user_clean:
-        print("[Scoring] No user lyrics detected")
+        logger.debug("No user lyrics detected")
         return 0.0
 
     # Calculate Word Error Rate
@@ -338,7 +361,7 @@ def calculate_lyrics_accuracy(user_lyrics: str, ref_lyrics: str) -> float:
     try:
         error_rate = wer(ref_clean, user_clean)
     except Exception as e:
-        print(f"[Scoring] WER calculation error: {e}")
+        logger.warning("WER calculation error: %s", e)
         # Fallback to simple word overlap
         return _calculate_lyrics_overlap(user_clean, ref_clean)
 
@@ -348,7 +371,7 @@ def calculate_lyrics_accuracy(user_lyrics: str, ref_lyrics: str) -> float:
     # WER of 1+ = 0 points (completely wrong)
     score = max(0, (1 - error_rate) * 100)
 
-    print(f"[Scoring] Lyrics WER: {error_rate:.2f}, score={score:.1f}")
+    logger.debug("Lyrics WER: %.2f, score=%.1f", error_rate, score)
     return round(score, 1)
 
 
@@ -366,31 +389,35 @@ def _calculate_lyrics_overlap(user_lyrics: str, ref_lyrics: str) -> float:
     return round(min(100, accuracy), 1)
 
 
-def generate_jury_comments(
+# =============================================================================
+# JURY GENERATION — PARALLEL + FALLBACK + TRACING
+# =============================================================================
+
+JURY_PERSONAS = [
+    {
+        "name": "Le Cassant",
+        "style": "impitoyable mais juste, utilise des métaphores drôles et cinglantes",
+    },
+    {
+        "name": "L'Encourageant",
+        "style": "bienveillant, trouve toujours du positif même dans les pires performances",
+    },
+    {
+        "name": "Le Technique",
+        "style": "précis et analytique, parle de technique vocale",
+    },
+]
+
+
+def _build_jury_prompt(
+    persona: dict,
     song_title: str,
     overall_score: int,
     pitch_accuracy: float,
     rhythm_accuracy: float,
     lyrics_accuracy: float,
-) -> list[dict]:
-    """Generate jury AI comments using Ollama."""
-
-    personas = [
-        {
-            "name": "Le Cassant",
-            "style": "impitoyable mais juste, utilise des métaphores drôles et cinglantes",
-        },
-        {
-            "name": "L'Encourageant",
-            "style": "bienveillant, trouve toujours du positif même dans les pires performances",
-        },
-        {
-            "name": "Le Technique",
-            "style": "précis et analytique, parle de technique vocale",
-        },
-    ]
-
-    # Determine main issues
+) -> str:
+    """Build the LLM prompt for a jury persona."""
     issues = []
     strengths = []
 
@@ -409,10 +436,7 @@ def generate_jury_comments(
     elif lyrics_accuracy > 80:
         strengths.append("Connaissance des paroles")
 
-    comments = []
-
-    for persona in personas:
-        prompt = f"""Tu es "{persona['name']}", un jury d'un concours de chant type "Incroyable Talent".
+    return f"""Tu es "{persona['name']}", un jury d'un concours de chant type "Incroyable Talent".
 Style: {persona['style']}
 
 CONTEXTE:
@@ -427,8 +451,54 @@ CONTEXTE:
 TÂCHE: Écris UN commentaire de 2-3 phrases pour le candidat. Sois fidèle à ton personnage.
 Réponds UNIQUEMENT avec le commentaire, sans préfixe."""
 
+
+def _get_vote(persona_name: str, overall_score: int) -> str:
+    """Determine vote based on score and persona personality."""
+    if persona_name == "Le Cassant":
+        return "yes" if overall_score >= 70 else "no"
+    elif persona_name == "L'Encourageant":
+        return "yes" if overall_score >= 40 else "no"
+    else:
+        return "yes" if overall_score >= 55 else "no"
+
+
+def _heuristic_comment(persona_name: str, overall_score: int) -> str:
+    """Generate a heuristic comment when all LLM providers fail."""
+    if persona_name == "Le Cassant":
+        if overall_score >= 70:
+            return "Pas mal du tout ! Tu as du potentiel, mais ne te repose pas sur tes lauriers."
+        return "Il y a du travail... Beaucoup de travail. Mais au moins tu as eu le courage de monter sur scène."
+    elif persona_name == "L'Encourageant":
+        if overall_score >= 50:
+            return "Bravo pour cette prestation ! On sent que tu y as mis du cœur, continue comme ça !"
+        return "L'important c'est de participer ! Tu as osé et c'est déjà une victoire. Continue à travailler !"
+    else:
+        if overall_score >= 60:
+            return "Techniquement, il y a de bonnes bases. Travaille la justesse et le placement pour progresser."
+        return "Quelques points techniques à revoir : la justesse et le rythme nécessitent plus de travail."
+
+
+async def _generate_comment_async(
+    client: httpx.AsyncClient,
+    persona: dict,
+    prompt: str,
+    overall_score: int,
+    pipeline_span: TracingSpan = None,
+) -> dict:
+    """Generate a single jury comment with Ollama → LiteLLM → heuristic fallback."""
+    start = time.time()
+    model_used = OLLAMA_MODEL
+    comment = ""
+
+    with trace_jury_comment(
+        pipeline_span or TracingSpan(),
+        persona_name=persona["name"],
+        model=OLLAMA_MODEL,
+        prompt=prompt,
+    ) as gen:
         try:
-            response = httpx.post(
+            # Primary: Ollama Light
+            response = await client.post(
                 f"{OLLAMA_HOST}/api/generate",
                 json={
                     "model": OLLAMA_MODEL,
@@ -437,27 +507,126 @@ Réponds UNIQUEMENT avec le commentaire, sans préfixe."""
                     "options": {
                         "temperature": 0.8,
                         "top_p": 0.9,
+                        "num_predict": 300,
                     },
                 },
-                timeout=30.0,
+                timeout=20.0,
             )
             response.raise_for_status()
             comment = response.json().get("response", "").strip()
-        except Exception as e:
-            comment = f"[Erreur génération: {e}]"
+            if not comment:
+                raise ValueError("Empty response from Ollama")
 
-        # Determine vote based on score and persona
-        if persona["name"] == "Le Cassant":
-            vote = "yes" if overall_score >= 70 else "no"
-        elif persona["name"] == "L'Encourageant":
-            vote = "yes" if overall_score >= 40 else "no"
-        else:
-            vote = "yes" if overall_score >= 55 else "no"
+        except Exception as ollama_err:
+            logger.warning(
+                "Ollama failed for %s: %s, trying LiteLLM fallback",
+                persona["name"], ollama_err,
+            )
+            # Fallback: LiteLLM proxy (routes to Groq/OpenAI)
+            try:
+                import litellm
+                litellm_response = litellm.completion(
+                    model="groq/llama-3.1-8b-instant",
+                    messages=[{"role": "user", "content": prompt}],
+                    api_base=LITELLM_HOST,
+                    max_tokens=300,
+                    temperature=0.8,
+                )
+                comment = litellm_response.choices[0].message.content.strip()
+                model_used = "groq/llama-3.1-8b-instant"
+            except Exception as litellm_err:
+                logger.warning(
+                    "LiteLLM fallback also failed for %s: %s, using heuristic",
+                    persona["name"], litellm_err,
+                )
+                comment = _heuristic_comment(persona["name"], overall_score)
+                model_used = "heuristic"
 
-        comments.append({
-            "persona": persona["name"],
-            "comment": comment,
-            "vote": vote,
-        })
+        latency_ms = (time.time() - start) * 1000
+
+        gen.update(
+            output=comment,
+            model=model_used,
+            metadata={
+                "persona": persona["name"],
+                "latency_ms": round(latency_ms),
+            },
+        )
+
+    vote = _get_vote(persona["name"], overall_score)
+
+    logger.debug(
+        "Jury %s: model=%s, latency=%.0fms, vote=%s",
+        persona["name"], model_used, latency_ms, vote,
+    )
+
+    return {
+        "persona": persona["name"],
+        "comment": comment,
+        "vote": vote,
+        "model": model_used,
+        "latency_ms": round(latency_ms),
+    }
+
+
+async def _generate_all_comments_async(
+    song_title: str,
+    overall_score: int,
+    pitch_accuracy: float,
+    rhythm_accuracy: float,
+    lyrics_accuracy: float,
+    pipeline_span: TracingSpan = None,
+) -> list[dict]:
+    """Run all 3 jury LLM calls in parallel."""
+    async with httpx.AsyncClient() as client:
+        tasks = []
+        for persona in JURY_PERSONAS:
+            prompt = _build_jury_prompt(
+                persona, song_title, overall_score,
+                pitch_accuracy, rhythm_accuracy, lyrics_accuracy,
+            )
+            tasks.append(
+                _generate_comment_async(
+                    client, persona, prompt, overall_score, pipeline_span,
+                )
+            )
+        return await asyncio.gather(*tasks)
+
+
+def _cleanup_clients():
+    """Called by celery_app on worker shutdown."""
+    pass  # httpx.AsyncClient is context-managed, no persistent client to close
+
+
+def generate_jury_comments(
+    song_title: str,
+    overall_score: int,
+    pitch_accuracy: float,
+    rhythm_accuracy: float,
+    lyrics_accuracy: float,
+    pipeline_span: TracingSpan = None,
+) -> list[dict]:
+    """
+    Generate jury AI comments using Ollama (parallel, with fallback).
+
+    Runs 3 persona LLM calls concurrently via asyncio.gather.
+    Each call: Ollama Light → LiteLLM/Groq → heuristic fallback.
+    """
+    start = time.time()
+
+    comments = asyncio.run(
+        _generate_all_comments_async(
+            song_title, overall_score,
+            pitch_accuracy, rhythm_accuracy, lyrics_accuracy,
+            pipeline_span,
+        )
+    )
+
+    total_ms = (time.time() - start) * 1000
+    models_used = set(c.get("model", "unknown") for c in comments)
+    logger.info(
+        "Jury generation complete: %d comments, %.0fms total, models=%s",
+        len(comments), total_ms, models_used,
+    )
 
     return comments

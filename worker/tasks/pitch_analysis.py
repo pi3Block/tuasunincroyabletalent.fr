@@ -2,9 +2,12 @@
 Pitch analysis using torchcrepe (PyTorch-based CREPE).
 Extracts fundamental frequency (F0) from vocals.
 """
+import logging
 from pathlib import Path
 from celery import shared_task
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 def do_extract_pitch(vocals_path: str, session_id: str, fast_mode: bool = False) -> dict:
@@ -23,7 +26,7 @@ def do_extract_pitch(vocals_path: str, session_id: str, fast_mode: bool = False)
     import torchcrepe
     import torchaudio
 
-    print(f"[CREPE] Loading vocals: {vocals_path}")
+    logger.info("Loading vocals: %s", vocals_path)
 
     # Load audio with torchaudio
     audio, sample_rate = torchaudio.load(vocals_path)
@@ -41,7 +44,7 @@ def do_extract_pitch(vocals_path: str, session_id: str, fast_mode: bool = False)
     # Select device and log GPU status
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model_name = "tiny" if fast_mode else "full"
-    print(f"[CREPE] Extracting pitch (model={model_name}, device={device})...")
+    logger.info("Extracting pitch (model=%s, device=%s)...", model_name, device)
 
     audio = audio.to(device)
 
@@ -89,7 +92,7 @@ def do_extract_pitch(vocals_path: str, session_id: str, fast_mode: bool = False)
         "voiced_ratio": float(np.sum(frequency > 0) / len(frequency)),
     }
 
-    print(f"[CREPE] Pitch extraction complete: {pitch_path}")
+    logger.info("Pitch extraction complete: %s", pitch_path)
 
     return {
         "session_id": session_id,

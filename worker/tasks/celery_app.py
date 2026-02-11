@@ -1,9 +1,22 @@
 """
 Celery application configuration.
+
+Improvements (2026-02-11):
+- Structured logging (logging.basicConfig)
+- Langfuse flush + httpx client cleanup on worker shutdown
 """
 import os
+import logging
 from celery import Celery
-from celery.signals import worker_process_init
+from celery.signals import worker_process_init, worker_shutdown
+
+# Structured logging config
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 # Redis URL from environment
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
@@ -17,13 +30,37 @@ def _log_gpu_on_worker_init(**kwargs):
         if torch.cuda.is_available():
             name = torch.cuda.get_device_name(0)
             mem_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
-            print(f"[INIT] GPU: {name} ({mem_gb:.1f}GB)")
+            logger.info("GPU: %s (%.1fGB)", name, mem_gb)
         else:
-            print("[INIT] GPU: NOT AVAILABLE - running on CPU")
-        print(f"[INIT] PyTorch: {torch.__version__}, CUDA compiled: {torch.version.cuda}")
-        print(f"[INIT] CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES', 'not set')}")
+            logger.warning("GPU: NOT AVAILABLE - running on CPU")
+        logger.info(
+            "PyTorch: %s, CUDA compiled: %s, CUDA_VISIBLE_DEVICES=%s",
+            torch.__version__,
+            torch.version.cuda,
+            os.environ.get("CUDA_VISIBLE_DEVICES", "not set"),
+        )
     except Exception as e:
-        print(f"[INIT] GPU check failed: {e}")
+        logger.error("GPU check failed: %s", e)
+
+
+@worker_shutdown.connect
+def _cleanup_on_shutdown(**kwargs):
+    """Flush Langfuse traces and close HTTP clients on worker shutdown."""
+    logger.info("Worker shutting down — flushing traces and closing clients")
+
+    # Flush Langfuse
+    try:
+        from .tracing import flush_traces
+        flush_traces()
+    except Exception as e:
+        logger.debug("Langfuse flush on shutdown failed: %s", e)
+
+    # Close any httpx clients
+    try:
+        from .scoring import _cleanup_clients
+        _cleanup_clients()
+    except (ImportError, AttributeError):
+        pass
 
 
 celery_app = Celery(

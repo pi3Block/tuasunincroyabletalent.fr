@@ -4,8 +4,11 @@ Fetches lyrics from Genius API for comparison with user transcription.
 """
 import os
 import re
+import logging
 from typing import Optional
 import httpx
+
+logger = logging.getLogger(__name__)
 
 
 GENIUS_API_TOKEN = os.getenv("GENIUS_API_TOKEN", "")
@@ -27,7 +30,7 @@ def get_lyrics(artist: str, title: str) -> dict:
             - status: "found", "not_found", or "error"
     """
     if not GENIUS_API_TOKEN:
-        print("[Lyrics] No GENIUS_API_TOKEN configured")
+        logger.warning("No GENIUS_API_TOKEN configured")
         return {
             "text": "",
             "source": "none",
@@ -64,7 +67,7 @@ def get_lyrics(artist: str, title: str) -> dict:
         }
 
     except Exception as e:
-        print(f"[Lyrics] Error: {e}")
+        logger.error("Lyrics fetch error: %s", e)
         return {
             "text": "",
             "source": "none",
@@ -120,7 +123,7 @@ def _search_song(artist: str, title: str) -> Optional[dict]:
         }
 
     except Exception as e:
-        print(f"[Lyrics] Search error: {e}")
+        logger.warning("Lyrics search error: %s", e)
         return None
 
 
@@ -179,11 +182,11 @@ def _scrape_lyrics(url: str) -> Optional[str]:
                 lyrics = '\n'.join(lyrics_parts)
                 return _clean_lyrics(lyrics)
 
-        print("[Lyrics] Could not find lyrics in page")
+        logger.debug("Could not find lyrics in page")
         return None
 
     except Exception as e:
-        print(f"[Lyrics] Scrape error: {e}")
+        logger.warning("Lyrics scrape error: %s", e)
         return None
 
 

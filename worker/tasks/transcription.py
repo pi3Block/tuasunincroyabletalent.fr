@@ -7,8 +7,11 @@ Fallback: Local PyTorch Whisper (if shared-whisper is down)
 """
 import os
 import json
+import logging
 from pathlib import Path
 from celery import shared_task
+
+logger = logging.getLogger(__name__)
 
 SHARED_WHISPER_URL = os.getenv("SHARED_WHISPER_URL", "http://shared-whisper:9000")
 SHARED_WHISPER_TIMEOUT = int(os.getenv("SHARED_WHISPER_TIMEOUT", "120"))
@@ -24,7 +27,7 @@ def get_whisper_model():
         import whisper
 
         model_name = os.getenv("WHISPER_MODEL", "turbo")
-        print(f"[WhisperFallback] Loading local model: {model_name}")
+        logger.info("Loading local Whisper model: %s", model_name)
         _whisper_model = whisper.load_model(model_name)
     return _whisper_model
 
@@ -33,7 +36,7 @@ def _transcribe_via_http(vocals_path: str, language: str = "fr") -> dict:
     """Transcribe via shared-whisper HTTP microservice."""
     import httpx
 
-    print(f"[SharedWhisper] Transcribing via {SHARED_WHISPER_URL}: {vocals_path}")
+    logger.info("Transcribing via %s: %s", SHARED_WHISPER_URL, vocals_path)
 
     with open(vocals_path, "rb") as f:
         response = httpx.post(
@@ -71,7 +74,7 @@ def _transcribe_via_http(vocals_path: str, language: str = "fr") -> dict:
 
 def _transcribe_via_local(vocals_path: str, language: str = "fr") -> dict:
     """Fallback: local PyTorch Whisper transcription."""
-    print(f"[WhisperFallback] Processing locally: {vocals_path}")
+    logger.info("Processing locally: %s", vocals_path)
 
     model = get_whisper_model()
     result = model.transcribe(
@@ -108,7 +111,7 @@ def do_transcribe_audio(vocals_path: str, session_id: str, language: str = "fr")
     try:
         data = _transcribe_via_http(vocals_path, language)
     except Exception as e:
-        print(f"[SharedWhisper] HTTP failed ({e}), falling back to local")
+        logger.warning("Shared-whisper HTTP failed (%s), falling back to local", e)
         data = _transcribe_via_local(vocals_path, language)
 
     # Save transcription
@@ -118,7 +121,7 @@ def do_transcribe_audio(vocals_path: str, session_id: str, language: str = "fr")
     with open(transcription_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-    print(f"[Whisper] Transcription complete: {data['text'][:100]}...")
+    logger.info("Transcription complete: %s...", data["text"][:100])
 
     return {
         "session_id": session_id,

@@ -6,12 +6,21 @@ Performance optimizations:
 - Cache reference separation by YouTube video ID (2min saved per repeated song)
 - Use smaller CREPE model (tiny vs medium)
 - Parallelize user separation + ref check
+
+Improvements (2026-02-11):
+- Langfuse pipeline tracing (parent trace + child spans per step)
+- Structured logging (logging module)
 """
 import os
 import json
+import logging
 import shutil
 from pathlib import Path
 from celery import shared_task
+
+from .tracing import trace_pipeline, flush_traces, TracingSpan
+
+logger = logging.getLogger(__name__)
 
 
 def update_progress(task, step: str, progress: int, detail: str = ""):
@@ -70,11 +79,10 @@ def log_gpu_status():
         device_name = torch.cuda.get_device_name(0)
         mem_allocated = torch.cuda.memory_allocated(0) / 1024**3
         mem_total = torch.cuda.get_device_properties(0).total_memory / 1024**3
-        print(f"[GPU] ✓ CUDA available: {device_name}")
-        print(f"[GPU] Memory: {mem_allocated:.1f}GB / {mem_total:.1f}GB")
+        logger.info("GPU: %s (%.1fGB / %.1fGB)", device_name, mem_allocated, mem_total)
         return True
     else:
-        print("[GPU] ✗ CUDA NOT available - running on CPU (SLOW!)")
+        logger.warning("CUDA NOT available - running on CPU (SLOW!)")
         return False
 
 
@@ -125,99 +133,115 @@ def analyze_performance(
     has_gpu = log_gpu_status()
 
     # ============================================
-    # STEP 1: Separate user audio (Demucs)
+    # LANGFUSE PIPELINE TRACE
     # ============================================
-    update_progress(self, "loading_model", 5, "Chargement du modele Demucs...")
-
-    update_progress(self, "separating_user", 10, "Isolation de ta voix...")
-    user_separation = do_separate_audio(user_audio_path, f"{session_id}_user")
-    update_progress(self, "separating_user_done", 20, "Voix isolee !")
-
-    # ============================================
-    # STEP 2: Separate reference audio (with CACHE)
-    # ============================================
-    ref_vocals_path = None
-    ref_instrumentals_path = None
-
-    # Check cache first (by YouTube video ID)
-    if youtube_id and is_ref_separation_cached(youtube_id):
-        print(f"[Cache] ✓ Reference separation found in cache for {youtube_id}")
-        update_progress(self, "separating_reference_cached", 35, "Reference en cache !")
-        cached_paths = copy_cached_ref_to_session(youtube_id, session_id)
-        ref_vocals_path = cached_paths["vocals_path"]
-        ref_instrumentals_path = cached_paths["instrumentals_path"]
-    else:
-        # No cache - need to separate
-        print(f"[Cache] ✗ No cache for {youtube_id}, separating reference...")
-        update_progress(self, "separating_reference", 25, "Preparation de la reference...")
-        ref_separation = do_separate_audio(reference_audio_path, f"{session_id}_ref")
-        ref_vocals_path = ref_separation["vocals_path"]
-        ref_instrumentals_path = ref_separation["instrumentals_path"]
-
-        # Save to cache for future sessions
-        if youtube_id:
-            cache_dir = get_ref_cache_dir(youtube_id)
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(ref_vocals_path, cache_dir / "vocals.wav")
-            shutil.copy2(ref_instrumentals_path, cache_dir / "instrumentals.wav")
-            print(f"[Cache] Saved reference separation to cache: {youtube_id}")
-
-        update_progress(self, "separating_reference_done", 35, "Reference prete !")
-
-    # ============================================
-    # STEP 3: Extract pitch (CREPE)
-    # Use 'full' model for user (accuracy matters)
-    # Use 'tiny' model for reference (speed matters, already cached)
-    # ============================================
-    update_progress(self, "extracting_pitch_user", 40, "Analyse de ta justesse...")
-    user_pitch = do_extract_pitch(user_separation["vocals_path"], f"{session_id}_user", fast_mode=False)
-
-    update_progress(self, "extracting_pitch_ref", 50, "Analyse de la reference...")
-    ref_pitch = do_extract_pitch(str(ref_vocals_path), f"{session_id}_ref", fast_mode=True)
-    update_progress(self, "extracting_pitch_done", 55, "Justesse analysee !")
-
-    # ============================================
-    # STEP 4: Transcribe vocals (Whisper)
-    # ============================================
-    update_progress(self, "transcribing", 60, "Transcription de tes paroles...")
-    transcription = do_transcribe_audio(user_separation["vocals_path"], session_id, "fr")
-    update_progress(self, "transcribing_done", 70, "Paroles transcrites !")
-
-    # ============================================
-    # STEP 5: Fetch reference lyrics (Genius)
-    # ============================================
-    update_progress(self, "fetching_lyrics", 75, "Recuperation des paroles officielles...")
-    lyrics_result = get_lyrics(artist_name, song_title)
-    reference_lyrics = lyrics_result.get("text", "")
-
-    if lyrics_result.get("status") == "found":
-        update_progress(self, "lyrics_found", 78, "Paroles trouvees !")
-        print(f"[Pipeline] Lyrics found from {lyrics_result.get('source')}")
-    else:
-        update_progress(self, "lyrics_not_found", 78, "Paroles non trouvees (score neutre)")
-        print(f"[Pipeline] Lyrics not found: {lyrics_result.get('status')}")
-
-    # ============================================
-    # STEP 6: Calculate scores
-    # ============================================
-    update_progress(self, "calculating_scores", 80, "Calcul des scores...")
-
-    # ============================================
-    # STEP 7: Generate jury feedback (Ollama)
-    # ============================================
-    update_progress(self, "jury_deliberation", 85, "Le jury se reunit...")
-
-    results = do_generate_feedback(
+    with trace_pipeline(
         session_id=session_id,
-        user_pitch_path=user_pitch["pitch_path"],
-        reference_pitch_path=ref_pitch["pitch_path"],
-        user_lyrics=transcription["text"],
-        reference_lyrics=reference_lyrics,
         song_title=song_title,
-    )
+        artist_name=artist_name,
+        has_gpu=has_gpu,
+        youtube_id=youtube_id,
+        task_id=self.request.id,
+    ) as pipeline_span:
 
-    update_progress(self, "jury_voting", 95, "Le jury vote...")
-    update_progress(self, "completed", 100, "Verdict rendu !")
+        # ============================================
+        # STEP 1: Separate user audio (Demucs)
+        # ============================================
+        update_progress(self, "loading_model", 5, "Chargement du modele Demucs...")
+
+        update_progress(self, "separating_user", 10, "Isolation de ta voix...")
+        user_separation = do_separate_audio(user_audio_path, f"{session_id}_user")
+        update_progress(self, "separating_user_done", 20, "Voix isolee !")
+
+        # ============================================
+        # STEP 2: Separate reference audio (with CACHE)
+        # ============================================
+        ref_vocals_path = None
+        ref_instrumentals_path = None
+
+        # Check cache first (by YouTube video ID)
+        if youtube_id and is_ref_separation_cached(youtube_id):
+            logger.info("Reference separation found in cache for %s", youtube_id)
+            update_progress(self, "separating_reference_cached", 35, "Reference en cache !")
+            cached_paths = copy_cached_ref_to_session(youtube_id, session_id)
+            ref_vocals_path = cached_paths["vocals_path"]
+            ref_instrumentals_path = cached_paths["instrumentals_path"]
+        else:
+            # No cache - need to separate
+            logger.info("No cache for %s, separating reference...", youtube_id)
+            update_progress(self, "separating_reference", 25, "Preparation de la reference...")
+            ref_separation = do_separate_audio(reference_audio_path, f"{session_id}_ref")
+            ref_vocals_path = ref_separation["vocals_path"]
+            ref_instrumentals_path = ref_separation["instrumentals_path"]
+
+            # Save to cache for future sessions
+            if youtube_id:
+                cache_dir = get_ref_cache_dir(youtube_id)
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(ref_vocals_path, cache_dir / "vocals.wav")
+                shutil.copy2(ref_instrumentals_path, cache_dir / "instrumentals.wav")
+                logger.info("Saved reference separation to cache: %s", youtube_id)
+
+            update_progress(self, "separating_reference_done", 35, "Reference prete !")
+
+        # ============================================
+        # STEP 3: Extract pitch (CREPE)
+        # Use 'full' model for user (accuracy matters)
+        # Use 'tiny' model for reference (speed matters, already cached)
+        # ============================================
+        update_progress(self, "extracting_pitch_user", 40, "Analyse de ta justesse...")
+        user_pitch = do_extract_pitch(user_separation["vocals_path"], f"{session_id}_user", fast_mode=False)
+
+        update_progress(self, "extracting_pitch_ref", 50, "Analyse de la reference...")
+        ref_pitch = do_extract_pitch(str(ref_vocals_path), f"{session_id}_ref", fast_mode=True)
+        update_progress(self, "extracting_pitch_done", 55, "Justesse analysee !")
+
+        # ============================================
+        # STEP 4: Transcribe vocals (Whisper)
+        # ============================================
+        update_progress(self, "transcribing", 60, "Transcription de tes paroles...")
+        transcription = do_transcribe_audio(user_separation["vocals_path"], session_id, "fr")
+        update_progress(self, "transcribing_done", 70, "Paroles transcrites !")
+
+        # ============================================
+        # STEP 5: Fetch reference lyrics (Genius)
+        # ============================================
+        update_progress(self, "fetching_lyrics", 75, "Recuperation des paroles officielles...")
+        lyrics_result = get_lyrics(artist_name, song_title)
+        reference_lyrics = lyrics_result.get("text", "")
+
+        if lyrics_result.get("status") == "found":
+            update_progress(self, "lyrics_found", 78, "Paroles trouvees !")
+            logger.info("Lyrics found from %s", lyrics_result.get("source"))
+        else:
+            update_progress(self, "lyrics_not_found", 78, "Paroles non trouvees (score neutre)")
+            logger.info("Lyrics not found: %s", lyrics_result.get("status"))
+
+        # ============================================
+        # STEP 6: Calculate scores
+        # ============================================
+        update_progress(self, "calculating_scores", 80, "Calcul des scores...")
+
+        # ============================================
+        # STEP 7: Generate jury feedback (Ollama — parallel)
+        # ============================================
+        update_progress(self, "jury_deliberation", 85, "Le jury se reunit...")
+
+        results = do_generate_feedback(
+            session_id=session_id,
+            user_pitch_path=user_pitch["pitch_path"],
+            reference_pitch_path=ref_pitch["pitch_path"],
+            user_lyrics=transcription["text"],
+            reference_lyrics=reference_lyrics,
+            song_title=song_title,
+            pipeline_span=pipeline_span,
+        )
+
+        update_progress(self, "jury_voting", 95, "Le jury vote...")
+        update_progress(self, "completed", 100, "Verdict rendu !")
+
+        # Flush Langfuse traces
+        flush_traces()
 
     # Return results directly (contains session_id, score, pitch_accuracy, etc.)
     # The frontend expects this flat structure, not nested under "results"

@@ -4,10 +4,13 @@ This avoids importing backend modules which aren't available in the worker conte
 """
 import os
 import json
+import logging
 from datetime import datetime, timedelta
 from typing import Any
 
 import psycopg2
+
+logger = logging.getLogger(__name__)
 from psycopg2.extras import RealDictCursor, Json
 
 
@@ -128,11 +131,11 @@ def store_word_timestamps(
         cursor.close()
         conn.close()
 
-        print(f"[WordTimestampsDB] Stored {word_count} words for {spotify_track_id}")
+        logger.info("Stored %d words for %s", word_count, spotify_track_id)
         return True
 
     except Exception as e:
-        print(f"[WordTimestampsDB] Error storing word timestamps: {e}")
+        logger.error("Error storing word timestamps: %s", e)
         return False
 
 
@@ -165,7 +168,7 @@ def check_word_timestamps_exists(
         return exists
 
     except Exception as e:
-        print(f"[WordTimestampsDB] Error checking existence: {e}")
+        logger.error("Error checking existence: %s", e)
         return False
 
 
@@ -202,7 +205,7 @@ def get_lyrics_for_alignment(
         conn.close()
 
         if not row:
-            print(f"[WordTimestampsDB] No lyrics found for {spotify_track_id}")
+            logger.info("No lyrics found for %s", spotify_track_id)
             return None, None
 
         lyrics_text = row.get("lyrics_text")
@@ -222,11 +225,11 @@ def get_lyrics_for_alignment(
                         if line.get("words") or line.get("text")
                     )
             except (json.JSONDecodeError, TypeError) as e:
-                print(f"[WordTimestampsDB] Error parsing synced_lines: {e}")
+                logger.warning("Error parsing synced_lines: %s", e)
 
-        print(f"[WordTimestampsDB] Found lyrics for {spotify_track_id}: {len(lyrics_text or '')} chars, sync_type={sync_type}")
+        logger.info("Found lyrics for %s: %d chars, sync_type=%s", spotify_track_id, len(lyrics_text or ''), sync_type)
         return lyrics_text, synced_lines
 
     except Exception as e:
-        print(f"[WordTimestampsDB] Error fetching lyrics: {e}")
+        logger.error("Error fetching lyrics: %s", e)
         return None, None

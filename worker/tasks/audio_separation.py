@@ -3,9 +3,12 @@ Audio source separation using Demucs.
 Separates vocals from instrumentals.
 """
 import os
+import logging
 import subprocess
 from pathlib import Path
 from celery import shared_task
+
+logger = logging.getLogger(__name__)
 
 # Lazy imports for GPU memory management
 _demucs_model = None
@@ -30,7 +33,7 @@ def convert_to_wav(input_path: Path, output_path: Path) -> Path:
     Convert audio file to WAV format using ffmpeg.
     Required for WebM/Opus files that torchaudio cannot read directly.
     """
-    print(f"[FFmpeg] Converting {input_path.suffix} to WAV...")
+    logger.info("Converting %s to WAV...", input_path.suffix)
     cmd = [
         "ffmpeg", "-y",  # Overwrite output
         "-i", str(input_path),
@@ -42,7 +45,7 @@ def convert_to_wav(input_path: Path, output_path: Path) -> Path:
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(f"FFmpeg conversion failed: {result.stderr}")
-    print(f"[FFmpeg] Conversion complete: {output_path}")
+    logger.info("Conversion complete: %s", output_path)
     return output_path
 
 
@@ -61,7 +64,7 @@ def do_separate_audio(audio_path: str, session_id: str) -> dict:
     import torchaudio
     from demucs.apply import apply_model
 
-    print(f"[Demucs] Loading audio: {audio_path}")
+    logger.info("Loading audio: %s", audio_path)
 
     audio_path = Path(audio_path)
 
@@ -89,7 +92,7 @@ def do_separate_audio(audio_path: str, session_id: str) -> dict:
     if torch.cuda.is_available():
         waveform = waveform.cuda()
 
-    print(f"[Demucs] Separating audio...")
+    logger.info("Separating audio...")
 
     # Apply Demucs model
     model = get_demucs_model()
@@ -110,7 +113,7 @@ def do_separate_audio(audio_path: str, session_id: str) -> dict:
     torchaudio.save(str(vocals_path), vocals.cpu(), 44100)
     torchaudio.save(str(instrumentals_path), instrumentals.cpu(), 44100)
 
-    print(f"[Demucs] Separation complete: {vocals_path}")
+    logger.info("Separation complete: %s", vocals_path)
 
     return {
         "session_id": session_id,

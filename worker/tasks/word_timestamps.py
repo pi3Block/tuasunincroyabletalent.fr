@@ -9,8 +9,11 @@ This task integrates with the caching system to avoid reprocessing:
 """
 import os
 import json
+import logging
 from pathlib import Path
 from celery import shared_task
+
+logger = logging.getLogger(__name__)
 
 # Lazy load models for GPU memory management
 _whisper_timestamped_model = None
@@ -28,7 +31,7 @@ def get_whisper_timestamped_model():
         import whisper_timestamped as whisper
 
         model_name = os.getenv("WHISPER_MODEL", "turbo")
-        print(f"[WhisperTimestamped] Loading model: {model_name}")
+        logger.info("Loading whisper-timestamped model: %s", model_name)
         _whisper_timestamped_model = whisper.load_model(model_name)
     return _whisper_timestamped_model
 
@@ -58,13 +61,13 @@ def transcribe_with_word_timestamps(
     """
     import whisper_timestamped as whisper
 
-    print(f"[WhisperTimestamped] Processing: {vocals_path}")
+    logger.info("Processing: %s", vocals_path)
 
     model = get_whisper_timestamped_model()
 
     # If we have lyrics, use them for forced alignment
     if lyrics_text:
-        print(f"[WhisperTimestamped] Using FORCED ALIGNMENT with provided lyrics ({len(lyrics_text)} chars)")
+        logger.info("Using FORCED ALIGNMENT with provided lyrics (%d chars)", len(lyrics_text))
 
         # Clean lyrics for alignment
         clean_lyrics = lyrics_text.strip()
@@ -91,7 +94,7 @@ def transcribe_with_word_timestamps(
             compression_ratio_threshold=2.4,
         )
     else:
-        print(f"[WhisperTimestamped] No lyrics provided, using FREE TRANSCRIPTION")
+        logger.info("No lyrics provided, using FREE TRANSCRIPTION")
 
         result = whisper.transcribe(
             model,
@@ -162,7 +165,7 @@ def transcribe_with_word_timestamps(
     # Get duration
     duration_ms = words[-1]["endMs"] if words else 0
 
-    print(f"[WhisperTimestamped] Transcribed {len(words)} words, avg confidence: {confidence_avg:.3f}")
+    logger.info("Transcribed %d words, avg confidence: %.3f", len(words), confidence_avg)
 
     return {
         "text": result.get("text", ""),
@@ -236,7 +239,7 @@ def do_generate_word_timestamps(
     with open(timestamps_path, "w", encoding="utf-8") as f:
         json.dump(output_data, f, ensure_ascii=False, indent=2)
 
-    print(f"[WhisperTimestamped] Saved to: {timestamps_path}")
+    logger.info("Saved to: %s", timestamps_path)
 
     return {
         "status": "completed",
@@ -356,7 +359,7 @@ def generate_word_timestamps_cached(
             "spotify_track_id": spotify_track_id,
         })
 
-        print(f"[WordTimestampsCached] Running Demucs separation...")
+        logger.info("Running Demucs separation...")
 
         # Load and prepare audio
         audio_path = Path(reference_path)
@@ -391,9 +394,9 @@ def generate_word_timestamps_cached(
         torchaudio.save(str(vocals_path), vocals.cpu(), 44100)
         torchaudio.save(str(instrumentals_path), instrumentals.cpu(), 44100)
 
-        print(f"[WordTimestampsCached] Demucs complete, saved to cache")
+        logger.info("Demucs complete, saved to cache")
     else:
-        print(f"[WordTimestampsCached] Using cached vocals: {vocals_path}")
+        logger.info("Using cached vocals: %s", vocals_path)
 
     # Step 2: Fetch existing lyrics for forced alignment
     self.update_state(state="PROGRESS", meta={
@@ -405,9 +408,9 @@ def generate_word_timestamps_cached(
 
     lyrics_text, synced_lines = get_lyrics_for_alignment(spotify_track_id)
     if lyrics_text:
-        print(f"[WordTimestampsCached] Found lyrics for forced alignment: {len(lyrics_text)} chars")
+        logger.info("Found lyrics for forced alignment: %d chars", len(lyrics_text))
     else:
-        print(f"[WordTimestampsCached] No lyrics found, will use free transcription")
+        logger.info("No lyrics found, will use free transcription")
 
     # Step 3: Generate word timestamps with forced alignment
     self.update_state(state="PROGRESS", meta={
@@ -450,14 +453,14 @@ def generate_word_timestamps_cached(
         )
 
         if success:
-            print(f"[WordTimestampsCached] Stored in PostgreSQL cache")
+            logger.info("Stored in PostgreSQL cache")
             result["cached_in_postgres"] = True
         else:
             result["cached_in_postgres"] = False
             result["cache_error"] = "Failed to store in PostgreSQL"
 
     except Exception as e:
-        print(f"[WordTimestampsCached] Failed to cache in PostgreSQL: {e}")
+        logger.warning("Failed to cache in PostgreSQL: %s", e)
         result["cached_in_postgres"] = False
         result["cache_error"] = str(e)
 
