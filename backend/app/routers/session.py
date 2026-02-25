@@ -458,6 +458,8 @@ async def get_analysis_status(session_id: str):
             "status": "completed",
             "results": task_result.result,
         })
+        # Persist to PostgreSQL for history
+        await _persist_results(session_id, session, task_result.result)
     elif task_result.status == "FAILURE":
         response["error"] = str(task_result.result)
         await redis_client.update_session(session_id, {
@@ -720,3 +722,43 @@ async def cleanup_lyrics_cache():
     """
     deleted = await lyrics_cache_service.cleanup_expired()
     return {"deleted": deleted, "status": "ok"}
+
+
+# ============================================
+# Persistent Results
+# ============================================
+
+async def _persist_results(session_id: str, session: dict, results: dict) -> None:
+    """Persist analysis results to PostgreSQL (fire-and-forget, errors logged)."""
+    try:
+        from app.services.database import get_db
+        from app.models.session_results import SessionResult
+        from sqlalchemy import select
+
+        async with get_db() as db:
+            # Skip if already persisted
+            existing = await db.execute(
+                select(SessionResult).where(SessionResult.session_id == session_id)
+            )
+            if existing.scalar_one_or_none():
+                return
+
+            row = SessionResult(
+                session_id=session_id,
+                spotify_track_id=session.get("spotify_track_id", ""),
+                youtube_video_id=session.get("youtube_id"),
+                track_name=session.get("track_name"),
+                artist_name=session.get("artist_name"),
+                album_image=session.get("youtube_match", {}).get("thumbnail")
+                    if isinstance(session.get("youtube_match"), dict) else None,
+                score=results.get("score"),
+                pitch_accuracy=results.get("pitch_accuracy"),
+                rhythm_accuracy=results.get("rhythm_accuracy"),
+                lyrics_accuracy=results.get("lyrics_accuracy"),
+                jury_comments=results.get("jury_comments"),
+            )
+            db.add(row)
+    except Exception as e:
+        print(f"[PersistResults] Failed to save results for {session_id}: {e}")
+
+
