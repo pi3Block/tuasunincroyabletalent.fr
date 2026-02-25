@@ -1,8 +1,12 @@
 """
-Word-level timestamps generation using whisper-timestamped.
-Provides more accurate word alignment than standard Whisper word_timestamps.
+Word-level timestamps generation via shared-whisper HTTP (GPU 4).
 
-This task integrates with the caching system to avoid reprocessing:
+Uses the same 3-tier fallback as transcription.py:
+- Tier 1: shared-whisper HTTP (GPU 4, large-v3-turbo int8, ~3s)
+- Tier 2: Groq Whisper API (free, whisper-large-v3-turbo)
+- Tier 3: None (no local fallback — avoids GPU 0 VRAM conflict)
+
+Integrates with the caching system to avoid reprocessing:
 1. Check if word timestamps already exist in cache
 2. Check if vocals are already separated (Demucs cache)
 3. Generate only if necessary
@@ -15,135 +19,138 @@ from celery import shared_task
 
 logger = logging.getLogger(__name__)
 
-# Lazy load models for GPU memory management
-_whisper_timestamped_model = None
+SHARED_WHISPER_URL = os.getenv("SHARED_WHISPER_URL", "http://shared-whisper:9000")
+SHARED_WHISPER_TIMEOUT = int(os.getenv("SHARED_WHISPER_TIMEOUT", "120"))
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+
+# Words to filter out (Whisper hallucinations)
+HALLUCINATION_WORDS = {
+    '...', '..', '.', '♪', '♫', '[Musique]', '[Music]',
+    '[Applause]', '(musique)', '*', '(Musique)', '',
+}
 
 
-def get_whisper_timestamped_model():
-    """
-    Lazy load whisper-timestamped model.
-
-    Uses DTW-based alignment on cross-attention weights for better
-    word-level timestamp accuracy than standard Whisper.
-    """
-    global _whisper_timestamped_model
-    if _whisper_timestamped_model is None:
-        import whisper_timestamped as whisper
-
-        model_name = os.getenv("WHISPER_MODEL", "turbo")
-        logger.info("Loading whisper-timestamped model: %s", model_name)
-        _whisper_timestamped_model = whisper.load_model(model_name)
-    return _whisper_timestamped_model
-
-
-def transcribe_with_word_timestamps(
+def _transcribe_via_shared_whisper(
     vocals_path: str,
     language: str = "fr",
-    use_vad: bool = True,
     lyrics_text: str | None = None,
-    synced_lines: list[dict] | None = None,
 ) -> dict:
     """
-    Align lyrics to audio with precise word-level timestamps.
+    Word timestamps via shared-whisper HTTP (GPU 4, large-v3-turbo int8).
 
-    If lyrics_text is provided, uses forced alignment (much more accurate).
-    Otherwise falls back to free transcription.
-
-    Args:
-        vocals_path: Path to vocals audio file (ideally Demucs-separated)
-        language: Language code
-        use_vad: Use Voice Activity Detection to reduce hallucinations
-        lyrics_text: Full lyrics text to align (from LRCLib/Genius)
-        synced_lines: Line-synced lyrics [{startTimeMs, text}, ...] for better alignment
-
-    Returns:
-        dict with words, lines, and metadata
+    If lyrics_text is provided, passes it as initial_prompt to guide
+    Whisper's recognition (pseudo forced alignment).
     """
-    import whisper_timestamped as whisper
+    import httpx
 
-    logger.info("Processing: %s", vocals_path)
+    logger.info("Word timestamps via shared-whisper: %s", vocals_path)
 
-    model = get_whisper_timestamped_model()
+    params = {
+        "language": language,
+        "output": "json",
+        "task": "transcribe",
+        "word_timestamps": "true",
+        "vad_filter": "true",
+    }
 
-    # If we have lyrics, use them for forced alignment
+    # Pass lyrics as initial_prompt for guided recognition
     if lyrics_text:
-        logger.info("Using FORCED ALIGNMENT with provided lyrics (%d chars)", len(lyrics_text))
+        # Truncate to ~500 chars (Whisper prompt limit is ~224 tokens)
+        params["initial_prompt"] = lyrics_text[:500]
+        logger.info("Using lyrics as initial_prompt (%d chars)", min(len(lyrics_text), 500))
 
-        # Clean lyrics for alignment
-        clean_lyrics = lyrics_text.strip()
-
-        # whisper-timestamped supports forced alignment via initial_prompt
-        # This guides Whisper to recognize these words
-        result = whisper.transcribe(
-            model,
-            vocals_path,
-            language=language,
-            vad=use_vad,
-            compute_word_confidence=True,
-            include_punctuation_in_confidence=False,
-            refine_whisper_precision=0.5,
-            min_word_duration=0.04,
-            detect_disfluencies=False,
-            verbose=False,
-            beam_size=5,
-            best_of=5,
-            temperature=0.0,  # More deterministic for alignment
-            initial_prompt=clean_lyrics,  # Guide Whisper with actual lyrics!
-            condition_on_previous_text=True,
-            no_speech_threshold=0.6,
-            compression_ratio_threshold=2.4,
-        )
-    else:
-        logger.info("No lyrics provided, using FREE TRANSCRIPTION")
-
-        result = whisper.transcribe(
-            model,
-            vocals_path,
-            language=language,
-            vad=use_vad,
-            compute_word_confidence=True,
-            include_punctuation_in_confidence=False,
-            refine_whisper_precision=0.5,
-            min_word_duration=0.04,
-            detect_disfluencies=False,
-            verbose=False,
-            beam_size=5,
-            best_of=5,
-            temperature=(0.0, 0.2, 0.4),
-            no_speech_threshold=0.5,
-            compression_ratio_threshold=2.0,
-            condition_on_previous_text=True,
+    with open(vocals_path, "rb") as f:
+        response = httpx.post(
+            f"{SHARED_WHISPER_URL}/asr",
+            params=params,
+            files={"audio_file": (os.path.basename(vocals_path), f, "audio/wav")},
+            timeout=SHARED_WHISPER_TIMEOUT,
         )
 
-    # Words to filter out (hallucinations)
-    HALLUCINATION_WORDS = {'...', '..', '.', '♪', '♫', '[Musique]', '[Music]', '[Applause]', '(musique)', '*', '(Musique)'}
+    response.raise_for_status()
+    return response.json()
 
-    # Extract word-level data
+
+def _transcribe_via_groq(
+    vocals_path: str,
+    language: str = "fr",
+    lyrics_text: str | None = None,
+) -> dict:
+    """Fallback: Groq Whisper API (free tier, whisper-large-v3-turbo)."""
+    import httpx
+
+    logger.info("Word timestamps via Groq Whisper: %s", vocals_path)
+
+    data = {
+        "model": "whisper-large-v3-turbo",
+        "language": language,
+        "response_format": "verbose_json",
+        "timestamp_granularities[]": "word",
+    }
+
+    if lyrics_text:
+        data["prompt"] = lyrics_text[:500]
+
+    with open(vocals_path, "rb") as f:
+        response = httpx.post(
+            "https://api.groq.com/openai/v1/audio/transcriptions",
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+            data=data,
+            files={"file": (os.path.basename(vocals_path), f, "audio/wav")},
+            timeout=120,
+        )
+
+    response.raise_for_status()
+    groq_data = response.json()
+
+    # Convert Groq format to shared-whisper segment format
+    segments = []
+    if groq_data.get("words"):
+        segment_words = []
+        for w in groq_data["words"]:
+            segment_words.append({
+                "word": w.get("word", ""),
+                "start": w.get("start", 0.0),
+                "end": w.get("end", 0.0),
+                "probability": 0.9,  # Groq doesn't return per-word confidence
+            })
+        segments.append({"words": segment_words})
+
+    return {
+        "text": groq_data.get("text", ""),
+        "language": groq_data.get("language", language),
+        "segments": segments,
+    }
+
+
+def _extract_words_and_lines(data: dict, lyrics_text: str | None = None) -> dict:
+    """
+    Extract word-level data from Whisper response, filter hallucinations,
+    and build line structures for karaoke display.
+    """
     words = []
     lines = []
     total_confidence = 0
+    min_confidence = 0.2 if lyrics_text else 0.3
 
-    for segment in result.get("segments", []):
+    for segment in data.get("segments", []):
         segment_words = []
         segment_text_parts = []
 
         for word_info in segment.get("words", []):
-            word_text = word_info["text"].strip()
+            word_text = word_info.get("word", word_info.get("text", "")).strip()
 
-            # Skip hallucination words
             if word_text in HALLUCINATION_WORDS or not word_text:
                 continue
 
-            # Skip very low confidence words (likely hallucinations) - but be less strict with forced alignment
-            confidence = word_info.get("confidence", 1.0)
-            min_confidence = 0.2 if lyrics_text else 0.3
+            confidence = word_info.get("probability", word_info.get("confidence", 1.0))
             if confidence < min_confidence:
                 continue
 
             word_data = {
                 "word": word_text,
-                "startMs": int(word_info["start"] * 1000),
-                "endMs": int(word_info["end"] * 1000),
+                "startMs": int(word_info.get("start", 0) * 1000),
+                "endMs": int(word_info.get("end", 0) * 1000),
                 "confidence": round(confidence, 3),
             }
             words.append(word_data)
@@ -159,23 +166,20 @@ def transcribe_with_word_timestamps(
                 "text": " ".join(segment_text_parts),
             })
 
-    # Calculate average confidence
     confidence_avg = total_confidence / len(words) if words else 0
-
-    # Get duration
     duration_ms = words[-1]["endMs"] if words else 0
 
-    logger.info("Transcribed %d words, avg confidence: %.3f", len(words), confidence_avg)
+    logger.info("Extracted %d words, avg confidence: %.3f", len(words), confidence_avg)
 
     return {
-        "text": result.get("text", ""),
-        "language": result.get("language", language),
+        "text": data.get("text", ""),
+        "language": data.get("language", "fr"),
         "words": words,
         "lines": lines,
         "word_count": len(words),
         "duration_ms": duration_ms,
         "confidence_avg": round(confidence_avg, 3),
-        "model_version": f"whisper-timestamped-{os.getenv('WHISPER_MODEL', 'turbo')}",
+        "model_version": "shared-whisper-large-v3-turbo",
     }
 
 
@@ -190,32 +194,37 @@ def do_generate_word_timestamps(
     synced_lines: list[dict] | None = None,
 ) -> dict:
     """
-    Core logic: Generate word timestamps with caching.
+    Generate word timestamps via shared-whisper HTTP (3-tier fallback).
 
-    This function is designed to be called from the backend API
-    with cache checking already done. It focuses on generation only.
-
-    Args:
-        vocals_path: Path to vocals audio file
-        spotify_track_id: Spotify track ID (for caching)
-        youtube_video_id: YouTube video ID (for caching)
-        language: Language code
-        artist_name: For debugging/metadata
-        track_name: For debugging/metadata
-        lyrics_text: Full lyrics text for forced alignment (from LRCLib/Genius)
-        synced_lines: Line-synced lyrics for better alignment
-
-    Returns:
-        dict with word timestamps data
+    Uses shared-whisper on GPU 4 — does NOT load any model on GPU 0.
     """
-    # Generate timestamps with forced alignment if lyrics available
-    result = transcribe_with_word_timestamps(
-        vocals_path=vocals_path,
-        language=language,
-        use_vad=True,
-        lyrics_text=lyrics_text,
-        synced_lines=synced_lines,
-    )
+    # Tier 1: shared-whisper HTTP (GPU 4)
+    data = None
+    source = "shared_whisper"
+    try:
+        data = _transcribe_via_shared_whisper(vocals_path, language, lyrics_text)
+    except Exception as e:
+        logger.warning("shared-whisper failed for word timestamps: %s", e)
+
+        # Tier 2: Groq Whisper API
+        if GROQ_API_KEY:
+            try:
+                logger.info("Falling back to Groq Whisper for word timestamps")
+                data = _transcribe_via_groq(vocals_path, language, lyrics_text)
+                source = "groq_whisper"
+            except Exception as groq_err:
+                logger.warning("Groq Whisper fallback failed: %s", groq_err)
+
+    if data is None:
+        raise RuntimeError(
+            "Word timestamp generation failed — shared-whisper down, "
+            f"Groq {'failed' if GROQ_API_KEY else 'not configured'}"
+        )
+
+    # Extract and filter words/lines
+    result = _extract_words_and_lines(data, lyrics_text)
+    if source == "groq_whisper":
+        result["model_version"] = "groq-whisper-large-v3-turbo"
 
     # Save to file for backup
     output_dir = Path(vocals_path).parent
@@ -224,7 +233,7 @@ def do_generate_word_timestamps(
     output_data = {
         "spotify_track_id": spotify_track_id,
         "youtube_video_id": youtube_video_id,
-        "source": "whisper_timestamped",
+        "source": source,
         "language": result["language"],
         "model_version": result["model_version"],
         "words": result["words"],
@@ -239,13 +248,13 @@ def do_generate_word_timestamps(
     with open(timestamps_path, "w", encoding="utf-8") as f:
         json.dump(output_data, f, ensure_ascii=False, indent=2)
 
-    logger.info("Saved to: %s", timestamps_path)
+    logger.info("Saved word timestamps to: %s", timestamps_path)
 
     return {
         "status": "completed",
         "spotify_track_id": spotify_track_id,
         "youtube_video_id": youtube_video_id,
-        "source": "whisper_timestamped",
+        "source": source,
         "words": result["words"],
         "lines": result["lines"],
         "language": result["language"],
@@ -270,27 +279,14 @@ def generate_word_timestamps(
     """
     Celery task: Generate word-level timestamps for vocals.
 
-    This task should be called after:
-    1. Checking word_timestamps_cache (API layer)
-    2. Ensuring vocals are available (via Demucs cache or separation)
-
-    Args:
-        vocals_path: Path to separated vocals
-        spotify_track_id: Spotify track ID for caching
-        youtube_video_id: YouTube video ID for caching
-        language: Language code (default: French)
-        artist_name: For metadata
-        track_name: For metadata
-
-    Returns:
-        dict with word timestamps and metadata
+    Uses shared-whisper HTTP (GPU 4) — no local GPU model needed.
     """
     self.update_state(state="PROGRESS", meta={
-        "step": "loading_model",
+        "step": "generating_timestamps",
         "spotify_track_id": spotify_track_id,
     })
 
-    result = do_generate_word_timestamps(
+    return do_generate_word_timestamps(
         vocals_path=vocals_path,
         spotify_track_id=spotify_track_id,
         youtube_video_id=youtube_video_id,
@@ -298,8 +294,6 @@ def generate_word_timestamps(
         artist_name=artist_name,
         track_name=track_name,
     )
-
-    return result
 
 
 @shared_task(bind=True, name="tasks.word_timestamps.generate_word_timestamps_cached")
@@ -314,31 +308,20 @@ def generate_word_timestamps_cached(
     force_regenerate: bool = False,
 ) -> dict:
     """
-    Celery task: Full pipeline with Demucs + WhisperTimestamped + Caching.
+    Celery task: Full pipeline — Demucs separation + shared-whisper timestamps + caching.
 
-    This is the main entry point that handles the full workflow:
-    1. Check if word timestamps already cached
-    2. Check if vocals already separated (Demucs cache)
-    3. Run Demucs if needed
-    4. Run WhisperTimestamped
-    5. Cache the results in PostgreSQL
-
-    Args:
-        reference_path: Path to reference audio (full mix)
-        spotify_track_id: Spotify track ID
-        youtube_video_id: YouTube video ID
-        language: Language code
-        artist_name: For metadata
-        track_name: For metadata
-        force_regenerate: Skip cache and regenerate
-
-    Returns:
-        dict with word timestamps
+    Steps:
+    1. Unload Ollama from GPU 0 (if Demucs needed)
+    2. Run Demucs separation (GPU 0, ~4 GB VRAM)
+    3. Fetch lyrics for guided recognition
+    4. Generate word timestamps via shared-whisper HTTP (GPU 4, zero GPU 0 usage)
+    5. Cache results in PostgreSQL
     """
     import torch
     import torchaudio
     from demucs.apply import apply_model
     from tasks.audio_separation import get_demucs_model, convert_to_wav
+    from tasks.pipeline import _unload_ollama_model_for_gpu
 
     self.update_state(state="PROGRESS", meta={
         "step": "checking_cache",
@@ -352,8 +335,16 @@ def generate_word_timestamps_cached(
     vocals_path = cache_dir / "vocals.wav"
     instrumentals_path = cache_dir / "instrumentals.wav"
 
-    # Step 1: Check if vocals already exist (Demucs cache)
+    # Step 1: Demucs separation (only if vocals not cached)
     if not vocals_path.exists() or force_regenerate:
+        self.update_state(state="PROGRESS", meta={
+            "step": "unloading_ollama",
+            "spotify_track_id": spotify_track_id,
+        })
+
+        # Unload Ollama from GPU 0 to free ~4 GB VRAM for Demucs
+        _unload_ollama_model_for_gpu()
+
         self.update_state(state="PROGRESS", meta={
             "step": "separating_audio",
             "spotify_track_id": spotify_track_id,
@@ -370,12 +361,10 @@ def generate_word_timestamps_cached(
 
         waveform, sample_rate = torchaudio.load(str(audio_path), backend="soundfile")
 
-        # Resample to 44100Hz
         if sample_rate != 44100:
             resampler = torchaudio.transforms.Resample(sample_rate, 44100)
             waveform = resampler(waveform)
 
-        # Convert to stereo
         if waveform.shape[0] == 1:
             waveform = waveform.repeat(2, 1)
 
@@ -383,7 +372,6 @@ def generate_word_timestamps_cached(
         if torch.cuda.is_available():
             waveform = waveform.cuda()
 
-        # Apply Demucs
         model = get_demucs_model()
         with torch.no_grad():
             sources = apply_model(model, waveform, device=waveform.device)
@@ -394,11 +382,15 @@ def generate_word_timestamps_cached(
         torchaudio.save(str(vocals_path), vocals.cpu(), 44100)
         torchaudio.save(str(instrumentals_path), instrumentals.cpu(), 44100)
 
-        logger.info("Demucs complete, saved to cache")
+        # Free GPU memory after Demucs (no longer needed for timestamps)
+        del sources, waveform, vocals, instrumentals
+        torch.cuda.empty_cache()
+
+        logger.info("Demucs complete, saved to cache, GPU memory freed")
     else:
         logger.info("Using cached vocals: %s", vocals_path)
 
-    # Step 2: Fetch existing lyrics for forced alignment
+    # Step 2: Fetch existing lyrics for guided recognition
     self.update_state(state="PROGRESS", meta={
         "step": "fetching_lyrics",
         "spotify_track_id": spotify_track_id,
@@ -408,11 +400,12 @@ def generate_word_timestamps_cached(
 
     lyrics_text, synced_lines = get_lyrics_for_alignment(spotify_track_id)
     if lyrics_text:
-        logger.info("Found lyrics for forced alignment: %d chars", len(lyrics_text))
+        logger.info("Found lyrics for guided recognition: %d chars", len(lyrics_text))
     else:
         logger.info("No lyrics found, will use free transcription")
 
-    # Step 3: Generate word timestamps with forced alignment
+    # Step 3: Generate word timestamps via shared-whisper HTTP (GPU 4)
+    # This does NOT use GPU 0 — all inference happens on GPU 4 via HTTP
     self.update_state(state="PROGRESS", meta={
         "step": "generating_timestamps",
         "spotify_track_id": spotify_track_id,
@@ -436,7 +429,6 @@ def generate_word_timestamps_cached(
     })
 
     try:
-        # Use direct PostgreSQL access (no async needed)
         from tasks.word_timestamps_db import store_word_timestamps
 
         success = store_word_timestamps(
@@ -444,7 +436,7 @@ def generate_word_timestamps_cached(
             youtube_video_id=youtube_video_id,
             words=result["words"],
             lines=result["lines"],
-            source="whisper_timestamped",
+            source=result.get("source", "shared_whisper"),
             language=result.get("language"),
             model_version=result.get("model_version"),
             confidence_avg=result.get("confidence_avg"),
@@ -464,7 +456,6 @@ def generate_word_timestamps_cached(
         result["cached_in_postgres"] = False
         result["cache_error"] = str(e)
 
-    # Add cache paths to result
     result["vocals_path"] = str(vocals_path)
     result["instrumentals_path"] = str(instrumentals_path)
 

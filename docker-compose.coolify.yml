@@ -97,7 +97,7 @@ services:
     build:
       context: ./worker
       dockerfile: Dockerfile.optimized
-    command: ["celery", "-A", "tasks.celery_app", "worker", "--loglevel=info", "--pool=solo", "-Q", "gpu-heavy,gpu", "-n", "heavy@%h"]
+    command: ["celery", "-A", "tasks.celery_app", "worker", "--loglevel=info", "--pool=solo", "-Q", "gpu-heavy,gpu,default", "-n", "heavy@%h"]
     volumes:
       - audio-data:/app/audio_files
       - model-cache:/root/.cache
