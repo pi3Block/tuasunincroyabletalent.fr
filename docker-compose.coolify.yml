@@ -58,8 +58,9 @@ services:
     environment:
       # Shared infrastructure — hostnames are Coolify container names (with UUID suffix)
       # Override via Coolify env vars if UUID changes after redeployment
-      - DATABASE_URL=${DATABASE_URL:-postgresql://augmenter:${AUGMENTER_DB_PASSWORD}@shared-postgres-wogs8c0wgg8o4gckkg4oc4o8:5432/voicejury_db}
-      - REDIS_URL=${REDIS_URL:-redis://:${AUGMENTER_REDIS_PASSWORD}@shared-redis-wogs8c0wgg8o4gckkg4oc4o8:6379/2}
+      # DATABASE_URL and REDIS_URL must be set in Coolify env panel (no nested var defaults)
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
       - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11435}
       - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}
       - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
@@ -102,8 +103,9 @@ services:
       - model-cache:/root/.cache
     environment:
       # Shared infrastructure — Coolify container names with UUID suffix
-      - REDIS_URL=${REDIS_URL:-redis://:${AUGMENTER_REDIS_PASSWORD}@shared-redis-wogs8c0wgg8o4gckkg4oc4o8:6379/2}
-      - DATABASE_URL=${DATABASE_URL:-postgresql://augmenter:${AUGMENTER_DB_PASSWORD}@shared-postgres-wogs8c0wgg8o4gckkg4oc4o8:5432/voicejury_db}
+      # DATABASE_URL and REDIS_URL must be set in Coolify env panel
+      - REDIS_URL=${REDIS_URL}
+      - DATABASE_URL=${DATABASE_URL}
       - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11435}
       - SHARED_WHISPER_URL=${SHARED_WHISPER_URL:-http://shared-whisper:9000}
       - WHISPER_MODEL=${WHISPER_MODEL:-turbo}
@@ -150,8 +152,9 @@ services:
       - audio-data:/app/audio_files
       - model-cache:/root/.cache
     environment:
-      - REDIS_URL=${REDIS_URL:-redis://:${AUGMENTER_REDIS_PASSWORD}@shared-redis-wogs8c0wgg8o4gckkg4oc4o8:6379/2}
-      - DATABASE_URL=${DATABASE_URL:-postgresql://augmenter:${AUGMENTER_DB_PASSWORD}@shared-postgres-wogs8c0wgg8o4gckkg4oc4o8:5432/voicejury_db}
+      # DATABASE_URL and REDIS_URL must be set in Coolify env panel
+      - REDIS_URL=${REDIS_URL}
+      - DATABASE_URL=${DATABASE_URL}
       - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11435}
       - SHARED_WHISPER_URL=${SHARED_WHISPER_URL:-http://shared-whisper:9000}
       - WHISPER_MODEL=${WHISPER_MODEL:-turbo}
