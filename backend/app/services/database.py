@@ -48,14 +48,31 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 async def init_db() -> None:
     """
-    Initialize database tables.
+    Initialize database tables using Alembic migrations.
+    Falls back to create_all() if Alembic is not available.
     Called at application startup.
     """
+    try:
+        from alembic.config import Config
+        from alembic import command
+        import os
+
+        alembic_ini = os.path.join(os.path.dirname(__file__), "..", "..", "alembic.ini")
+        if os.path.exists(alembic_ini):
+            alembic_cfg = Config(alembic_ini)
+            # Stamp existing DB if no version table yet, then upgrade
+            command.upgrade(alembic_cfg, "head")
+            print("[Database] Alembic migrations applied")
+            return
+    except Exception as e:
+        print(f"[Database] Alembic migration failed ({e}), falling back to create_all()")
+
+    # Fallback: create_all() for dev or if Alembic is not configured
     from app.models import Base
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    print("[Database] Tables created/verified")
+    print("[Database] Tables created/verified (create_all fallback)")
 
 
 async def close_db() -> None:
