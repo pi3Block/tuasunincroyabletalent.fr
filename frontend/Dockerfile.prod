@@ -11,7 +11,7 @@ ENV VITE_API_URL=$VITE_API_URL
 # Install dependencies with cache mount
 COPY package.json package-lock.json* ./
 RUN --mount=type=cache,target=/root/.npm \
-    npm ci --prefer-offline
+    npm ci
 
 # Copy source and build
 COPY . .
