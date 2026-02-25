@@ -7,7 +7,7 @@ Last updated: 2026-02-25
 
 ---
 
-## Etat actuel (~75% implemente)
+## Etat actuel (~95% implemente)
 
 ### Ce qui MARCHE — ne pas toucher sauf bug
 
@@ -27,24 +27,27 @@ Last updated: 2026-02-25
 | Demucs cache par YouTube ID (evite re-separation) | ✅ | `backend/app/services/youtube_cache.py` |
 | Mobile-first + orientation detection + landscape split-view | ✅ | `frontend/src/hooks/useOrientation.ts` |
 | Real-time pitch detection locale (autocorrelation navigateur) | ✅ | `frontend/src/hooks/usePitchDetection.ts` |
+| Health check complet (Redis + PostgreSQL) | ✅ | `backend/app/main.py:68-93` |
+| Audio file cleanup (Celery beat, toutes les heures) | ✅ | `worker/tasks/cleanup.py`, `celery_app.py:114-119` |
+| Redis session TTL (setex 3600s, rafraichi a chaque update) | ✅ | `backend/app/services/redis_client.py:35-42` |
+| StudioMode UI (practice, analyzing, results) | ✅ | `frontend/src/audio/`, `App.tsx:587,861,921` |
+| Persistent results (PostgreSQL + auto-save) | ✅ | `backend/app/models/session_results.py`, `routers/session.py:729-760` |
+| Results history endpoint | ✅ | `backend/app/routers/results.py` → `GET /api/results/history` |
+| Alembic migrations (initial schema, 4 tables) | ✅ | `backend/alembic/`, `alembic.ini` |
+| Tests backend (pytest, 24 tests) | ✅ | `backend/tests/` (session, search, audio, health) |
+| Tests frontend (vitest, 15 tests) | ✅ | `frontend/src/__tests__/` (sessionStore, client) |
+| Sentry error tracking (opt-in, 3 services) | ✅ | `main.py`, `celery_app.py`, `main.tsx` |
+| `.env.example` complet (12+ variables) | ✅ | `.env.example` |
+| Dead code supprime (ancien results.py mock) | ✅ | Supprime, `results.py` recree pour history |
 
-### Ce qui NE MARCHE PAS ou est MANQUANT
+### Ce qui reste (P4 — post-MVP)
 
 | Composant | Statut | Detail |
 |-----------|--------|--------|
-| Results endpoint `/api/results/{id}` | Dead code | Mock dans `results.py`, le frontend utilise `/api/session/{id}/results` (qui marche) |
-| Health check | Partiel | Retourne `{"api": true}` sans verifier Redis/Postgres/Whisper |
-| `.env.example` | Obsolete | Manque 12+ variables pour Coolify production |
-| Audio file cleanup | Absent | Fichiers jamais supprimes → fuite espace disque |
-| Redis session TTL | Absent | Sessions jamais expirees → fuite memoire |
-| StudioMode UI | Absent | API audio prete (`/api/audio/*`), pas de frontend mixer |
-| Persistent results | Absent | Resultats stockes dans Redis seulement (perdus apres expiration) |
-| Tests | Absent | 0 tests (pas de pytest, pas de vitest, pas de CI) |
-| De-bleeding | Absent | Pas de soustraction musique captee par le micro |
-| Cross-correlation sync | Absent | Pas d'alignement auto user/reference |
-| WebSocket live streaming | Absent | Frontend enregistre puis upload, pas de streaming live |
-| Fine-tuning Jury-LoRA | Absent | Utilise qwen3-32b generique, pas de modele specialise |
-| Alembic migrations | Absent | Tables creees par `create_all()` au demarrage |
+| De-bleeding | Absent | Soustraction musique captee par le micro |
+| Cross-correlation sync | Absent | Alignement auto user/reference avant scoring |
+| WebSocket live streaming | Absent | Streaming audio temps reel pendant enregistrement |
+| Fine-tuning Jury-LoRA | Absent | Modele specialise pour commentaires jury |
 
 ---
 
@@ -80,6 +83,10 @@ SECRET_KEY=<openssl rand -hex 32>
 
 # LiteLLM (creer virtual key, voir Last Idea.md etape 5)
 LITELLM_API_KEY=<a creer>
+
+# Optionnel — Sentry (creer projet sur sentry.io)
+SENTRY_DSN=<depuis sentry.io>
+VITE_SENTRY_DSN=<depuis sentry.io, peut etre le meme DSN>
 ```
 
 ### P0.3 — Verifier gpu-worker-base
@@ -95,195 +102,64 @@ docker pull ghcr.io/pi3block/gpu-worker-base:latest
 Coolify Dashboard → Deploy. Verifier :
 ```bash
 curl -s https://api.tuasunincroyabletalent.fr/health
+# Attendu: {"status": "healthy", "version": "0.1.0", "services": {"api": true, "redis": true, "postgres": true}}
 docker ps --filter "name=tuasun"
 ```
 
----
+### P0.5 — Premiere analyse (Celery beat)
 
-## P1 — Quick fixes (1-2h)
-
-### P1.1 — Supprimer dead code results.py
-
-**Fichiers :**
-- SUPPRIMER `backend/app/routers/results.py`
-- MODIFIER `backend/app/main.py` : retirer `from app.routers import ... results` et `app.include_router(results.router, ...)`
-
-**Pourquoi :** Le frontend utilise `/api/session/{id}/results` (session.py:471-508) qui retourne les vrais resultats depuis Redis. Le fichier results.py retourne du mock et n'est jamais appele.
-
-**Validation :** `grep -r "/api/results/" frontend/` → 0 resultats
-
-### P1.2 — Health check complet
-
-**Fichier :** `backend/app/main.py` — remplacer le endpoint `/health`
-
-```python
-@app.get("/health")
-async def health():
-    checks = {"api": True}
-
-    # Redis
-    try:
-        client = await redis_client.get_client()
-        await client.ping()
-        checks["redis"] = True
-    except Exception:
-        checks["redis"] = False
-
-    # PostgreSQL
-    try:
-        from app.services.database import get_db
-        async with get_db() as db:
-            await db.execute(text("SELECT 1"))
-        checks["postgres"] = True
-    except Exception:
-        checks["postgres"] = False
-
-    status = "healthy" if all(checks.values()) else "degraded"
-    return {"status": status, "version": "0.1.0", "services": checks}
-```
-
-**Validation :** `curl https://api.tuasunincroyabletalent.fr/health` → `{"services": {"api": true, "redis": true, "postgres": true}}`
-
-### P1.3 — Mettre a jour .env.example
-
-**Fichier :** `.env.example` — ajouter toutes les variables de docker-compose.coolify.yml
-
-Voir section P0.2 + variables worker (SHARED_WHISPER_URL, WHISPER_LOCAL_FALLBACK, LITELLM_HOST, etc.)
-
-### P1.4 — Audio file cleanup
-
-**Option A — Celery beat (recommandee) :**
-
-Ajouter dans `worker/tasks/celery_app.py` :
-```python
-celery_app.conf.beat_schedule = {
-    "cleanup-old-sessions": {
-        "task": "tasks.cleanup.cleanup_session_files",
-        "schedule": 3600.0,  # Toutes les heures
-    },
-}
-```
-
-Creer `worker/tasks/cleanup.py` :
-```python
-@shared_task(name="tasks.cleanup.cleanup_session_files")
-def cleanup_session_files():
-    """Delete session audio files older than 2 hours."""
-    audio_dir = Path(os.getenv("AUDIO_OUTPUT_DIR", "/app/audio_files"))
-    cutoff = time.time() - 7200  # 2h
-    for session_dir in audio_dir.iterdir():
-        if session_dir.is_dir() and session_dir.name != "cache":
-            if session_dir.stat().st_mtime < cutoff:
-                shutil.rmtree(session_dir)
-```
-
-**Ne PAS supprimer le dossier `cache/`** — il contient les Demucs separations reutilisables.
-
-**Validation :** Creer un dossier test vieux de 3h dans audio_files/, lancer la task, verifier suppression.
-
-### P1.5 — Redis session TTL
-
-**Fichier :** `backend/app/services/redis_client.py`
-
-Le TTL est deja prevu (parametre `ttl=3600` dans `set_session`) mais verifier que TOUTES les sessions passent par cette methode.
-
-**Fichier :** `backend/app/routers/session.py` — verifier que `redis_client.set_session()` est appele avec TTL.
-
-**Validation :** `redis-cli -n 2 TTL session:<id>` → retourne un nombre > 0
-
----
-
-## P2 — Features MVP+ (1-2 semaines)
-
-### P2.1 — StudioMode UI (frontend)
-
-**Contexte :** L'API `/api/audio/{session_id}/tracks` retourne la liste des pistes separees et `/api/audio/{session_id}/{source}/{type}` sert le fichier avec HTTP Range. Le backend multi-track est PRET. Il manque l'UI.
-
-**Composants existants (non connectes) :**
-- `frontend/src/components/audio/StudioMode.tsx` — existe deja
-- `frontend/src/components/audio/TrackMixer.tsx` — existe deja
-- `frontend/src/components/audio/AudioTrack.tsx` — existe deja
-- `frontend/src/components/audio/TransportBar.tsx` — existe deja
-- `frontend/src/components/audio/VolumeSlider.tsx` — existe deja
-- `frontend/src/stores/audioStore.ts` — Zustand store pour multi-track
-- `frontend/src/audio/` — AudioContext, TrackProcessor, useMultiTrack hook
-
-**Tache :** Verifier si StudioMode est deja affiche dans App.tsx (il semble l'etre dans certains etats). Si oui, tester et corriger les bugs. Si non, l'integrer dans les etats `ready`, `analyzing`, `results`.
-
-**Validation :** Apres analyse, pouvoir ecouter vocals user vs vocals reference avec volume independant.
-
-### P2.2 — Persistent results (PostgreSQL)
-
-**Nouveau modele SQLAlchemy :** `backend/app/models/session_results.py`
-
-```python
-class SessionResult(Base):
-    __tablename__ = "session_results"
-
-    id = Column(Integer, primary_key=True)
-    session_id = Column(String(64), unique=True, index=True, nullable=False)
-    spotify_track_id = Column(String(64), nullable=False)
-    youtube_video_id = Column(String(32))
-    track_name = Column(String(255))
-    artist_name = Column(String(255))
-    score = Column(Integer)
-    pitch_accuracy = Column(Numeric(5, 2))
-    rhythm_accuracy = Column(Numeric(5, 2))
-    lyrics_accuracy = Column(Numeric(5, 2))
-    jury_comments = Column(JSONB)  # [{persona, comment, vote, model, latency_ms}]
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-```
-
-**Modifier :** `backend/app/routers/session.py` — dans `get_analysis_status()` quand SUCCESS, persister en PostgreSQL en plus de Redis.
-
-**Nouveau endpoint :** `GET /api/results/history?limit=20` — derniers resultats (pour landing page "Recent Performances").
-
-**Validation :** Faire une analyse, verifier que `session_results` contient le row. Recharger la page → resultats toujours disponibles.
-
-### P2.3 — Alembic migrations
-
-**Setup :**
+Le worker doit etre lance avec `-B` pour activer le scheduler Celery beat :
 ```bash
-cd backend
-pip install alembic
-alembic init migrations
-# Configurer alembic.ini avec DATABASE_URL
-# Generer migration initiale depuis les modeles existants
-alembic revision --autogenerate -m "initial schema"
+# docker-compose.coolify.yml → worker-heavy command :
+celery -A tasks.celery_app worker --loglevel=info --pool=solo -Q gpu-heavy,gpu,default -B
 ```
 
-**Modifier :** `backend/app/services/database.py` — remplacer `create_all()` par `alembic upgrade head` dans le startup.
-
-**Validation :** `alembic current` affiche la revision. `alembic history` montre les migrations.
+Verifier que le cleanup tourne :
+```bash
+docker logs <worker-container> | grep "Cleanup complete"
+```
 
 ---
 
-## P3 — Qualite (2-3 semaines)
+## P1 — Quick fixes ✅ COMPLETE
 
-### P3.1 — Tests backend (pytest)
+| Tache | Statut | Detail |
+|-------|--------|--------|
+| P1.1 Supprimer dead code results.py | ✅ | Supprime, recree pour `GET /api/results/history` |
+| P1.2 Health check complet | ✅ | Redis ping + PostgreSQL SELECT 1, retourne healthy/degraded |
+| P1.3 Mettre a jour .env.example | ✅ | 12+ variables ajoutees, organisees par section |
+| P1.4 Audio file cleanup | ✅ | `worker/tasks/cleanup.py` + Celery beat (1h), preserve `cache/` |
+| P1.5 Redis session TTL | ✅ | Deja en place: `setex` 3600s dans `set_session()`, rafraichi par `update_session()` |
 
-**Setup :** `backend/tests/conftest.py` avec fixtures (test DB, test Redis mock, test client)
+---
 
-**Tests prioritaires :**
-1. `test_session.py` — start session, upload, analyze flow
-2. `test_search.py` — Spotify search (mock httpx)
-3. `test_lyrics.py` — cache hierarchy (Redis → PG → API)
-4. `test_audio.py` — HTTP Range requests
+## P2 — Features MVP+ ✅ COMPLETE
 
-### P3.2 — Tests frontend (vitest)
+| Tache | Statut | Detail |
+|-------|--------|--------|
+| P2.1 StudioMode UI | ✅ | Deja integre dans App.tsx (practice:L587, analyzing:L861, results:L921). Multi-track complet avec Web Audio API, volume/mute/solo, transport, download |
+| P2.2 Persistent results | ✅ | `session_results` table (JSONB jury), auto-persist au SUCCESS, `GET /api/results/history?limit=20` |
+| P2.3 Alembic migrations | ✅ | `backend/alembic/` + initial migration (4 tables), `init_db()` essaie Alembic puis fallback `create_all()` |
 
-**Setup :** `vitest.config.ts` + `frontend/src/__tests__/`
+---
 
-**Tests prioritaires :**
-1. `sessionStore.test.ts` — state transitions
-2. `client.test.ts` — API client (mock fetch)
-3. `useLyricsSync.test.ts` — binary search timing
+## P3 — Qualite ✅ COMPLETE
 
-### P3.3 — Error tracking (Sentry)
+| Tache | Statut | Detail |
+|-------|--------|--------|
+| P3.1 Tests backend (pytest) | ✅ | 24 tests: session flow, search, audio HTTP Range, health check. Mock Redis in-memory, mock Spotify/YouTube/Celery |
+| P3.2 Tests frontend (vitest) | ✅ | 15 tests: sessionStore transitions, API client requests/errors. jsdom environment, path aliases |
+| P3.3 Sentry error tracking | ✅ | Opt-in via `SENTRY_DSN` / `VITE_SENTRY_DSN`. API (FastAPI+SQLAlchemy), Worker (Celery), Frontend (dynamic import) |
 
-**Backend :** `pip install sentry-sdk[fastapi]`, init dans main.py
-**Frontend :** `npm install @sentry/react`, init dans main.tsx
-**Worker :** `pip install sentry-sdk[celery]`, init dans celery_app.py
+### Lancer les tests
+
+```bash
+# Backend
+cd backend && pip install -r requirements.txt && pytest -v
+
+# Frontend
+cd frontend && npm install && npm test
+```
 
 ---
 

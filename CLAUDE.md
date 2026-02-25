@@ -28,6 +28,13 @@ cd worker && celery -A tasks.celery_app worker --loglevel=info --pool=solo -Q gp
 # Build frontend prod
 cd frontend && npm run build
 
+# === TESTS ===
+# Backend tests (pytest)
+cd backend && pytest -v
+
+# Frontend tests (vitest)
+cd frontend && npm test
+
 # Rebuild image Docker
 docker-compose -f docker-compose.dev.yml build --no-cache <service>
 ```
@@ -81,7 +88,8 @@ tuasunincroyabletalent.fr/
 │       │   ├── session.py         # /api/session/* (start, status, upload, analyze)
 │       │   ├── search.py          # /api/search/* (Spotify search, recent)
 │       │   ├── audio.py           # /api/audio/* (track streaming, HTTP Range)
-│       │   └── lyrics.py          # /api/lyrics/* (lyrics, word-timestamps, generate)
+│       │   ├── lyrics.py          # /api/lyrics/* (lyrics, word-timestamps, generate)
+│       │   └── results.py         # /api/results/* (history)
 │       ├── services/
 │       │   ├── database.py        # SQLAlchemy async engine + session
 │       │   ├── redis_client.py    # Redis async (sessions TTL 1h)
@@ -96,7 +104,8 @@ tuasunincroyabletalent.fr/
 │       └── models/                # SQLAlchemy models
 │           ├── lyrics_cache.py    # LyricsCache table + Base
 │           ├── lyrics_offset.py   # LyricsOffset table
-│           └── word_timestamps_cache.py  # WordTimestampsCache table
+│           ├── word_timestamps_cache.py  # WordTimestampsCache table
+│           └── session_results.py # SessionResult table (persistent results)
 │
 ├── worker/                        # Celery (GPU)
 │   ├── Dockerfile.optimized       # gpu-worker-base shared image (~2min build)
@@ -111,6 +120,7 @@ tuasunincroyabletalent.fr/
 │       ├── lyrics.py              # Genius API scraper
 │       ├── word_timestamps.py     # whisper-timestamped (forced alignment)
 │       ├── word_timestamps_db.py  # PostgreSQL direct (psycopg2)
+│       ├── cleanup.py             # Celery beat: delete old session audio files (>2h)
 │       └── tracing.py             # Langfuse integration (singleton + context managers)
 │
 ├── docker-compose.coolify.yml     # PRODUCTION (Coolify) — 3 services + shared infra
@@ -203,11 +213,17 @@ source: `user` | `ref` — type: `vocals` | `instrumentals` | `original`
 | `/api/lyrics/word-timestamps/generate` | POST | Generer word timestamps (Celery GPU) |
 | `/api/lyrics/word-timestamps/task/{id}` | GET | Statut generation (poll) |
 
+### Results
+
+| Endpoint | Methode | Description |
+|----------|---------|-------------|
+| `/api/results/history` | GET | Dernières performances (limit=20, max 50) |
+
 ### Health
 
 | Endpoint | Methode | Description |
 |----------|---------|-------------|
-| `/health` | GET | Health check |
+| `/health` | GET | Health check (Redis + PostgreSQL), retourne healthy/degraded |
 | `/` | GET | Status basique |
 
 ## Code Patterns
@@ -302,6 +318,7 @@ task_routes = {
     "tasks.pitch_analysis.*":   {"queue": "gpu"},         # CREPE ~1 Go
     "tasks.scoring.*":          {"queue": "default"},     # CPU only (HTTP calls)
     "tasks.lyrics.*":           {"queue": "default"},     # CPU only (API calls)
+    "tasks.cleanup.*":          {"queue": "default"},     # CPU only (file cleanup)
 }
 ```
 
@@ -377,6 +394,10 @@ SECRET_KEY=xxx
 DEBUG=false
 AUDIO_OUTPUT_DIR=/app/audio_files
 CUDA_VISIBLE_DEVICES=0
+
+# Sentry (optionnel)
+SENTRY_DSN=https://xxx@sentry.io/xxx
+VITE_SENTRY_DSN=https://xxx@sentry.io/xxx
 ```
 
 ## Database Tables (PostgreSQL — voicejury_db)
@@ -386,8 +407,9 @@ CUDA_VISIBLE_DEVICES=0
 | `lyrics_cache` | spotify_track_id (UNIQUE) | 90-365j selon source | Paroles synced/unsynced, source LRCLib/Genius |
 | `lyrics_offsets` | (spotify_track_id, youtube_video_id) | permanent | Offset utilisateur en secondes |
 | `word_timestamps_cache` | (spotify_track_id, youtube_video_id) | 90j | Word-level timestamps JSON, source whisper/musixmatch |
+| `session_results` | session_id (UNIQUE) | permanent | Score, pitch/rhythm/lyrics accuracy, jury_comments JSONB |
 
-Tables creees automatiquement au demarrage de l'API (`init_db()`).
+Tables creees via Alembic migrations (`alembic upgrade head`), fallback `create_all()` si Alembic echoue.
 
 ## Critical Don'ts
 
