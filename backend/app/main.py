@@ -1,12 +1,32 @@
 """
 Tu as un incroyable talent ? - FastAPI Backend
 """
+import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.routers import session, search, audio, lyrics, results
+
+# Sentry error tracking (optional — enabled when SENTRY_DSN is set)
+_sentry_dsn = os.getenv("SENTRY_DSN")
+if _sentry_dsn:
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
+        from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+
+        sentry_sdk.init(
+            dsn=_sentry_dsn,
+            traces_sample_rate=0.1,
+            environment=os.getenv("SENTRY_ENVIRONMENT", "production"),
+            release=f"voicejury-api@0.1.0",
+            integrations=[FastApiIntegration(), SqlalchemyIntegration()],
+        )
+        print(f"[Sentry] Initialized for API")
+    except ImportError:
+        print("[Sentry] sentry-sdk not installed, skipping")
 
 
 @asynccontextmanager

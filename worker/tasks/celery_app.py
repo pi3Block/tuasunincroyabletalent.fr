@@ -18,6 +18,24 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Sentry error tracking (optional — enabled when SENTRY_DSN is set)
+_sentry_dsn = os.getenv("SENTRY_DSN")
+if _sentry_dsn:
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.celery import CeleryIntegration
+
+        sentry_sdk.init(
+            dsn=_sentry_dsn,
+            traces_sample_rate=0.05,
+            environment=os.getenv("SENTRY_ENVIRONMENT", "production"),
+            release="voicejury-worker@0.1.0",
+            integrations=[CeleryIntegration()],
+        )
+        logger.info("[Sentry] Initialized for worker")
+    except ImportError:
+        logger.info("[Sentry] sentry-sdk not installed, skipping")
+
 # Redis URL from environment
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
