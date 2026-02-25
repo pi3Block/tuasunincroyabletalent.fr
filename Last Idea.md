@@ -1,0 +1,1 @@
+Que les gens puisse allumer leyurs web camls et live sur twitch que kiaraoke.fr qsoit toujours live twitch et qu'elle affiche on ne sait pas quoi encire quand les gens ne sont pas ligve ;)=

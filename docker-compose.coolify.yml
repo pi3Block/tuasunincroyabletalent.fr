@@ -4,12 +4,14 @@
 # Single self-contained file for Coolify deployment
 # GPU NVIDIA required for worker service
 #
-# SHARED INFRASTRUCTURE (2026-02-11):
-# - PostgreSQL: uses augmenter-db (pgvector/pgvector:pg16)
+# SHARED INFRASTRUCTURE (2026-02-25):
+# - PostgreSQL: shared-postgres (postgis/postgis:16-3.4-alpine + pgvector)
 #   Database: voicejury_db, User: augmenter (shared superuser)
-# - Redis: uses augmenter-redis (redis:7-alpine)
-#   DB index 2 (broker), DB index 7 (results)
-# - Both accessed via coolify network DNS
+# - Redis: shared-redis (redis:7-alpine)
+#   DB index 2 (broker)
+# - LiteLLM: litellm-proxy:4000 (LLM gateway, Groq free tier)
+# - Langfuse: langfuse:3000 (LLM tracing)
+# - All accessed via coolify network DNS
 #
 # BUILD OPTIMIZATION:
 # - .dockerignore in each service dir (reduces context by ~200MB)
@@ -54,8 +56,10 @@ services:
     volumes:
       - audio-data:/app/audio_files
     environment:
-      - DATABASE_URL=postgresql://augmenter:${AUGMENTER_DB_PASSWORD}@augmenter-db-d80w4sgsw4sk4c00cw80ggw8:5432/voicejury_db
-      - REDIS_URL=redis://:${AUGMENTER_REDIS_PASSWORD}@augmenter-redis-d80w4sgsw4sk4c00cw80ggw8:6379/2
+      # Shared infrastructure — hostnames are Coolify container names (with UUID suffix)
+      # Override via Coolify env vars if UUID changes after redeployment
+      - DATABASE_URL=${DATABASE_URL:-postgresql://augmenter:${AUGMENTER_DB_PASSWORD}@shared-postgres-wogs8c0wgg8o4gckkg4oc4o8:5432/voicejury_db}
+      - REDIS_URL=${REDIS_URL:-redis://:${AUGMENTER_REDIS_PASSWORD}@shared-redis-wogs8c0wgg8o4gckkg4oc4o8:6379/2}
       - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11435}
       - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}
       - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
@@ -82,12 +86,12 @@ services:
       start_period: 40s
 
   # ============================================
-  # Worker Heavy - GPU (Demucs, CREPE, Whisper fallback)
+  # Worker Heavy - GPU (Demucs, CREPE)
   # ============================================
-  # Dedicated worker on RTX 3070 (8 Go, GPU-85c38fae, GPU 0)
-  # Whisper via shared-whisper HTTP, Demucs + CREPE local
-  # Ollama via light instance on host (:11435, qwen3:4b)
-  # Uses gpu-worker-base shared image for fast builds (~2min vs ~15min)
+  # GPU 0 (RTX 3070, 8 Go, GPU-85c38fae) — SHARED with Ollama Light via time-sharing
+  # Pipeline.py unloads Ollama model (keep_alive:0) before Demucs loads.
+  # LLM jury: LiteLLM proxy → Groq qwen3-32b (free) → Ollama fallback
+  # Whisper: shared-whisper HTTP → Groq Whisper fallback (free)
   worker-heavy:
     build:
       context: ./worker
@@ -97,18 +101,24 @@ services:
       - audio-data:/app/audio_files
       - model-cache:/root/.cache
     environment:
-      - REDIS_URL=redis://:${AUGMENTER_REDIS_PASSWORD}@augmenter-redis-d80w4sgsw4sk4c00cw80ggw8:6379/2
-      - DATABASE_URL=postgresql://augmenter:${AUGMENTER_DB_PASSWORD}@augmenter-db-d80w4sgsw4sk4c00cw80ggw8:5432/voicejury_db
+      # Shared infrastructure — Coolify container names with UUID suffix
+      - REDIS_URL=${REDIS_URL:-redis://:${AUGMENTER_REDIS_PASSWORD}@shared-redis-wogs8c0wgg8o4gckkg4oc4o8:6379/2}
+      - DATABASE_URL=${DATABASE_URL:-postgresql://augmenter:${AUGMENTER_DB_PASSWORD}@shared-postgres-wogs8c0wgg8o4gckkg4oc4o8:5432/voicejury_db}
       - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11435}
       - SHARED_WHISPER_URL=${SHARED_WHISPER_URL:-http://shared-whisper:9000}
       - WHISPER_MODEL=${WHISPER_MODEL:-turbo}
+      # Whisper: shared-whisper primary, Groq cloud fallback, local disabled
+      - WHISPER_LOCAL_FALLBACK=false
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
       - CUDA_VISIBLE_DEVICES=0
-      # Langfuse tracing (shared with augmenter.pro)
+      # Langfuse tracing
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
       - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
-      - LANGFUSE_BASE_URL=http://langfuse-d80w4sgsw4sk4c00cw80ggw8:3000
-      # LiteLLM proxy fallback for jury generation
+      - LANGFUSE_BASE_URL=${LANGFUSE_BASE_URL:-http://langfuse-wogs8c0wgg8o4gckkg4oc4o8:3000}
+      # LiteLLM proxy — jury generation via Groq qwen3-32b (free)
       - LITELLM_HOST=${LITELLM_HOST:-http://host.docker.internal:4000}
+      - LITELLM_API_KEY=${LITELLM_API_KEY:-}
+      - LITELLM_JURY_MODEL=${LITELLM_JURY_MODEL:-jury-comment}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     deploy:
@@ -140,11 +150,14 @@ services:
       - audio-data:/app/audio_files
       - model-cache:/root/.cache
     environment:
-      - REDIS_URL=redis://:${AUGMENTER_REDIS_PASSWORD}@augmenter-redis-d80w4sgsw4sk4c00cw80ggw8:6379/2
-      - DATABASE_URL=postgresql://augmenter:${AUGMENTER_DB_PASSWORD}@augmenter-db-d80w4sgsw4sk4c00cw80ggw8:5432/voicejury_db
+      - REDIS_URL=${REDIS_URL:-redis://:${AUGMENTER_REDIS_PASSWORD}@shared-redis-wogs8c0wgg8o4gckkg4oc4o8:6379/2}
+      - DATABASE_URL=${DATABASE_URL:-postgresql://augmenter:${AUGMENTER_DB_PASSWORD}@shared-postgres-wogs8c0wgg8o4gckkg4oc4o8:5432/voicejury_db}
       - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11435}
       - SHARED_WHISPER_URL=${SHARED_WHISPER_URL:-http://shared-whisper:9000}
       - WHISPER_MODEL=${WHISPER_MODEL:-turbo}
+      # Whisper: shared-whisper primary, Groq cloud fallback, local disabled
+      - WHISPER_LOCAL_FALLBACK=false
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     deploy:

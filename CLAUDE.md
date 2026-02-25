@@ -4,139 +4,218 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Tu as un incroyable talent ?** - Application web type "Show TV" permettant d'évaluer le chant d'un utilisateur en temps réel par rapport à une version originale (Spotify/YouTube), avec feedback généré par des Personas IA (jury style "Incroyable Talent").
+**Tu as un incroyable talent ?** - Application web type "Show TV" permettant d'evaluer le chant d'un utilisateur par rapport a une version originale (Spotify/YouTube), avec feedback genere par 3 Personas IA jury style "Incroyable Talent".
 
-**Mobile-First**: L'application est conçue 100% mobile-friendly en priorité. Toutes les interfaces (sélection chanson, enregistrement, résultats) doivent être optimisées pour smartphones.
+**Mobile-First**: 100% mobile-friendly. Layouts adaptatifs (portrait, landscape, desktop). Orientation detection pour split-view en paysage mobile.
 
 ## Commands
 
 ```bash
-# Démarrer tous les services (GPU CUDA requis)
-docker-compose up -d
+# === PRODUCTION (Coolify) ===
+# Deploiement via Coolify Dashboard — docker-compose.coolify.yml
+# Pas de `docker-compose up` manuel en prod
 
-# Logs en temps réel
-docker-compose logs -f api worker
-
+# === DEVELOPPEMENT LOCAL ===
 # Frontend dev (hot reload)
 cd frontend && npm run dev
 
 # Backend dev (avec reload)
 cd backend && uvicorn app.main:app --reload --port 8000
 
-# Worker Celery dev
-cd worker && celery -A tasks.celery_app worker --loglevel=info
+# Worker Celery dev (GPU requis pour Demucs/CREPE)
+cd worker && celery -A tasks.celery_app worker --loglevel=info --pool=solo -Q gpu-heavy,gpu,default
 
-# Rebuild après modification Dockerfile
-docker-compose build --no-cache <service>
+# Build frontend prod
+cd frontend && npm run build
 
-# Ollama - Télécharger modèle
-docker-compose exec ollama ollama pull llama3.2
+# Rebuild image Docker
+docker-compose -f docker-compose.dev.yml build --no-cache <service>
 ```
 
 ## Stack Technique
 
-- **Infrastructure**: Docker Compose (orchestré par Coolify) + NVIDIA CUDA
-- **Frontend**: React 18 + TypeScript + Vite 6 + Zustand 5 + Tailwind 3
-- **Backend API**: Python 3.11 + FastAPI + Uvicorn + Pydantic 2
-- **Backend Worker**: Python 3.11 + Celery 5 + Redis (GPU tasks)
-- **LLM Engine**: Ollama (local) avec Llama 3.2 / modèle fine-tuné `Jury-LoRA`
-- **Storage**: PostgreSQL 16, Redis 7, Filesystem (audio temp)
+- **Infrastructure**: Docker Compose (orchestre par Coolify) + NVIDIA CUDA + Traefik reverse proxy
+- **Frontend**: React 18 + TypeScript 5.6 + Vite 6 + Zustand 5 + Tailwind 3 + Framer Motion 12 + Radix UI (shadcn)
+- **Backend API**: Python 3.11 + FastAPI + Uvicorn + Pydantic 2 + SQLAlchemy 2 (async) + asyncpg
+- **Backend Worker**: Python 3.11 + Celery 5 + Redis (GPU tasks) + Langfuse (tracing)
+- **LLM**: LiteLLM Proxy -> Groq qwen3-32b (gratuit) + Ollama qwen3:4b (local GPU 0) + heuristique fallback
+- **Storage**: PostgreSQL 16 (shared), Redis 7 DB2 (shared), Filesystem (audio temp)
 - **Audio Processing**:
-  - Demucs (htdemucs) - Source separation
-  - CREPE - Pitch detection
-  - Whisper turbo - Speech-to-text
-  - Librosa - Feature extraction
+  - Demucs htdemucs - Source separation (vocals/instrumentals)
+  - torchcrepe - Pitch detection (full/tiny models)
+  - shared-whisper HTTP (Faster Whisper, GPU 4) + Groq Whisper API fallback
+  - whisper-timestamped - Word-level alignment (forced alignment + DTW)
+  - Librosa - Onset detection (rhythm)
+  - fastdtw - Pitch comparison (Dynamic Time Warping)
+  - jiwer - Word Error Rate (lyrics accuracy)
 
 ## Architecture
 
 ### Project Structure
 
 ```
-├── frontend/                 # React + Vite
+tuasunincroyabletalent.fr/
+├── frontend/                      # React 18 + Vite
+│   ├── Dockerfile.prod            # Multi-stage (builder + nginx)
+│   ├── nginx.conf                 # SPA routing + API/WS proxy
 │   └── src/
-│       ├── stores/          # Zustand stores
-│       ├── components/ui/   # Mobile-first components
-│       ├── hooks/           # Custom hooks (audio, etc.)
-│       └── api/             # API client
+│       ├── stores/                # Zustand (sessionStore, audioStore)
+│       ├── components/
+│       │   ├── landing/           # LandingPage, Hero, HowItWorks, Footer
+│       │   ├── lyrics/            # LyricsDisplayPro, KaraokeWord, LyricLine
+│       │   ├── audio/             # StudioMode, TrackMixer, TransportBar
+│       │   └── ui/                # shadcn components (button, card, slider...)
+│       ├── hooks/                 # useAudioRecorder, usePitchDetection,
+│       │                          # useWordTimestamps, useYouTubePlayer,
+│       │                          # useLyricsSync, useLyricsScroll, useOrientation
+│       ├── audio/                 # Multi-track player (AudioContext, TrackProcessor)
+│       ├── api/                   # API client (fetch wrapper)
+│       └── types/                 # TypeScript types (lyrics, youtube)
 │
-├── backend/                  # FastAPI
+├── backend/                       # FastAPI
+│   ├── Dockerfile                 # Python 3.11 + uv, port 8080
 │   └── app/
-│       ├── routers/         # /api/session, /api/results
-│       ├── services/        # YouTube, Spotify, Ollama clients
-│       └── models/          # Pydantic schemas
+│       ├── main.py                # Lifespan, CORS, router registration
+│       ├── config.py              # Pydantic Settings
+│       ├── routers/
+│       │   ├── session.py         # /api/session/* (start, status, upload, analyze)
+│       │   ├── search.py          # /api/search/* (Spotify search, recent)
+│       │   ├── audio.py           # /api/audio/* (track streaming, HTTP Range)
+│       │   └── lyrics.py          # /api/lyrics/* (lyrics, word-timestamps, generate)
+│       ├── services/
+│       │   ├── database.py        # SQLAlchemy async engine + session
+│       │   ├── redis_client.py    # Redis async (sessions TTL 1h)
+│       │   ├── spotify.py         # Spotify OAuth2 Client Credentials
+│       │   ├── youtube.py         # yt-dlp (search, download, validate)
+│       │   ├── youtube_cache.py   # Demucs result cache (Redis + disk)
+│       │   ├── lyrics.py          # LRCLib -> Genius (hierarchical chain)
+│       │   ├── lyrics_cache.py    # 2-tier cache (Redis 1h + PostgreSQL 90-365d)
+│       │   ├── lyrics_offset.py   # User offset per track/video pair
+│       │   ├── word_timestamps_cache.py  # 2-tier cache word timestamps
+│       │   └── search_history.py  # Recent searches (Redis list, max 20)
+│       └── models/                # SQLAlchemy models
+│           ├── lyrics_cache.py    # LyricsCache table + Base
+│           ├── lyrics_offset.py   # LyricsOffset table
+│           └── word_timestamps_cache.py  # WordTimestampsCache table
 │
-├── worker/                   # Celery (GPU)
+├── worker/                        # Celery (GPU)
+│   ├── Dockerfile.optimized       # gpu-worker-base shared image (~2min build)
+│   ├── Dockerfile.prod            # pytorch/pytorch:2.5.1-cuda12.4
 │   └── tasks/
-│       ├── audio_separation.py  # Demucs
-│       ├── pitch_analysis.py    # CREPE
-│       ├── transcription.py     # Whisper
-│       └── scoring.py           # Ollama jury
+│       ├── celery_app.py          # Config + 3 queues (gpu-heavy, gpu, default)
+│       ├── pipeline.py            # Orchestrateur (analyze_performance, prepare_reference)
+│       ├── audio_separation.py    # Demucs htdemucs (lazy loaded, GPU)
+│       ├── pitch_analysis.py      # torchcrepe (full/tiny, GPU)
+│       ├── transcription.py       # 3-tier: shared-whisper -> Groq -> local
+│       ├── scoring.py             # DTW + WER + jury parallele (3 personas, 3 tiers)
+│       ├── lyrics.py              # Genius API scraper
+│       ├── word_timestamps.py     # whisper-timestamped (forced alignment)
+│       ├── word_timestamps_db.py  # PostgreSQL direct (psycopg2)
+│       └── tracing.py             # Langfuse integration (singleton + context managers)
 │
-└── docker-compose.yml        # All services
+├── docker-compose.coolify.yml     # PRODUCTION (Coolify) — 3 services + shared infra
+├── docker-compose.dev.yml         # Developpement local (standalone)
+├── docker-compose.yml             # Base compose
+├── docker-compose.prod.yml        # Production override (GPU)
+└── docs/
+    └── UNIFIED_ARCHITECTURE.md    # Architecture multi-projets unifiee
 ```
 
-### Pipeline Audio ("Informed Source Separation")
+### Pipeline Audio (7 etapes)
 
 ```
-1. INIT (Setup)
-   User sélectionne titre Spotify
-   → Auto-search YouTube (ou fallback URL manuelle)
-   → Download (yt-dlp)
-   → Separation (Demucs htdemucs) → vocals.wav + instrumentals.wav
-   → Feature extraction (CREPE, Librosa)
+analyze_performance (Celery task, gpu-heavy queue)
+│
+├─ Step 1: Unload Ollama Light (GPU 0, keep_alive:0, libere ~4 Go VRAM)
+│
+├─ Step 2: Demucs — Separation user audio → vocals.wav + instrumentals.wav
+│           [GPU, ~25s pour 3min]
+│
+├─ Step 3: Demucs — Separation reference (CACHE par YouTube ID)
+│           [0s si cache, ~25s sinon]
+│
+├─ Step 4: torchcrepe — Pitch extraction
+│           User: full model (precision)
+│           Reference: tiny model (vitesse, 3x plus rapide)
+│           [GPU, ~4s + ~1.5s]
+│
+├─ Step 5: Whisper — Transcription user vocals (3-tier fallback)
+│           Tier 1: shared-whisper HTTP (GPU 4, medium model, VAD)
+│           Tier 2: Groq Whisper API (gratuit, whisper-large-v3-turbo)
+│           Tier 3: Local PyTorch Whisper (desactive par defaut)
+│           [~2-8s]
+│
+├─ Step 6: Genius API — Paroles reference
+│           [~1s]
+│
+└─ Step 7: Scoring + Jury LLM (parallele x3 personas)
+           Pitch: DTW cents distance (40% du score)
+           Rhythm: Voice onset detection (30%)
+           Lyrics: WER jiwer (30%)
+           Jury: asyncio.gather() 3 personas
+             Tier 1: LiteLLM -> Groq qwen3-32b
+             Tier 2: Ollama qwen3:4b (GPU 0)
+             Tier 3: Heuristique
+           [~1-5s]
 
-2. LIVE (Performance)
-   Frontend: Stream micro (WebSocket) + Metadata Spotify (timestamp)
-   Backend: VAD (Voice Activity Detection), feedback visuel temps réel
-
-3. POST (Analyse)
-   → Synchronisation (Cross-Correlation) → offset temporel
-   → De-bleeding (soustraction musique captée par micro)
-   → Scoring: Pitch DTW, Rhythm Check, Lyric Check (Whisper vs paroles)
-   → Ollama: Génération commentaires jury
+Total: ~40-65s (premiere analyse) ou ~15-25s (reference en cache)
 ```
+
+## API Endpoints
+
+### Session
+
+| Endpoint | Methode | Description |
+|----------|---------|-------------|
+| `/api/session/start` | POST | Initie session, search YouTube, queue download |
+| `/api/session/fallback-source` | POST | URL YouTube manuelle |
+| `/api/session/{id}/status` | GET | Statut session + reference |
+| `/api/session/{id}/upload-recording` | POST | Upload audio utilisateur (WAV/WebM) |
+| `/api/session/{id}/analyze` | POST | Lance pipeline analyse (Celery) |
+| `/api/session/{id}/analysis-status` | GET | Statut task Celery (poll) |
+| `/api/session/{id}/results` | GET | Resultats finaux |
+| `/api/session/{id}/lyrics` | GET | Paroles (LRCLib/Genius) |
+| `/api/session/{id}/lyrics-offset` | GET/POST | Offset lyrics user-adjustable |
+
+### Search
+
+| Endpoint | Methode | Description |
+|----------|---------|-------------|
+| `/api/search/tracks?q=&limit=` | GET | Recherche Spotify (market FR) |
+| `/api/search/tracks/{id}` | GET | Details track Spotify |
+| `/api/search/recent` | GET | Historique recherches recentes |
+
+### Audio
+
+| Endpoint | Methode | Description |
+|----------|---------|-------------|
+| `/api/audio/{session_id}/tracks` | GET | Liste pistes disponibles |
+| `/api/audio/{session_id}/{source}/{type}` | GET | Stream audio (HTTP Range) |
+
+source: `user` | `ref` — type: `vocals` | `instrumentals` | `original`
+
+### Lyrics & Word Timestamps
+
+| Endpoint | Methode | Description |
+|----------|---------|-------------|
+| `/api/lyrics/track/{spotify_id}` | GET | Paroles (LRCLib synced -> Genius plain) |
+| `/api/lyrics/word-timestamps/{spotify_id}` | GET | Word-level timestamps (cache) |
+| `/api/lyrics/word-timestamps/generate` | POST | Generer word timestamps (Celery GPU) |
+| `/api/lyrics/word-timestamps/task/{id}` | GET | Statut generation (poll) |
+
+### Health
+
+| Endpoint | Methode | Description |
+|----------|---------|-------------|
+| `/health` | GET | Health check |
+| `/` | GET | Status basique |
 
 ## Code Patterns
 
-### FastAPI Async Pattern
-```python
-from fastapi import APIRouter
-from pydantic import BaseModel
-
-router = APIRouter()
-
-class RequestModel(BaseModel):
-    field: str
-
-@router.post("/endpoint")
-async def endpoint(request: RequestModel):
-    # Async operations
-    return {"status": "ok"}
-```
-
-### Zustand Store Pattern
-```typescript
-import { create } from 'zustand'
-
-interface State {
-  value: string
-  setValue: (v: string) => void
-}
-
-export const useStore = create<State>((set) => ({
-  value: '',
-  setValue: (v) => set({ value: v }),
-}))
-
-// Usage with selector (prevents unnecessary re-renders)
-const value = useStore((state) => state.value)
-```
-
-### Celery Task Pattern (GPU)
+### Celery Task with GPU Lazy Loading
 ```python
 from celery import shared_task
 
-# Lazy load models to manage GPU memory
 _model = None
 
 def get_model():
@@ -156,107 +235,170 @@ def task_name(self, param: str) -> dict:
     return {"status": "completed"}
 ```
 
-### Demucs Usage
+### 2-Tier Cache Pattern (Redis + PostgreSQL)
 ```python
-from demucs.pretrained import get_model
-from demucs.apply import apply_model
-import torch
-import torchaudio
-
-model = get_model("htdemucs")  # Best quality
-waveform, sr = torchaudio.load("audio.wav")
-# Resample to 44100Hz, convert to stereo, add batch dim
-sources = apply_model(model, waveform.unsqueeze(0))
-# sources shape: (1, 4, 2, samples) -> drums, bass, other, vocals
-vocals = sources[0, 3]
+# Toutes les caches lyrics/word-timestamps utilisent ce pattern
+async def get(spotify_track_id: str) -> dict | None:
+    # Tier 1: Redis (1h TTL, fast)
+    cached = await get_from_redis(spotify_track_id)
+    if cached:
+        return cached
+    # Tier 2: PostgreSQL (90-365 jours, persistent)
+    cached = await get_from_postgres(spotify_track_id)
+    if cached:
+        await set_in_redis(spotify_track_id, cached)  # Repopulate Redis
+        return cached
+    return None
 ```
 
-### CREPE Usage
+### 3-Tier LLM Fallback (Jury)
 ```python
-import crepe
-from scipy.io import wavfile
+async def generate_comment(persona, prompt):
+    # Tier 1: LiteLLM Proxy -> Groq qwen3-32b (gratuit, meilleur francais)
+    try:
+        response = await httpx_client.post(
+            f"{LITELLM_HOST}/chat/completions",
+            headers={"Authorization": f"Bearer {LITELLM_API_KEY}"},
+            json={"model": LITELLM_JURY_MODEL, "messages": [...], "max_tokens": 300},
+        )
+        return response.json()["choices"][0]["message"]["content"]
+    except:
+        pass
+    # Tier 2: Ollama qwen3:4b (local GPU 0)
+    try:
+        response = await httpx_client.post(
+            f"{OLLAMA_HOST}/api/generate",
+            json={"model": "qwen3:4b", "prompt": prompt, "stream": False},
+        )
+        return response.json()["response"]
+    except:
+        pass
+    # Tier 3: Heuristique (commentaire pre-ecrit base sur score + persona)
+    return heuristic_comment(persona, score)
+```
 
-sr, audio = wavfile.read("vocals.wav")
-time, frequency, confidence, activation = crepe.predict(
-    audio, sr,
-    model_capacity="medium",
-    viterbi=True,  # Smooth pitch
-    step_size=10,  # 10ms hop
+### Zustand Store with Optimized Selectors
+```typescript
+import { create } from 'zustand'
+
+// Fine-grained selectors pour eviter les re-renders
+export const usePlaybackTime = () => useSessionStore(s => s.playbackTime)  // 60fps
+export const useStatus = () => useSessionStore(s => s.status)              // rare
+export const useLyricsState = () => useSessionStore(                       // shallow
+  s => ({ lines: s.lyricsLines, syncType: s.lyricsSyncType }),
+  shallow,
 )
 ```
 
-### Whisper Usage
+## Celery Task Routing
+
 ```python
-import whisper
-
-model = whisper.load_model("turbo")
-result = model.transcribe(
-    "vocals.wav",
-    language="fr",
-    word_timestamps=True,
-)
-# result["text"], result["segments"][i]["words"]
+# 3 queues par priorite GPU
+task_routes = {
+    "tasks.audio_separation.*": {"queue": "gpu-heavy"},   # Demucs ~4 Go VRAM
+    "tasks.transcription.*":    {"queue": "gpu-heavy"},   # Whisper ~2-6 Go
+    "tasks.pipeline.*":         {"queue": "gpu-heavy"},   # Orchestrateur
+    "tasks.word_timestamps.*":  {"queue": "gpu-heavy"},   # Demucs + Whisper
+    "tasks.pitch_analysis.*":   {"queue": "gpu"},         # CREPE ~1 Go
+    "tasks.scoring.*":          {"queue": "default"},     # CPU only (HTTP calls)
+    "tasks.lyrics.*":           {"queue": "default"},     # CPU only (API calls)
+}
 ```
-
-### Ollama API
-```python
-import httpx
-
-response = httpx.post(
-    "http://ollama:11434/api/generate",
-    json={
-        "model": "llama3.2",
-        "prompt": "...",
-        "stream": False,
-        "options": {"temperature": 0.8},
-    },
-    timeout=30.0,
-)
-text = response.json()["response"]
-```
-
-## API Endpoints
-
-| Endpoint | Méthode | Description |
-|----------|---------|-------------|
-| `/api/session/start` | POST | Initie session, lance download référence |
-| `/api/session/fallback-source` | POST | Accepte URL YouTube manuelle |
-| `/api/session/{id}/status` | GET | Statut de la session |
-| `/stream/audio` | WebSocket | Envoi chunks audio micro |
-| `/api/results/{sessionId}` | GET | JSON final + Commentaire IA |
-| `/health` | GET | Health check |
 
 ## Deployment (Coolify)
 
-- **Plateforme**: Coolify (self-hosted PaaS)
-- **Orchestration**: Docker Compose
-- **GPU**: NVIDIA CUDA (nvidia-docker requis)
-- **Services**:
-  - `frontend` - React app (Vite dev / Nginx prod)
-  - `api` - FastAPI (Uvicorn)
-  - `worker` - Celery workers (GPU queue)
-  - `ollama` - LLM engine (GPU)
-  - `postgres` - PostgreSQL 16
-  - `redis` - Redis 7
+### Production: `docker-compose.coolify.yml`
+
+3 services propres + infrastructure partagee via reseau `coolify` :
+
+| Service | Image | Role |
+|---------|-------|------|
+| `frontend` | Dockerfile.prod (nginx) | React SPA, Traefik -> tuasunincroyabletalent.fr |
+| `api` | Dockerfile (python:3.11) | FastAPI, Traefik -> api.tuasunincroyabletalent.fr |
+| `worker-heavy` | Dockerfile.optimized | Celery GPU (Demucs, CREPE, Whisper) |
+
+### Infrastructure partagee (Coolify)
+
+| Service | Port | Reseau | Utilisation voicejury |
+|---------|------|--------|----------------------|
+| shared-postgres | 5432 | coolify DNS | Base voicejury_db, user augmenter |
+| shared-redis | 6379 | coolify DNS | DB index 2 (broker + sessions) |
+| LiteLLM Proxy | 4000 | host.docker.internal | Jury LLM -> Groq qwen3-32b |
+| Ollama Light | 11435 | host.docker.internal | qwen3:4b (GPU 0, fallback jury) |
+| shared-whisper | 9000 | coolify DNS | Faster Whisper HTTP (GPU 4) |
+| Langfuse | 3000 | coolify DNS | Tracing LLM |
+
+### GPU Time-Sharing (GPU 0, RTX 3070, 8 Go)
+
+```
+Etat normal: Ollama Light qwen3:4b resident (~4.1 Go VRAM)
+
+Pipeline voicejury demarre:
+  1. POST keep_alive:0 → Ollama decharge modele (~4 Go liberes)
+  2. Demucs s'execute (~4 Go VRAM)
+  3. CREPE s'execute (~1 Go supplementaire)
+  4. Pipeline termine → Ollama recharge au prochain appel (~2-3s cold start)
+```
 
 ### Variables d'environnement
+
 ```env
-DATABASE_URL=postgresql://voicejury:password@postgres:5432/voicejury
-REDIS_URL=redis://redis:6379/0
-OLLAMA_HOST=http://ollama:11434
+# Database (shared-postgres, voicejury_db)
+DATABASE_URL=postgresql://augmenter:${AUGMENTER_DB_PASSWORD}@shared-postgres:5432/voicejury_db
+
+# Redis (shared-redis, DB index 2)
+REDIS_URL=redis://:${AUGMENTER_REDIS_PASSWORD}@shared-redis:6379/2
+
+# LLM — Jury generation
+LITELLM_HOST=http://host.docker.internal:4000
+LITELLM_API_KEY=sk-voice-jury
+LITELLM_JURY_MODEL=jury-comment
+OLLAMA_HOST=http://host.docker.internal:11435
+
+# Whisper — Transcription
+SHARED_WHISPER_URL=http://shared-whisper:9000
+GROQ_API_KEY=gsk_...
+WHISPER_LOCAL_FALLBACK=false
+
+# Langfuse — Tracing
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_BASE_URL=http://langfuse:3000
+
+# Spotify
 SPOTIFY_CLIENT_ID=xxx
 SPOTIFY_CLIENT_SECRET=xxx
-SECRET_KEY=change-me-in-production
-WHISPER_MODEL=turbo
+
+# Genius (lyrics)
+GENIUS_API_TOKEN=xxx
+
+# App
+SECRET_KEY=xxx
+DEBUG=false
+AUDIO_OUTPUT_DIR=/app/audio_files
+CUDA_VISIBLE_DEVICES=0
 ```
+
+## Database Tables (PostgreSQL — voicejury_db)
+
+| Table | Cle | TTL | Contenu |
+|-------|-----|-----|---------|
+| `lyrics_cache` | spotify_track_id (UNIQUE) | 90-365j selon source | Paroles synced/unsynced, source LRCLib/Genius |
+| `lyrics_offsets` | (spotify_track_id, youtube_video_id) | permanent | Offset utilisateur en secondes |
+| `word_timestamps_cache` | (spotify_track_id, youtube_video_id) | 90j | Word-level timestamps JSON, source whisper/musixmatch |
+
+Tables creees automatiquement au demarrage de l'API (`init_db()`).
 
 ## Critical Don'ts
 
 - **Never** store audio files permanently (clean after session)
-- **Never** call Ollama synchronously in API routes (use Celery)
+- **Never** call LLM synchronously in API routes (use Celery)
 - **Never** load ML models at import time (lazy load for GPU memory)
 - **Never** use blocking I/O in FastAPI async routes
 - **Never** hardcode credentials (use environment variables)
+- **Never** use `large-v3` Whisper on RTX 3060 Ti (CUDA OOM, 7.6 Go)
+- **Never** run Demucs pendant qu'Ollama Light est charge (GPU OOM)
+- **Never** `REINDEX SYSTEM` sur shared-postgres en production
 
 ## Performance Guidelines
 
@@ -264,16 +406,15 @@ WHISPER_MODEL=turbo
 |--------|--------|
 | API Response | <200ms |
 | Demucs Separation | <30s for 3min song (GPU) |
-| Whisper Transcription | <10s for 3min (turbo, GPU) |
-| CREPE Pitch | <5s for 3min (medium, GPU) |
-| Total Analysis | <60s |
+| Whisper Transcription (shared-whisper) | <3s for 3min (VAD, GPU 4) |
+| CREPE Pitch (full) | <5s for 3min (GPU) |
+| Jury Generation (3 personas parallel) | <5s |
+| Total Analysis (first time) | <65s |
+| Total Analysis (cached reference) | <25s |
 
 ## Key Documentation
 
-- [StartingDraft.md](StartingDraft.md) - Documentation technique complète V1.0
-- [FastAPI Docs](https://fastapi.tiangolo.com/)
-- [Celery Docs](https://docs.celeryq.dev/)
-- [Zustand Docs](https://zustand.docs.pmnd.rs/)
-- [Demucs GitHub](https://github.com/facebookresearch/demucs)
-- [CREPE GitHub](https://github.com/marl/crepe)
-- [Whisper GitHub](https://github.com/openai/whisper)
+- [docs/ROADMAP.md](docs/ROADMAP.md) - **Roadmap implementation** (etat d'avancement, taches priorisees, specs techniques)
+- [docs/UNIFIED_ARCHITECTURE.md](docs/UNIFIED_ARCHITECTURE.md) - Architecture multi-projets unifiee (GPU, DB, Redis, LiteLLM, Langfuse, shared-whisper)
+- [Last Idea.md](Last%20Idea.md) - Guide deploiement Coolify voicejury etape par etape
+- [StartingDraft.md](StartingDraft.md) - Documentation technique V1.0 (vision fine-tuning)

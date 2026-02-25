@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import session, results, search, audio, lyrics
+from app.routers import session, search, audio, lyrics
 
 
 @asynccontextmanager
@@ -54,7 +54,6 @@ app.add_middleware(
 # Include routers
 app.include_router(search.router, prefix="/api/search", tags=["Search"])
 app.include_router(session.router, prefix="/api/session", tags=["Session"])
-app.include_router(results.router, prefix="/api/results", tags=["Results"])
 app.include_router(audio.router, prefix="/api/audio", tags=["Audio"])
 app.include_router(lyrics.router, prefix="/api/lyrics", tags=["Lyrics"])
 
@@ -67,12 +66,27 @@ async def root():
 
 @app.get("/health")
 async def health():
-    """Detailed health check."""
-    return {
-        "status": "healthy",
-        "version": "0.1.0",
-        "services": {
-            "api": True,
-            # TODO: Add Redis/Postgres/Ollama checks
-        }
-    }
+    """Detailed health check — verifies Redis and PostgreSQL connectivity."""
+    checks = {"api": True}
+
+    # Redis
+    try:
+        from app.services.redis_client import redis_client
+        client = await redis_client.get_client()
+        await client.ping()
+        checks["redis"] = True
+    except Exception:
+        checks["redis"] = False
+
+    # PostgreSQL
+    try:
+        from sqlalchemy import text
+        from app.services.database import get_db
+        async with get_db() as db:
+            await db.execute(text("SELECT 1"))
+        checks["postgres"] = True
+    except Exception:
+        checks["postgres"] = False
+
+    status = "healthy" if all(checks.values()) else "degraded"
+    return {"status": status, "version": "0.1.0", "services": checks}

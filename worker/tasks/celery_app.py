@@ -75,6 +75,7 @@ celery_app = Celery(
         "tasks.lyrics",
         "tasks.pipeline",
         "tasks.word_timestamps",
+        "tasks.cleanup",
     ],
 )
 
@@ -108,4 +109,13 @@ celery_app.conf.task_routes = {
     # CPU tasks → default queue
     "tasks.scoring.*": {"queue": "default"},
     "tasks.lyrics.*": {"queue": "default"},
+    "tasks.cleanup.*": {"queue": "default"},
+}
+
+# Periodic tasks (Celery beat)
+celery_app.conf.beat_schedule = {
+    "cleanup-old-sessions": {
+        "task": "tasks.cleanup.cleanup_session_files",
+        "schedule": 3600.0,  # Every hour
+    },
 }

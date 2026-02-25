@@ -10,6 +10,9 @@ Performance optimizations:
 Improvements (2026-02-11):
 - Langfuse pipeline tracing (parent trace + child spans per step)
 - Structured logging (logging module)
+
+Improvements (2026-02-25):
+- GPU time-sharing with Ollama Light on GPU 0 (unload before Demucs)
 """
 import os
 import json
@@ -86,6 +89,39 @@ def log_gpu_status():
         return False
 
 
+def _unload_ollama_model_for_gpu():
+    """
+    Unload Ollama Light model from GPU 0 to free VRAM for Demucs/CREPE.
+
+    GPU 0 (RTX 3070, 8 GB) is shared between Ollama Light (qwen3:4b, ~4.1 GB)
+    and the voicejury worker (Demucs ~4 GB + CREPE ~1 GB). They cannot coexist.
+
+    Sends keep_alive=0 to force immediate unload. The model auto-reloads
+    on next Ollama Light request (~2-3s cold start).
+    """
+    import httpx
+
+    ollama_host = os.getenv("OLLAMA_HOST", "http://host.docker.internal:11435")
+    ollama_model = os.getenv("OLLAMA_MODEL", "qwen3:4b")
+
+    try:
+        response = httpx.post(
+            f"{ollama_host}/api/generate",
+            json={"model": ollama_model, "keep_alive": 0},
+            timeout=5.0,
+        )
+        if response.status_code == 200:
+            logger.info(
+                "Unloaded Ollama %s from GPU 0 — VRAM freed for Demucs/CREPE",
+                ollama_model,
+            )
+        else:
+            logger.warning("Ollama unload returned status %d", response.status_code)
+    except Exception as e:
+        # Non-fatal: GPU may already be free, or Ollama may not be running
+        logger.warning("Failed to unload Ollama model (GPU may be free): %s", e)
+
+
 @shared_task(bind=True, name="tasks.pipeline.analyze_performance")
 def analyze_performance(
     self,
@@ -131,6 +167,14 @@ def analyze_performance(
     # GPU STATUS CHECK
     # ============================================
     has_gpu = log_gpu_status()
+
+    # ============================================
+    # GPU TIME-SHARING: Unload Ollama Light from GPU 0
+    # ============================================
+    # GPU 0 is shared between Ollama Light (qwen3:4b, ~4.1 GB) and
+    # Demucs (~4 GB) + CREPE (~1 GB). Unload to free VRAM.
+    if has_gpu:
+        _unload_ollama_model_for_gpu()
 
     # ============================================
     # LANGFUSE PIPELINE TRACE
