@@ -43,6 +43,8 @@ services:
       - traefik.http.routers.voicejury-frontend.entrypoints=https
       - traefik.http.routers.voicejury-frontend.tls.certresolver=letsencrypt
       - traefik.http.services.voicejury-frontend.loadbalancer.server.port=80
+      # NOTE: kiaraoke.fr sera servi par Hostinger (Next.js).
+      # Ce service frontend sera supprimé une fois Hostinger validé.
 
   # ============================================
   # Backend API - FastAPI + Uvicorn
@@ -75,7 +77,8 @@ services:
       - coolify
     labels:
       - traefik.enable=true
-      - traefik.http.routers.voicejury-api.rule=Host(`api.tuasunincroyabletalent.fr`)
+      # API accessible on both domains
+      - traefik.http.routers.voicejury-api.rule=Host(`api.tuasunincroyabletalent.fr`) || Host(`api.kiaraoke.fr`)
       - traefik.http.routers.voicejury-api.entrypoints=https
       - traefik.http.routers.voicejury-api.tls.certresolver=letsencrypt
       - traefik.http.services.voicejury-api.loadbalancer.server.port=8080
