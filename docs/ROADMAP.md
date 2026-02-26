@@ -3,7 +3,7 @@
 > Source de verite unique pour l'etat d'avancement et les taches a implementer.
 > Chaque session Claude doit lire ce fichier en premier.
 
-Last updated: 2026-02-26
+Last updated: 2026-02-26 (session 2)
 
 ---
 
@@ -17,6 +17,7 @@ Last updated: 2026-02-26
 | Frontend UX complet (Landing SSG + App CSR, Next.js 15 App Router) | ✅ | `frontend-next/src/app/page.tsx`, `frontend-next/src/app/app/page.tsx` |
 | Session management Redis (start, status polling, upload, analyze) | ✅ | `backend/app/routers/session.py` |
 | Lyrics karaoke (LRCLib synced → Genius plain, word-timestamps via Whisper) | ✅ | `backend/app/routers/lyrics.py`, `worker/tasks/word_timestamps.py` |
+| Auto-generation karaoké (race condition fix) | ✅ | `frontend-next/src/hooks/useWordTimestamps.ts` — useEffect dedie pour referenceReady |
 | Caching 2-tier (Redis 1h + PostgreSQL 90-365j) pour lyrics et word-timestamps | ✅ | `backend/app/services/lyrics_cache.py`, `word_timestamps_cache.py` |
 | 3-tier Whisper fallback (shared-whisper HTTP → Groq API → local PyTorch) | ✅ | `worker/tasks/transcription.py` |
 | 3-tier Jury LLM fallback (LiteLLM/Groq → Ollama → heuristique) | ✅ | `worker/tasks/scoring.py` |
@@ -40,15 +41,21 @@ Last updated: 2026-02-26
 | Sentry error tracking (opt-in, backend + worker) | ✅ | `main.py`, `celery_app.py` |
 | `.env.example` complet (12+ variables) | ✅ | `.env.example` |
 | Dead code supprime (ancien results.py mock) | ✅ | Supprime, `results.py` recree pour history |
+| De-bleeding (spectral soft masking post-Demucs) | ✅ | `worker/tasks/audio_separation.py:apply_debleeding()`, Wiener-like masks, env `DEBLEED_ENABLED` |
+| Cross-correlation sync (auto offset detection) | ✅ | `worker/tasks/sync.py`, pipeline Step 2.5, offset applique au DTW/onset scoring |
+| SSE (Server-Sent Events, remplace polling 2s) | ✅ | `backend/app/routers/sse.py` + `frontend-next/src/hooks/useSSE.ts`, fallback polling auto |
+| Fine-tuning Jury-LoRA (infrastructure) | ✅ | `fine-tuning/` (8 fichiers), QLoRA Qwen3:4b, env `USE_FINETUNED_JURY` |
 
 ### Ce qui reste (P4 — post-MVP)
 
-| Composant | Statut | Detail |
-|-----------|--------|--------|
-| De-bleeding | Absent | Soustraction musique captee par le micro |
-| Cross-correlation sync | Absent | Alignement auto user/reference avant scoring |
-| WebSocket live streaming | Absent | Streaming audio temps reel pendant enregistrement |
-| Fine-tuning Jury-LoRA | Absent | Modele specialise pour commentaires jury |
+Tous les features P4 ont ete implementes. Aucune tache restante.
+
+### Bugs fixes en prod
+
+| Bug | Fix | Date |
+|-----|-----|------|
+| Mode karaoké bloqué "Génération..." — race condition `referenceReady` | `useWordTimestamps` : auto-generate déplacé dans un `useEffect` dédié | 2026-02-26 |
+| CUDA OOM de-bleeding (Ollama 4 Go + Demucs 3 Go sur GPU 0) | Déjà géré par fallback raw stems (try/except existant), `_unload_ollama_model_for_gpu()` appelé en amont | 2026-02-26 |
 
 ---
 
@@ -164,49 +171,40 @@ cd frontend-next && npm run lint && npm run build
 
 ---
 
-## P4 — Features avancees (post-MVP)
+## P4 — Features avancees ✅ COMPLETE
 
-### P4.1 — De-bleeding (soustraction musique micro)
+### P4.1 — De-bleeding (spectral soft masking) ✅
 
-**Principe :** L'enregistrement utilisateur contient la musique de fond captee par le micro. Soustraire le signal `instrumentals` reference du signal utilisateur pour isoler uniquement la voix.
+**Implementation :** Wiener-like spectral soft masking post-Demucs. `torch.stft`/`torch.istft` avec masks `|S|^2 / (|S_vocals|^2 + |S_instru|^2 + eps)`.
 
-**Implementation :**
-1. Aligner temporellement user_recording avec reference_instrumentals (cross-correlation)
-2. Soustraire le signal aligne (spectral subtraction ou simple soustraction apres gain matching)
-3. Appliquer un gate/limiter pour eviter les artefacts
+**Fichier :** `worker/tasks/audio_separation.py` → `apply_debleeding()` (n_fft=2048, hop=512, power=2.0)
+**Integration :** Inseree entre extraction stems et sauvegarde fichier, gatee par env `DEBLEED_ENABLED` (defaut `true`)
+**Fallback :** try/except, utilise stems bruts si echec
 
-**Fichier :** `worker/tasks/audio_separation.py` — ajouter fonction `debleed_user_audio()`
-**Appel :** `worker/tasks/pipeline.py` — entre Demucs et CREPE
+### P4.2 — Cross-correlation sync ✅
 
-### P4.2 — Cross-correlation sync
+**Implementation :** Downsample 8kHz (torchaudio.transforms.Resample), enveloppes amplitude, `scipy.signal.correlate`, detection peak → offset en secondes + confidence (0-1).
 
-**Principe :** Calculer le decalage temporel entre l'enregistrement utilisateur et la reference pour aligner avant scoring.
+**Fichier :** `worker/tasks/sync.py` → `compute_sync_offset()`
+**Integration :** `worker/tasks/pipeline.py` Step 2.5, offset applique au scoring si confidence > 0.3
+**Scoring :** `worker/tasks/scoring.py` → `_apply_time_offset()` dans `calculate_pitch_accuracy()` et `calculate_rhythm_accuracy()`
+**Frontend :** `frontend-next/src/app/app/page.tsx` affiche badge auto-sync + confidence
 
-**Implementation :**
-```python
-from scipy.signal import correlate
-offset_samples = np.argmax(correlate(user_audio, ref_audio)) - len(ref_audio)
-offset_seconds = offset_samples / sample_rate
-```
+### P4.3 — SSE (Server-Sent Events) ✅
 
-**Fichier :** `worker/tasks/pipeline.py` — nouvelle etape entre separation et pitch extraction
+**Implementation :** Remplace le polling 2-3s par SSE push. Backend: FastAPI `StreamingResponse` (`text/event-stream`), poll Redis interne 500ms. Frontend: `EventSource` natif avec auto-reconnect (3 tentatives, backoff exponentiel), fallback polling automatique.
 
-### P4.3 — WebSocket live streaming
+**Backend :** `backend/app/routers/sse.py` → `GET /api/session/{id}/stream`
+**Frontend :** `frontend-next/src/hooks/useSSE.ts` → `useSSE()` hook
+**Events :** connected, session_status, analysis_progress, analysis_complete, analysis_error, heartbeat (15s), timeout (10min)
 
-**Principe :** Envoyer les chunks audio en temps reel pendant l'enregistrement pour feedback instantane.
+### P4.4 — Fine-tuning Jury-LoRA ✅
 
-**Backend :** `backend/app/routers/stream.py` — WebSocket endpoint
-**Frontend :** Modifier `frontend-next/src/hooks/useAudioRecorder.ts` pour envoyer chunks via WebSocket
-**Worker :** Pas de changement (traitement reste post-recording)
+**Implementation :** Infrastructure complete pour QLoRA Qwen3-4B (r=16, alpha=32, 4-bit). Export Langfuse → JSONL → train Unsloth → GGUF Q4_K_M → Ollama create per persona.
 
-### P4.4 — Fine-tuning Jury-LoRA
-
-**Principe :** Entrainer un adapteur LoRA sur un dataset de commentaires jury TV pour des reponses plus authentiques.
-
-**Ref :** `StartingDraft.md` contient la strategie QLoRA detaillee
-**Dataset :** ~500 exemples (score, contexte, commentaire) par persona
-**Outil :** Unsloth + Llama 3 base
-**Deploiement :** Ollama custom model sur GPU 0
+**Fichiers :** `fine-tuning/` (8 fichiers : export_dataset.py, train.py, convert_to_gguf.py, 3 Modelfiles, deploy.sh, requirements.txt)
+**Integration :** `worker/tasks/scoring.py` → Tier 2 Ollama route vers modele fine-tuned par persona si `USE_FINETUNED_JURY=true`
+**Modeles :** `kiaraoke-jury-cassant`, `kiaraoke-jury-encourageant`, `kiaraoke-jury-technique`
 
 ---
 
