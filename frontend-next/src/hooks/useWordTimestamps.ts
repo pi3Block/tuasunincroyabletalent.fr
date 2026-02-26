@@ -123,12 +123,6 @@ export function useWordTimestamps({
       } else {
         setStatus('not_found')
         setWordLines(null)
-
-        // Auto-generate if enabled AND reference audio is ready
-        // (reference must be downloaded before Whisper can process it)
-        if (autoGenerate && youtubeVideoId && referenceReady) {
-          await triggerGenerationRef.current()
-        }
       }
     } catch (err) {
       console.error('[useWordTimestamps] Fetch error:', err)
@@ -137,7 +131,7 @@ export function useWordTimestamps({
     } finally {
       setIsLoading(false)
     }
-  }, [spotifyTrackId, youtubeVideoId, autoGenerate, referenceReady])
+  }, [spotifyTrackId, youtubeVideoId])
 
   // Keep ref updated with latest fetchWordTimestamps
   fetchWordTimestampsRef.current = fetchWordTimestamps
@@ -211,6 +205,22 @@ export function useWordTimestamps({
 
   // Keep ref updated with latest triggerGeneration
   triggerGenerationRef.current = triggerGeneration
+
+  // Auto-generate when reference becomes ready and timestamps not found.
+  // Dedicated effect to avoid race condition: the initial fetch happens before
+  // referenceReady is true, so auto-generation must react to referenceReady changing.
+  useEffect(() => {
+    if (
+      autoGenerate &&
+      referenceReady &&
+      spotifyTrackId &&
+      youtubeVideoId &&
+      status === 'not_found' &&
+      !isGenerating
+    ) {
+      triggerGenerationRef.current()
+    }
+  }, [autoGenerate, referenceReady, spotifyTrackId, youtubeVideoId, status, isGenerating])
 
   // Force regeneration (invalidate cache first, then regenerate)
   const regenerate = useCallback(async () => {
