@@ -112,7 +112,7 @@ const FloatingParticle = memo(function FloatingParticle({
 
 // Animated title with word-by-word reveal
 const AnimatedTitle = memo(function AnimatedTitle() {
-  const words = ['The', 'AI', 'Voice', 'Jury']
+  const words = ['Le', 'Jury', 'IA', 'Vocal']
 
   return (
     <h1 className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-bold tracking-tight">
@@ -120,9 +120,9 @@ const AnimatedTitle = memo(function AnimatedTitle() {
         <motion.span
           key={word}
           className={`inline-block mr-3 ${
-            word === 'AI'
+            word === 'IA'
               ? 'bg-gradient-to-r from-gold-400 via-gold-500 to-orange-500 bg-clip-text text-transparent'
-              : word === 'Voice'
+              : word === 'Vocal'
               ? 'bg-gradient-to-r from-purple-400 to-pink-500 bg-clip-text text-transparent'
               : ''
           }`}

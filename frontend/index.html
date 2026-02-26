@@ -5,8 +5,83 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <meta name="theme-color" content="#ef4444" />
-    <meta name="description" content="Tu as un incroyable talent ? - Fais-toi juger par l'IA !" />
-    <title>Tu as un incroyable talent ?</title>
+    <meta name="description" content="Chante ta chanson préférée et laisse notre jury IA analyser ta performance. Justesse, rythme, paroles — feedback personnalisé en moins de 60 secondes. 100% gratuit." />
+    <title>Kiaraoke — Le Jury IA qui analyse ton chant</title>
+
+    <!-- Canonical -->
+    <link rel="canonical" href="https://kiaraoke.fr/" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://kiaraoke.fr/" />
+    <meta property="og:title" content="Kiaraoke — Le Jury IA qui analyse ton chant" />
+    <meta property="og:description" content="Chante ta chanson préférée et laisse notre jury IA analyser ta performance. Justesse, rythme, paroles — feedback en moins de 60 secondes. 100% gratuit." />
+    <meta property="og:image" content="https://kiaraoke.fr/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:site_name" content="Kiaraoke" />
+    <meta property="og:locale" content="fr_FR" />
+
+    <!-- Twitter Cards -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Kiaraoke — Le Jury IA" />
+    <meta name="twitter:description" content="Chante et laisse notre jury IA analyser ta performance en temps réel." />
+    <meta name="twitter:image" content="https://kiaraoke.fr/og-image.png" />
+    <meta name="twitter:creator" content="@Pi3r2Dev" />
+
+    <!-- JSON-LD : WebApplication -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebApplication",
+      "name": "Kiaraoke",
+      "alternateName": "Tu as un incroyable talent ?",
+      "description": "Application web d'analyse vocale par IA avec jury personnalisé",
+      "url": "https://kiaraoke.fr",
+      "applicationCategory": "EntertainmentApplication",
+      "operatingSystem": "Web",
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "EUR" },
+      "creator": {
+        "@type": "Person",
+        "name": "Pierre Legrand",
+        "url": "https://pierrelegrand.fr"
+      }
+    }
+    </script>
+
+    <!-- JSON-LD : FAQPage -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "Comment fonctionne le jury IA ?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Le jury IA analyse votre chant en 3 dimensions : justesse (pitch via CREPE), rythme (onset detection Librosa) et paroles (transcription Whisper + WER). Trois personas IA génèrent ensuite des commentaires personnalisés via LLM."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Combien de temps dure l'analyse ?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "L'analyse complète prend entre 15 et 65 secondes selon que la référence audio est en cache ou non."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Est-ce gratuit ?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Oui, Kiaraoke est 100% gratuit. Aucun compte requis, aucune limite d'utilisation."
+          }
+        }
+      ]
+    }
+    </script>
   </head>
   <body class="bg-gray-900 text-white">
     <div id="root"></div>

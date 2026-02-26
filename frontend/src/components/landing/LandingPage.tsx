@@ -20,7 +20,7 @@ interface LandingPageProps {
  */
 export const LandingPage = memo(function LandingPage({ onStart }: LandingPageProps) {
   return (
-    <div className="min-h-screen bg-gray-900 text-white overflow-x-hidden">
+    <main className="min-h-screen bg-gray-900 text-white overflow-x-hidden">
       {/* Hero section with CTA */}
       <HeroSection onStart={onStart} />
 
@@ -35,7 +35,7 @@ export const LandingPage = memo(function LandingPage({ onStart }: LandingPagePro
 
       {/* Footer */}
       <FooterSection />
-    </div>
+    </main>
   )
 })
 
