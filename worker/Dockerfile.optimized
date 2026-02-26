@@ -20,9 +20,10 @@ WORKDIR /app
 # (Base already has: torch, torchaudio, whisper, librosa, etc.)
 # ===========================================
 COPY requirements-project.txt .
-RUN uv pip install --system --no-cache -r requirements-project.txt
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system -r requirements-project.txt
 
-# Copy source
+# Copy source (layer invalided only when code changes, not deps)
 COPY . .
 
 # Create cache directories for models
