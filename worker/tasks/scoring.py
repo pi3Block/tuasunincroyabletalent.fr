@@ -39,6 +39,14 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:4b")
 LITELLM_HOST = os.getenv("LITELLM_HOST", "http://host.docker.internal:4000")
 LITELLM_API_KEY = os.getenv("LITELLM_API_KEY", "")
 LITELLM_JURY_MODEL = os.getenv("LITELLM_JURY_MODEL", "jury-comment")
+USE_FINETUNED_JURY = os.getenv("USE_FINETUNED_JURY", "false").lower() in ("true", "1", "yes")
+
+# Fine-tuned persona models (created by fine-tuning/deploy.sh)
+PERSONA_FINETUNED_MODELS = {
+    "Le Cassant": "kiaraoke-jury-cassant",
+    "L'Encourageant": "kiaraoke-jury-encourageant",
+    "Le Technique": "kiaraoke-jury-technique",
+}
 
 
 def do_generate_feedback(
@@ -49,6 +57,7 @@ def do_generate_feedback(
     reference_lyrics: str,
     song_title: str,
     pipeline_span: TracingSpan = None,
+    offset_seconds: float = 0.0,
 ) -> dict:
     """
     Core logic: Generate final scores and jury feedback.
@@ -61,11 +70,12 @@ def do_generate_feedback(
         reference_lyrics: Original song lyrics
         song_title: Name of the song
         pipeline_span: Optional Langfuse pipeline trace for child spans
+        offset_seconds: Auto-detected temporal offset (from cross-correlation)
 
     Returns:
         dict with scores and jury comments
     """
-    logger.info("Calculating scores for session %s", session_id)
+    logger.info("Calculating scores for session %s (offset=%.3fs)", session_id, offset_seconds)
 
     # Load pitch data
     user_pitch = np.load(user_pitch_path)
@@ -75,6 +85,9 @@ def do_generate_feedback(
     pitch_accuracy = calculate_pitch_accuracy(
         user_pitch["frequency"],
         reference_pitch["frequency"],
+        user_time=user_pitch["time"],
+        ref_time=reference_pitch["time"],
+        offset_seconds=offset_seconds,
     )
 
     # Calculate rhythm accuracy (based on timing)
@@ -83,6 +96,7 @@ def do_generate_feedback(
         user_pitch["frequency"],
         reference_pitch["time"],
         reference_pitch["frequency"],
+        offset_seconds=offset_seconds,
     )
 
     # Calculate lyrics accuracy (word error rate)
@@ -152,7 +166,56 @@ def generate_feedback(
     return result
 
 
-def calculate_pitch_accuracy(user_freq: np.ndarray, ref_freq: np.ndarray) -> float:
+def _apply_time_offset(
+    user_freq: np.ndarray,
+    ref_freq: np.ndarray,
+    user_time: np.ndarray,
+    ref_time: np.ndarray,
+    offset_seconds: float,
+) -> tuple:
+    """
+    Align user and reference frequency arrays by applying a temporal offset.
+
+    Shifts the user time axis by offset_seconds and trims both arrays
+    to the overlapping time region.
+
+    Returns:
+        Tuple of (aligned_user_freq, aligned_ref_freq)
+    """
+    if len(user_time) == 0 or len(ref_time) == 0:
+        return user_freq, ref_freq
+
+    shifted_user_time = user_time - offset_seconds
+
+    # Find overlapping time region
+    overlap_start = max(shifted_user_time[0], ref_time[0])
+    overlap_end = min(shifted_user_time[-1], ref_time[-1])
+
+    if overlap_start >= overlap_end:
+        logger.warning("No time overlap after offset, returning original arrays")
+        return user_freq, ref_freq
+
+    # Trim to overlapping region
+    user_mask = (shifted_user_time >= overlap_start) & (shifted_user_time <= overlap_end)
+    ref_mask = (ref_time >= overlap_start) & (ref_time <= overlap_end)
+
+    trimmed_user = user_freq[user_mask]
+    trimmed_ref = ref_freq[ref_mask]
+
+    if len(trimmed_user) < 10 or len(trimmed_ref) < 10:
+        logger.warning("Too few samples after offset trimming, returning original arrays")
+        return user_freq, ref_freq
+
+    return trimmed_user, trimmed_ref
+
+
+def calculate_pitch_accuracy(
+    user_freq: np.ndarray,
+    ref_freq: np.ndarray,
+    user_time: np.ndarray = None,
+    ref_time: np.ndarray = None,
+    offset_seconds: float = 0.0,
+) -> float:
     """
     Calculate pitch accuracy using Dynamic Time Warping (DTW).
 
@@ -162,10 +225,19 @@ def calculate_pitch_accuracy(user_freq: np.ndarray, ref_freq: np.ndarray) -> flo
     Args:
         user_freq: User pitch frequencies in Hz (from CREPE)
         ref_freq: Reference pitch frequencies in Hz
+        user_time: User time array (optional, for offset alignment)
+        ref_time: Reference time array (optional, for offset alignment)
+        offset_seconds: Temporal offset to apply to user time axis
 
     Returns:
         Score 0-100 where 100 = perfect pitch match
     """
+    # Apply temporal offset: trim user/ref to overlapping region
+    if offset_seconds != 0.0 and user_time is not None and ref_time is not None:
+        user_freq, ref_freq = _apply_time_offset(
+            user_freq, ref_freq, user_time, ref_time, offset_seconds,
+        )
+
     # Filter voiced regions (frequency > 0 means voice detected)
     user_voiced = user_freq[user_freq > 0]
     ref_voiced = ref_freq[ref_freq > 0]
@@ -283,6 +355,7 @@ def calculate_rhythm_accuracy(
     user_freq: np.ndarray,
     ref_time: np.ndarray,
     ref_freq: np.ndarray,
+    offset_seconds: float = 0.0,
 ) -> float:
     """
     Calculate rhythm accuracy from pitch data (fallback method).
@@ -295,6 +368,7 @@ def calculate_rhythm_accuracy(
         user_freq: User frequency array
         ref_time: Reference time array
         ref_freq: Reference frequency array
+        offset_seconds: Temporal offset to apply to user onsets
 
     Returns:
         Score 0-100 where 100 = perfect timing
@@ -310,6 +384,10 @@ def calculate_rhythm_accuracy(
 
     user_onsets = get_voice_onsets(user_freq, user_time)
     ref_onsets = get_voice_onsets(ref_freq, ref_time)
+
+    # Apply temporal offset to user onsets
+    if offset_seconds != 0.0 and len(user_onsets) > 0:
+        user_onsets = user_onsets - offset_seconds
 
     if len(user_onsets) == 0 or len(ref_onsets) == 0:
         logger.debug("No voice onsets detected for rhythm analysis")
@@ -541,13 +619,19 @@ async def _generate_comment_async(
         else:
             logger.debug("LITELLM_API_KEY not set, skipping LiteLLM tier")
 
-        # ── Tier 2: Ollama direct qwen3:4b (local, always available) ──
+        # ── Tier 2: Ollama — prefer fine-tuned persona model if enabled ──
         if not comment:
+            ollama_model = OLLAMA_MODEL
+            if USE_FINETUNED_JURY:
+                ollama_model = PERSONA_FINETUNED_MODELS.get(
+                    persona["name"], OLLAMA_MODEL,
+                )
+
             try:
                 response = await client.post(
                     f"{OLLAMA_HOST}/api/generate",
                     json={
-                        "model": OLLAMA_MODEL,
+                        "model": ollama_model,
                         "prompt": prompt,
                         "stream": False,
                         "options": {
@@ -560,14 +644,41 @@ async def _generate_comment_async(
                 )
                 response.raise_for_status()
                 comment = response.json().get("response", "").strip()
-                model_used = f"ollama/{OLLAMA_MODEL}"
+                model_used = f"ollama/{ollama_model}"
                 if not comment:
                     raise ValueError("Empty response from Ollama")
             except Exception as ollama_err:
-                logger.warning(
-                    "Ollama also failed for %s: %s, using heuristic",
-                    persona["name"], ollama_err,
-                )
+                # If fine-tuned model failed, try base model before heuristic
+                if ollama_model != OLLAMA_MODEL and USE_FINETUNED_JURY:
+                    try:
+                        response = await client.post(
+                            f"{OLLAMA_HOST}/api/generate",
+                            json={
+                                "model": OLLAMA_MODEL,
+                                "prompt": prompt,
+                                "stream": False,
+                                "options": {
+                                    "temperature": 0.8,
+                                    "top_p": 0.9,
+                                    "num_predict": 300,
+                                },
+                            },
+                            timeout=20.0,
+                        )
+                        response.raise_for_status()
+                        comment = response.json().get("response", "").strip()
+                        model_used = f"ollama/{OLLAMA_MODEL}"
+                    except Exception as base_err:
+                        logger.warning(
+                            "Ollama base model also failed for %s: %s",
+                            persona["name"], base_err,
+                        )
+
+                if not comment:
+                    logger.warning(
+                        "Ollama failed for %s: %s, using heuristic",
+                        persona["name"], ollama_err,
+                    )
 
         # ── Tier 3: Heuristic (no API, always works) ──
         if not comment:

@@ -1,6 +1,6 @@
 """
 Audio source separation using Demucs.
-Separates vocals from instrumentals.
+Separates vocals from instrumentals with optional spectral de-bleeding.
 """
 import os
 import logging
@@ -47,6 +47,66 @@ def convert_to_wav(input_path: Path, output_path: Path) -> Path:
         raise RuntimeError(f"FFmpeg conversion failed: {result.stderr}")
     logger.info("Conversion complete: %s", output_path)
     return output_path
+
+
+def apply_debleeding(
+    vocals,
+    instrumentals,
+    n_fft: int = 2048,
+    hop_length: int = 512,
+    power: float = 2.0,
+    eps: float = 1e-8,
+):
+    """
+    Reduce cross-talk between separated stems using spectral soft masking.
+
+    Computes Wiener-like masks in the frequency domain:
+      mask_v = |S_vocals|^p / (|S_vocals|^p + |S_instru|^p + eps)
+    Then applies each mask to the corresponding stem's STFT and reconstructs.
+
+    Args:
+        vocals: (2, samples) tensor on GPU
+        instrumentals: (2, samples) tensor on GPU
+        n_fft: FFT window size
+        hop_length: Hop length for STFT
+        power: Exponent controlling mask sharpness (2.0 = Wiener-like)
+        eps: Numerical stability constant
+
+    Returns:
+        Tuple of (debleeded_vocals, debleeded_instrumentals) tensors
+    """
+    import torch
+
+    window = torch.hann_window(n_fft, device=vocals.device)
+
+    vocals_stft = torch.stft(
+        vocals, n_fft, hop_length, window=window,
+        return_complex=True, onesided=True,
+    )
+    instru_stft = torch.stft(
+        instrumentals, n_fft, hop_length, window=window,
+        return_complex=True, onesided=True,
+    )
+
+    vocals_mag = vocals_stft.abs().pow(power)
+    instru_mag = instru_stft.abs().pow(power)
+    total = vocals_mag + instru_mag + eps
+
+    mask_vocals = vocals_mag / total
+    mask_instru = instru_mag / total
+
+    debleeded_vocals = torch.istft(
+        vocals_stft * mask_vocals,
+        n_fft, hop_length, window=window,
+        length=vocals.shape[-1], onesided=True,
+    )
+    debleeded_instru = torch.istft(
+        instru_stft * mask_instru,
+        n_fft, hop_length, window=window,
+        length=instrumentals.shape[-1], onesided=True,
+    )
+
+    return debleeded_vocals, debleeded_instru
 
 
 def do_separate_audio(audio_path: str, session_id: str) -> dict:
@@ -102,6 +162,16 @@ def do_separate_audio(audio_path: str, session_id: str) -> dict:
     # Demucs outputs: drums, bass, other, vocals (index 3)
     vocals = sources[0, 3]  # Shape: (2, samples)
     instrumentals = sources[0, :3].sum(dim=0)  # Mix drums + bass + other
+
+    # De-bleeding: reduce cross-talk via spectral soft masking
+    debleed_enabled = os.getenv("DEBLEED_ENABLED", "true").lower() in ("true", "1", "yes")
+    if debleed_enabled:
+        try:
+            logger.info("Applying spectral de-bleeding...")
+            vocals, instrumentals = apply_debleeding(vocals, instrumentals)
+            logger.info("De-bleeding complete")
+        except Exception as e:
+            logger.warning("De-bleeding failed (using raw stems): %s", e)
 
     # Save separated stems
     output_dir = Path(os.getenv("AUDIO_OUTPUT_DIR", "/app/audio_files")) / session_id

@@ -1,0 +1,8 @@
+unsloth[colab-new]>=2024.12
+transformers>=4.45.0
+datasets>=3.0.0
+trl>=0.12.0
+peft>=0.13.0
+bitsandbytes>=0.44.0
+langfuse>=3.13.0
+httpx>=0.28.0

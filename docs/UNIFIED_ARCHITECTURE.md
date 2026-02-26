@@ -542,8 +542,8 @@ GROQ_API_KEY=gsk_...
 | 0 | GPU-85c38fae | RTX 3070 | 4115/8192 MiB | Ollama Light :11435, qwen3:4b |
 | 1 | GPU-bdb1f5e4 | RTX 3080 | 5843/10240 MiB | Ollama Heavy :11434, qwen3:8b |
 | 2 | GPU-c99d136d | RTX 3070 | 6029/8192 MiB | Ollama Vision :11436, qwen2.5vl:7b |
-| 3 | GPU-b57ff866 | RTX 3070 | 4983/8192 MiB | Ollama Reasoning :11438, deepseek-r1:7b |
-| 4 | GPU-d4fb9c68 | RTX 3060 Ti | 5483/8192 MiB | Ollama Twitch :11437, llama3.1:8b + Whisper |
+| 3 | GPU-b57ff866 | RTX 3070 | 4121/8192 MiB | shared-whisper :9000, large-v3-turbo int8 |
+| 4 | GPU-d4fb9c68 | RTX 3060 Ti | 4959/8192 MiB | Ollama Reasoning :11438, deepseek-r1:7b + BGE-Reranker |
 
 **Principe :** 1 GPU = 1 categorie de modele. Les modeles restent residents en VRAM (`OLLAMA_KEEP_ALIVE=-1`). Les projets envoient des requetes aux services partages (Ollama, shared-whisper), jamais de duplication.
 
@@ -599,14 +599,14 @@ GPU 2 (RTX 3070, 8 Go) -- Vision :
   qwen2.5vl:7b                                        5.9 Go
   Marge: 2.1 Go    RESIDENT
 
-GPU 3 (RTX 3070, 8 Go) -- Reasoning :
-  deepseek-r1:7b                                      4.7 Go
-  Marge: 3.3 Go    RESIDENT
+GPU 3 (RTX 3070, 8 Go) -- Whisper STT (dedicated) :
+  shared-whisper (large-v3-turbo int8)                4.1 Go
+  Marge: 3.9 Go    RESIDENT
 
-GPU 4 (RTX 3060 Ti, 8 Go) -- Audio STT + Twitch :
-  Ollama Twitch llama3.1:8b                           4.9 Go
-  + shared-whisper (Faster Whisper, model medium)     ~0.5 Go
-  Marge: 2.6 Go    Co-resident
+GPU 4 (RTX 3060 Ti, 8 Go) -- Reasoning + Reranker :
+  Ollama Reasoning deepseek-r1:7b                     4.9 Go
+  + BGE-Reranker                                      ~1.5 Go
+  Marge: 1.6 Go    Co-resident
 
 TOTAL VRAM utilise : ~25.4 Go / 42 Go (marge 16.6 Go)
 ```
@@ -715,14 +715,14 @@ OLLAMA_MAX_QUEUE=32
 
 **Maintenance :** Cron restart quotidien 4h (`/etc/cron.d/ollama-maintenance`), GPU watchdog 5min (`/opt/scripts/gpu-watchdog.sh`).
 
-### 4.5 Shared Whisper — Faster Whisper HTTP (GPU 4)
+### 4.5 Shared Whisper — Faster Whisper HTTP (GPU 3 RTX 3070)
 
-Microservice HTTP unique au lieu d'un worker par projet.
+Microservice HTTP unique au lieu d'un worker par projet. **GPU dedie** (RTX 3070) depuis 2026-02-26 (swap GPU 3/4).
 
 ```bash
 # /etc/systemd/system/shared-whisper.service
 [Unit]
-Description=Shared Whisper ASR (Faster Whisper HTTP on GPU-d4fb9c68)
+Description=Shared Whisper ASR (Faster Whisper HTTP on GPU-b57ff866 RTX 3070)
 After=docker.service nvidia-persistenced.service
 Requires=docker.service
 
@@ -736,8 +736,8 @@ ExecStartPre=-/usr/bin/docker rm -f shared-whisper
 
 ExecStart=/usr/bin/docker run --rm \
   --name shared-whisper \
-  --gpus '"device=GPU-d4fb9c68-2b3c-a854-97ed-c82b3c580122"' \
-  --memory 4g \
+  --gpus '"device=GPU-b57ff866-8146-30e0-3abd-0af37652996b"' \
+  --memory 6g \
   --network coolify \
   -p 9000:9000 \
   -v whisper-cache:/root/.cache/whisper \
@@ -754,13 +754,13 @@ ExecStop=/usr/bin/docker stop shared-whisper
 WantedBy=multi-user.target
 ```
 
-**NOTE (2026-02-25) :** La config systemd specifie `ASR_MODEL=large-v3-turbo` mais SSH montre que le modele actuellement charge en memoire est **medium**. Cela peut resulter d'un televersement incomplet ou d'un fallback automatique. Verifier avec `docker logs shared-whisper`.
+**Modele :** `large-v3-turbo` int8 (~4.1 Go VRAM). Upgrade depuis `medium` le 2026-02-26.
 
 **Endpoints :** `/asr` (transcription), `/detect-language`. Pas de `/health` — utiliser `/docs` (200 OK).
 
 **Acces reseau :** `http://shared-whisper:9000` (conteneurs sur reseau `coolify`).
 
-> **NEVER use `large-v3`** on RTX 3060 Ti : 7.6 Go VRAM -> CUDA OOM. `distil-large-v3` bug : ignore `language=fr` sur audio court -> outputs English. Solution : `large-v3-turbo` int8.
+> **NEVER use `large-v3`** (non-turbo) : 7.6 Go VRAM -> CUDA OOM sur 8 Go GPUs. `distil-large-v3` bug : ignore `language=fr` sur audio court -> outputs English. Solution : `large-v3-turbo` int8.
 
 ---
 
@@ -1118,7 +1118,7 @@ Toutes les operations Langfuse sont wrappees en try/except — si Langfuse n'est
 
 ```
 Tier 1: shared-whisper HTTP
-  - GPU 4 (RTX 3060 Ti), modele actuellement charge: medium
+  - GPU 3 (RTX 3070), modele: large-v3-turbo int8 (~4.1 Go VRAM)
   - Endpoint: http://shared-whisper:9000/asr
   - Latence: ~2-3s pour 3 min d'audio
   - Fallback automatique si HTTP 5xx ou timeout 120s (SHARED_WHISPER_TIMEOUT)
@@ -1255,8 +1255,8 @@ WHISPER_LOCAL_FALLBACK=false
                       v                    v                   v
            +------------------+  +--------------+  +------------------+
            | shared-whisper   |  | Ollama Light  |  | LiteLLM Proxy    |
-           | :9000 (GPU 4)   |  | :11435 (GPU 0)|  | :4000 -> Groq    |
-           | medium (actual)  |  | qwen3:4b      |  | qwen3-32b (jury) |
+           | :9000 (GPU 3)   |  | :11435 (GPU 0)|  | :4000 -> Groq    |
+           | large-v3-turbo   |  | qwen3:4b      |  | qwen3-32b (jury) |
            +------------------+  +--------------+  +------------------+
                                           |
                                           v
@@ -1842,6 +1842,7 @@ df -h /                                                  # -> 95% used (CRITICAL
 | 2026-02-11 | Langfuse tracing integre (pipeline + jury generations) |
 | 2026-02-11 | Structured logging (zero print(), logging module) |
 | 2026-02-11 | pgvector migration (Qdrant supprime, -1 container, -1 Go RAM) |
+| 2026-02-26 | Shared Whisper swap GPU 4→3 (RTX 3070), upgrade medium→large-v3-turbo, twitch disabled |
 | 2026-02-10 | Shared Whisper HTTP (systemd, GPU 4) |
 | 2026-02-10 | GPU isolation par UUID (docker-compose device_ids) |
 | 2026-02-10 | zram activation + Docker cleanup |

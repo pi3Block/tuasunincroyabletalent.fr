@@ -19,6 +19,7 @@ import { useAudioRecorder } from "@/hooks/useAudioRecorder";
 import { usePitchDetection } from "@/hooks/usePitchDetection";
 import { useWordTimestamps } from "@/hooks/useWordTimestamps";
 import { useOrientation } from "@/hooks/useOrientation";
+import { useSSE, type SSEEvent } from "@/hooks/useSSE";
 import Image from "next/image";
 import Link from "next/link";
 
@@ -42,6 +43,7 @@ function getProgressLabel(step: string): string {
     separating_reference: "Préparation de la version originale...",
     separating_reference_done: "Référence prête !",
     separating_reference_cached: "Référence déjà prête !",
+    computing_sync: "Synchronisation automatique...",
     extracting_pitch_user: "Analyse de ta justesse...",
     extracting_pitch_ref: "Analyse de la référence...",
     extracting_pitch_done: "Justesse analysée !",
@@ -139,6 +141,7 @@ export default function AppPage() {
   const [submittingFallback, setSubmittingFallback] = useState(false);
   const [practiceMode, setPracticeMode] = useState(false);
   const [karaokeMode, setKaraokeMode] = useState(true);
+  const [usePollingFallback, setUsePollingFallback] = useState(false);
 
   const { useLandscapeMobileLayout } = useOrientation();
 
@@ -185,9 +188,69 @@ export default function AppPage() {
     }
   }, [status, setStatus]);
 
-  // Poll session status when preparing/downloading
+  // SSE event handler — replaces both session status and analysis polling
+  const handleSSEEvent = useCallback(
+    (event: SSEEvent) => {
+      switch (event.type) {
+        case "session_status":
+          setReferenceStatus(event.data.reference_status as string);
+          if (event.data.reference_status === "ready") {
+            setStatus("ready");
+          } else if (event.data.reference_status === "needs_fallback") {
+            setStatus("needs_fallback");
+          } else if (event.data.reference_status === "error") {
+            setError(
+              (event.data.error as string) || "Reference preparation failed",
+            );
+            setStatus("needs_fallback");
+          } else if (event.data.reference_status === "downloading") {
+            setStatus("downloading");
+          }
+          break;
+
+        case "analysis_progress":
+          setAnalysisProgress({
+            step: event.data.step as string,
+            progress: event.data.progress as number,
+            detail: event.data.detail as string,
+          });
+          break;
+
+        case "analysis_complete":
+          setResults(event.data.results);
+          setAnalysisTaskId(null);
+          break;
+
+        case "analysis_error":
+          setError((event.data.error as string) || "Analyse échouée");
+          setStatus("ready");
+          setAnalysisTaskId(null);
+          break;
+
+        case "error":
+          console.warn("[SSE] Server error:", event.data.message);
+          break;
+      }
+    },
+    [setReferenceStatus, setStatus, setError, setAnalysisProgress, setResults],
+  );
+
+  // SSE connection — active during preparing/downloading/analyzing
+  useSSE({
+    sessionId,
+    enabled:
+      !usePollingFallback &&
+      (status === "preparing" ||
+        status === "downloading" ||
+        status === "analyzing"),
+    onEvent: handleSSEEvent,
+    onFallback: () => setUsePollingFallback(true),
+  });
+
+  // Fallback: poll session status (only if SSE failed)
   useEffect(() => {
     if (
+      !usePollingFallback ||
       !sessionId ||
       (status !== "preparing" && status !== "downloading")
     ) {
@@ -220,7 +283,7 @@ export default function AppPage() {
     pollStatus();
 
     return () => clearInterval(interval);
-  }, [sessionId, status, setReferenceStatus, setStatus, setError]);
+  }, [usePollingFallback, sessionId, status, setReferenceStatus, setStatus, setError]);
 
   // Fetch lyrics when session is ready
   useEffect(() => {
@@ -328,9 +391,14 @@ export default function AppPage() {
     };
   }, []);
 
-  // Poll analysis status
+  // Fallback: poll analysis status (only if SSE failed)
   useEffect(() => {
-    if (!sessionId || status !== "analyzing" || !analysisTaskId) {
+    if (
+      !usePollingFallback ||
+      !sessionId ||
+      status !== "analyzing" ||
+      !analysisTaskId
+    ) {
       return;
     }
 
@@ -363,6 +431,7 @@ export default function AppPage() {
 
     return () => clearInterval(interval);
   }, [
+    usePollingFallback,
     sessionId,
     status,
     analysisTaskId,
@@ -995,6 +1064,14 @@ export default function AppPage() {
                 value={results.lyrics_accuracy}
               />
             </div>
+
+            {results.auto_sync && results.auto_sync.confidence > 0.3 && (
+              <div className="text-center text-xs text-gray-500">
+                Sync auto: {results.auto_sync.offset_seconds > 0 ? "+" : ""}
+                {results.auto_sync.offset_seconds.toFixed(1)}s
+                {results.auto_sync.confidence < 0.5 && " (faible confiance)"}
+              </div>
+            )}
 
             <div className="flex justify-center gap-4">
               {results.jury_comments.map((jury, i) => (

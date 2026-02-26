@@ -18,7 +18,7 @@ IA jury analysent la performance et délivrent un verdict personnalisé.
 - Mode studio multi-pistes (comparaison voix user vs référence)
 
 ## Technologies
-- Frontend: React 18, TypeScript, Vite, Zustand, Tailwind, Framer Motion
+- Frontend: Next.js 15, React 19, TypeScript 5.7, Zustand 5, Tailwind 4, Framer Motion 12
 - Backend: FastAPI, Celery, PostgreSQL, Redis
 - Audio: Demucs, CREPE, Whisper, Librosa, fastdtw
 - IA: LiteLLM, Groq qwen3-32b, Ollama qwen3:4b

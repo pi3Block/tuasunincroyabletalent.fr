@@ -4,9 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Tu as un incroyable talent ?** - Application web type "Show TV" permettant d'evaluer le chant d'un utilisateur par rapport a une version originale (Spotify/YouTube), avec feedback genere par 3 Personas IA jury style "Incroyable Talent".
+**Kiaraoke** (anciennement "Tu as un incroyable talent ?") — Application web d'analyse vocale par IA avec jury personnalise. Evalue le chant d'un utilisateur par rapport a une version originale (Spotify/YouTube), avec feedback genere par 3 Personas IA jury.
 
-**Mobile-First**: 100% mobile-friendly. Layouts adaptatifs (portrait, landscape, desktop). Orientation detection pour split-view en paysage mobile.
+- **Domaine**: kiaraoke.fr / api.kiaraoke.fr
+- **Mobile-First**: 100% mobile-friendly. Layouts adaptatifs (portrait, landscape, desktop). Orientation detection pour split-view en paysage mobile.
 
 ## Commands
 
@@ -16,8 +17,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Pas de `docker-compose up` manuel en prod
 
 # === DEVELOPPEMENT LOCAL ===
-# Frontend dev (hot reload)
-cd frontend && npm run dev
+# Frontend dev (hot reload + Turbopack)
+cd frontend-next && npm run dev
 
 # Backend dev (avec reload)
 cd backend && uvicorn app.main:app --reload --port 8000
@@ -25,15 +26,15 @@ cd backend && uvicorn app.main:app --reload --port 8000
 # Worker Celery dev (GPU requis pour Demucs/CREPE)
 cd worker && celery -A tasks.celery_app worker --loglevel=info --pool=solo -Q gpu-heavy,gpu,default
 
-# Build frontend prod
-cd frontend && npm run build
+# Build frontend prod (Next.js standalone)
+cd frontend-next && npm run build
 
 # === TESTS ===
 # Backend tests (pytest)
 cd backend && pytest -v
 
-# Frontend tests (vitest)
-cd frontend && npm test
+# Frontend lint
+cd frontend-next && npm run lint
 
 # Rebuild image Docker
 docker-compose -f docker-compose.dev.yml build --no-cache <service>
@@ -42,7 +43,7 @@ docker-compose -f docker-compose.dev.yml build --no-cache <service>
 ## Stack Technique
 
 - **Infrastructure**: Docker Compose (orchestre par Coolify) + NVIDIA CUDA + Traefik reverse proxy
-- **Frontend**: React 18 + TypeScript 5.6 + Vite 6 + Zustand 5 + Tailwind 3 + Framer Motion 12 + Radix UI (shadcn)
+- **Frontend**: Next.js 15 (App Router, Turbopack) + React 19 + TypeScript 5.7 + Zustand 5 + Tailwind 4 + Framer Motion 12 + Radix UI (shadcn)
 - **Backend API**: Python 3.11 + FastAPI + Uvicorn + Pydantic 2 + SQLAlchemy 2 (async) + asyncpg
 - **Backend Worker**: Python 3.11 + Celery 5 + Redis (GPU tasks) + Langfuse (tracing)
 - **LLM**: LiteLLM Proxy -> Groq qwen3-32b (gratuit) + Ollama qwen3:4b (local GPU 0) + heuristique fallback
@@ -50,7 +51,7 @@ docker-compose -f docker-compose.dev.yml build --no-cache <service>
 - **Audio Processing**:
   - Demucs htdemucs - Source separation (vocals/instrumentals)
   - torchcrepe - Pitch detection (full/tiny models)
-  - shared-whisper HTTP (Faster Whisper, GPU 4) + Groq Whisper API fallback
+  - shared-whisper HTTP (Faster Whisper large-v3-turbo, GPU 3 RTX 3070) + Groq Whisper API fallback
   - whisper-timestamped - Word-level alignment (forced alignment + DTW)
   - Librosa - Onset detection (rhythm)
   - fastdtw - Pitch comparison (Dynamic Time Warping)
@@ -62,21 +63,39 @@ docker-compose -f docker-compose.dev.yml build --no-cache <service>
 
 ```
 tuasunincroyabletalent.fr/
-├── frontend/                      # React 18 + Vite
-│   ├── Dockerfile.prod            # Multi-stage (builder + nginx)
-│   ├── nginx.conf                 # SPA routing + API/WS proxy
+├── frontend-next/                 # Next.js 15 App Router (standalone output)
+│   ├── next.config.ts             # Standalone, API rewrites, security headers
+│   ├── public/
+│   │   ├── llms.txt               # LLM-friendly site description
+│   │   └── favicon.svg
 │   └── src/
+│       ├── app/
+│       │   ├── layout.tsx         # Root layout (metadata, JSON-LD, viewport)
+│       │   ├── page.tsx           # Landing page SSG (Hero, HowItWorks, etc.)
+│       │   ├── robots.ts          # robots.txt generation
+│       │   ├── sitemap.ts         # sitemap.xml generation
+│       │   ├── globals.css        # Tailwind 4 + karaoke animations
+│       │   ├── app/
+│       │   │   ├── layout.tsx     # /app layout (metadata "Studio")
+│       │   │   └── page.tsx       # Interactive app (CSR, full flow)
+│       │   └── results/
+│       │       └── [sessionId]/page.tsx  # Results page (dynamic route)
 │       ├── stores/                # Zustand (sessionStore, audioStore)
 │       ├── components/
-│       │   ├── landing/           # LandingPage, Hero, HowItWorks, Footer
-│       │   ├── lyrics/            # LyricsDisplayPro, KaraokeWord, LyricLine
-│       │   ├── audio/             # StudioMode, TrackMixer, TransportBar
-│       │   └── ui/                # shadcn components (button, card, slider...)
+│       │   ├── app/               # TrackSearch, YouTubePlayer, PitchIndicator,
+│       │   │                      # LandscapeRecordingLayout, LyricsDisplay
+│       │   ├── lyrics/            # LyricsDisplayPro, KaraokeWord, LyricLine,
+│       │   │                      # LyricsControls, TimelineDebug
+│       │   ├── sections/          # Hero, HowItWorks, RecentPerformances, TechStack
+│       │   ├── layout/            # Footer
+│       │   └── ui/                # shadcn (button, card, slider, badge, progress...)
 │       ├── hooks/                 # useAudioRecorder, usePitchDetection,
 │       │                          # useWordTimestamps, useYouTubePlayer,
 │       │                          # useLyricsSync, useLyricsScroll, useOrientation
-│       ├── audio/                 # Multi-track player (AudioContext, TrackProcessor)
+│       ├── audio/                 # Multi-track player (AudioContext, TrackProcessor,
+│       │                          # StudioMode, TrackMixer, TransportBar)
 │       ├── api/                   # API client (fetch wrapper)
+│       ├── lib/                   # Utilities (cn, etc.)
 │       └── types/                 # TypeScript types (lyrics, youtube)
 │
 ├── backend/                       # FastAPI
@@ -150,7 +169,7 @@ analyze_performance (Celery task, gpu-heavy queue)
 │           [GPU, ~4s + ~1.5s]
 │
 ├─ Step 5: Whisper — Transcription user vocals (3-tier fallback)
-│           Tier 1: shared-whisper HTTP (GPU 4, medium model, VAD)
+│           Tier 1: shared-whisper HTTP (GPU 3 RTX 3070, large-v3-turbo int8, VAD)
 │           Tier 2: Groq Whisper API (gratuit, whisper-large-v3-turbo)
 │           Tier 3: Local PyTorch Whisper (desactive par defaut)
 │           [~2-8s]
@@ -330,8 +349,8 @@ task_routes = {
 
 | Service | Image | Role |
 |---------|-------|------|
-| `frontend` | Dockerfile.prod (nginx) | React SPA, Traefik -> tuasunincroyabletalent.fr |
-| `api` | Dockerfile (python:3.11) | FastAPI, Traefik -> api.tuasunincroyabletalent.fr |
+| `frontend` | Next.js standalone (Node.js) | SSR/SSG, kiaraoke.fr |
+| `api` | Dockerfile (python:3.11) | FastAPI, api.kiaraoke.fr |
 | `worker-heavy` | Dockerfile.optimized | Celery GPU (Demucs, CREPE, Whisper) |
 
 ### Infrastructure partagee (Coolify)
@@ -342,7 +361,7 @@ task_routes = {
 | shared-redis | 6379 | coolify DNS | DB index 2 (broker + sessions) |
 | LiteLLM Proxy | 4000 | host.docker.internal | Jury LLM -> Groq qwen3-32b |
 | Ollama Light | 11435 | host.docker.internal | qwen3:4b (GPU 0, fallback jury) |
-| shared-whisper | 9000 | coolify DNS | Faster Whisper HTTP (GPU 4) |
+| shared-whisper | 9000 | coolify DNS | Faster Whisper HTTP (GPU 3 RTX 3070, large-v3-turbo) |
 | Langfuse | 3000 | coolify DNS | Tracing LLM |
 
 ### GPU Time-Sharing (GPU 0, RTX 3070, 8 Go)
@@ -397,7 +416,9 @@ CUDA_VISIBLE_DEVICES=0
 
 # Sentry (optionnel)
 SENTRY_DSN=https://xxx@sentry.io/xxx
-VITE_SENTRY_DSN=https://xxx@sentry.io/xxx
+
+# Frontend (Next.js)
+NEXT_PUBLIC_API_URL=https://api.kiaraoke.fr
 ```
 
 ## Database Tables (PostgreSQL — voicejury_db)
@@ -418,7 +439,7 @@ Tables creees via Alembic migrations (`alembic upgrade head`), fallback `create_
 - **Never** load ML models at import time (lazy load for GPU memory)
 - **Never** use blocking I/O in FastAPI async routes
 - **Never** hardcode credentials (use environment variables)
-- **Never** use `large-v3` Whisper on RTX 3060 Ti (CUDA OOM, 7.6 Go)
+- **Never** use `large-v3` Whisper (non-turbo) — 7.6 Go VRAM, CUDA OOM on 8GB GPUs
 - **Never** run Demucs pendant qu'Ollama Light est charge (GPU OOM)
 - **Never** `REINDEX SYSTEM` sur shared-postgres en production
 
@@ -428,11 +449,23 @@ Tables creees via Alembic migrations (`alembic upgrade head`), fallback `create_
 |--------|--------|
 | API Response | <200ms |
 | Demucs Separation | <30s for 3min song (GPU) |
-| Whisper Transcription (shared-whisper) | <3s for 3min (VAD, GPU 4) |
+| Whisper Transcription (shared-whisper) | <3s for 3min (VAD, GPU 3 RTX 3070) |
 | CREPE Pitch (full) | <5s for 3min (GPU) |
 | Jury Generation (3 personas parallel) | <5s |
 | Total Analysis (first time) | <65s |
 | Total Analysis (cached reference) | <25s |
+
+## SEO & Web Standards
+
+Le frontend Next.js inclut un SEO complet :
+
+| Fichier | Role |
+|---------|------|
+| `frontend-next/src/app/layout.tsx` | Metadata, Open Graph, Twitter Card, JSON-LD (WebApp + FAQ) |
+| `frontend-next/src/app/robots.ts` | robots.txt dynamique |
+| `frontend-next/src/app/sitemap.ts` | sitemap.xml dynamique (/, /app) |
+| `frontend-next/public/llms.txt` | Description LLM-friendly du site |
+| `frontend-next/next.config.ts` | Security headers (HSTS, X-Frame-Options, Permissions-Policy) |
 
 ## Key Documentation
 

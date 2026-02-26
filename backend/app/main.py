@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import session, search, audio, lyrics, results
+from app.routers import session, search, audio, lyrics, results, sse
 
 # Sentry error tracking (optional — enabled when SENTRY_DSN is set)
 _sentry_dsn = os.getenv("SENTRY_DSN")
@@ -80,6 +80,7 @@ app.include_router(session.router, prefix="/api/session", tags=["Session"])
 app.include_router(audio.router, prefix="/api/audio", tags=["Audio"])
 app.include_router(lyrics.router, prefix="/api/lyrics", tags=["Lyrics"])
 app.include_router(results.router, prefix="/api/results", tags=["Results"])
+app.include_router(sse.router, prefix="/api/session", tags=["SSE"])
 
 
 @app.get("/")

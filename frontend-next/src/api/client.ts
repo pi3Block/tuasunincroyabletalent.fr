@@ -84,6 +84,12 @@ export interface JuryComment {
   vote: "yes" | "no";
 }
 
+export interface AutoSync {
+  offset_seconds: number;
+  confidence: number;
+  method: string;
+}
+
 export interface AnalysisResults {
   session_id: string;
   score: number;
@@ -91,6 +97,7 @@ export interface AnalysisResults {
   rhythm_accuracy: number;
   lyrics_accuracy: number;
   jury_comments: JuryComment[];
+  auto_sync?: AutoSync;
 }
 
 export interface RecentTrack {

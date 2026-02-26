@@ -1,20 +1,20 @@
-# Roadmap Implementation — Tu as un incroyable talent ?
+# Roadmap Implementation — Kiaraoke
 
 > Source de verite unique pour l'etat d'avancement et les taches a implementer.
 > Chaque session Claude doit lire ce fichier en premier.
 
-Last updated: 2026-02-25
+Last updated: 2026-02-26
 
 ---
 
-## Etat actuel (~95% implemente)
+## Etat actuel (~100% implemente, migration Next.js terminee)
 
 ### Ce qui MARCHE — ne pas toucher sauf bug
 
 | Composant | Statut | Fichiers cles |
 |-----------|--------|---------------|
 | Pipeline audio 7 etapes (Demucs → CREPE → Whisper → Genius → Scoring → Jury) | ✅ | `worker/tasks/pipeline.py` |
-| Frontend UX complet (Landing → Search → Record → Analyze → Results) | ✅ | `frontend/src/App.tsx` |
+| Frontend UX complet (Landing SSG + App CSR, Next.js 15 App Router) | ✅ | `frontend-next/src/app/page.tsx`, `frontend-next/src/app/app/page.tsx` |
 | Session management Redis (start, status polling, upload, analyze) | ✅ | `backend/app/routers/session.py` |
 | Lyrics karaoke (LRCLib synced → Genius plain, word-timestamps via Whisper) | ✅ | `backend/app/routers/lyrics.py`, `worker/tasks/word_timestamps.py` |
 | Caching 2-tier (Redis 1h + PostgreSQL 90-365j) pour lyrics et word-timestamps | ✅ | `backend/app/services/lyrics_cache.py`, `word_timestamps_cache.py` |
@@ -25,18 +25,19 @@ Last updated: 2026-02-25
 | Langfuse tracing (pipeline + jury comments) | ✅ | `worker/tasks/tracing.py` |
 | Audio track streaming HTTP Range (separated vocals/instrumentals) | ✅ | `backend/app/routers/audio.py` |
 | Demucs cache par YouTube ID (evite re-separation) | ✅ | `backend/app/services/youtube_cache.py` |
-| Mobile-first + orientation detection + landscape split-view | ✅ | `frontend/src/hooks/useOrientation.ts` |
-| Real-time pitch detection locale (autocorrelation navigateur) | ✅ | `frontend/src/hooks/usePitchDetection.ts` |
+| Mobile-first + orientation detection + landscape split-view | ✅ | `frontend-next/src/hooks/useOrientation.ts` |
+| Real-time pitch detection locale (autocorrelation navigateur) | ✅ | `frontend-next/src/hooks/usePitchDetection.ts` |
 | Health check complet (Redis + PostgreSQL) | ✅ | `backend/app/main.py:68-93` |
 | Audio file cleanup (Celery beat, toutes les heures) | ✅ | `worker/tasks/cleanup.py`, `celery_app.py:114-119` |
 | Redis session TTL (setex 3600s, rafraichi a chaque update) | ✅ | `backend/app/services/redis_client.py:35-42` |
-| StudioMode UI (practice, analyzing, results) | ✅ | `frontend/src/audio/`, `App.tsx:587,861,921` |
+| StudioMode UI (practice, analyzing, results) | ✅ | `frontend-next/src/audio/`, `app/app/page.tsx` |
 | Persistent results (PostgreSQL + auto-save) | ✅ | `backend/app/models/session_results.py`, `routers/session.py:729-760` |
 | Results history endpoint | ✅ | `backend/app/routers/results.py` → `GET /api/results/history` |
 | Alembic migrations (initial schema, 4 tables) | ✅ | `backend/alembic/`, `alembic.ini` |
 | Tests backend (pytest, 24 tests) | ✅ | `backend/tests/` (session, search, audio, health) |
-| Tests frontend (vitest, 15 tests) | ✅ | `frontend/src/__tests__/` (sessionStore, client) |
-| Sentry error tracking (opt-in, 3 services) | ✅ | `main.py`, `celery_app.py`, `main.tsx` |
+| SEO complet (metadata, JSON-LD, robots.ts, sitemap.ts, llms.txt) | ✅ | `frontend-next/src/app/layout.tsx`, `robots.ts`, `sitemap.ts` |
+| Next.js 15 migration (React 19, Tailwind 4, App Router) | ✅ | `frontend-next/` (54 fichiers TS/TSX) |
+| Sentry error tracking (opt-in, backend + worker) | ✅ | `main.py`, `celery_app.py` |
 | `.env.example` complet (12+ variables) | ✅ | `.env.example` |
 | Dead code supprime (ancien results.py mock) | ✅ | Supprime, `results.py` recree pour history |
 
@@ -101,9 +102,9 @@ docker pull ghcr.io/pi3block/gpu-worker-base:latest
 
 Coolify Dashboard → Deploy. Verifier :
 ```bash
-curl -s https://api.tuasunincroyabletalent.fr/health
+curl -s https://api.kiaraoke.fr/health
 # Attendu: {"status": "healthy", "version": "0.1.0", "services": {"api": true, "redis": true, "postgres": true}}
-docker ps --filter "name=tuasun"
+docker ps --filter "name=kiaraoke"
 ```
 
 ### P0.5 — Premiere analyse (Celery beat)
@@ -137,9 +138,10 @@ docker logs <worker-container> | grep "Cleanup complete"
 
 | Tache | Statut | Detail |
 |-------|--------|--------|
-| P2.1 StudioMode UI | ✅ | Deja integre dans App.tsx (practice:L587, analyzing:L861, results:L921). Multi-track complet avec Web Audio API, volume/mute/solo, transport, download |
+| P2.1 StudioMode UI | ✅ | Multi-track complet avec Web Audio API, volume/mute/solo, transport, download |
 | P2.2 Persistent results | ✅ | `session_results` table (JSONB jury), auto-persist au SUCCESS, `GET /api/results/history?limit=20` |
 | P2.3 Alembic migrations | ✅ | `backend/alembic/` + initial migration (4 tables), `init_db()` essaie Alembic puis fallback `create_all()` |
+| P2.4 Migration Next.js 15 | ✅ | React 19, App Router, Tailwind 4, SSG landing + CSR app, SEO complet, rebranding Kiaraoke |
 
 ---
 
@@ -148,8 +150,7 @@ docker logs <worker-container> | grep "Cleanup complete"
 | Tache | Statut | Detail |
 |-------|--------|--------|
 | P3.1 Tests backend (pytest) | ✅ | 24 tests: session flow, search, audio HTTP Range, health check. Mock Redis in-memory, mock Spotify/YouTube/Celery |
-| P3.2 Tests frontend (vitest) | ✅ | 15 tests: sessionStore transitions, API client requests/errors. jsdom environment, path aliases |
-| P3.3 Sentry error tracking | ✅ | Opt-in via `SENTRY_DSN` / `VITE_SENTRY_DSN`. API (FastAPI+SQLAlchemy), Worker (Celery), Frontend (dynamic import) |
+| P3.2 Sentry error tracking | ✅ | Opt-in via `SENTRY_DSN`. API (FastAPI+SQLAlchemy), Worker (Celery) |
 
 ### Lancer les tests
 
@@ -157,8 +158,8 @@ docker logs <worker-container> | grep "Cleanup complete"
 # Backend
 cd backend && pip install -r requirements.txt && pytest -v
 
-# Frontend
-cd frontend && npm install && npm test
+# Frontend lint + build
+cd frontend-next && npm run lint && npm run build
 ```
 
 ---
@@ -195,7 +196,7 @@ offset_seconds = offset_samples / sample_rate
 **Principe :** Envoyer les chunks audio en temps reel pendant l'enregistrement pour feedback instantane.
 
 **Backend :** `backend/app/routers/stream.py` — WebSocket endpoint
-**Frontend :** Modifier `useAudioRecorder.ts` pour envoyer chunks via WebSocket
+**Frontend :** Modifier `frontend-next/src/hooks/useAudioRecorder.ts` pour envoyer chunks via WebSocket
 **Worker :** Pas de changement (traitement reste post-recording)
 
 ### P4.4 — Fine-tuning Jury-LoRA

@@ -229,6 +229,28 @@ def analyze_performance(
             update_progress(self, "separating_reference_done", 35, "Reference prete !")
 
         # ============================================
+        # STEP 2.5: Cross-correlation sync (auto offset detection)
+        # ============================================
+        update_progress(self, "computing_sync", 37, "Synchronisation automatique...")
+
+        from tasks.sync import compute_sync_offset
+        try:
+            sync_result = compute_sync_offset(
+                user_vocals_path=user_separation["vocals_path"],
+                ref_vocals_path=str(ref_vocals_path),
+            )
+            auto_offset = sync_result["offset_seconds"]
+            sync_confidence = sync_result["confidence"]
+            logger.info(
+                "Auto sync offset: %.3fs (confidence: %.2f)", auto_offset, sync_confidence,
+            )
+        except Exception as e:
+            logger.warning("Cross-correlation sync failed: %s, using offset=0", e)
+            auto_offset = 0.0
+            sync_confidence = 0.0
+            sync_result = {"offset_seconds": 0.0, "confidence": 0.0, "method": "fallback"}
+
+        # ============================================
         # STEP 3: Extract pitch (CREPE)
         # Use 'full' model for user (accuracy matters)
         # Use 'tiny' model for reference (speed matters, already cached)
@@ -271,6 +293,9 @@ def analyze_performance(
         # ============================================
         update_progress(self, "jury_deliberation", 85, "Le jury se reunit...")
 
+        # Only apply auto offset if confidence is above threshold
+        effective_offset = auto_offset if sync_confidence > 0.3 else 0.0
+
         results = do_generate_feedback(
             session_id=session_id,
             user_pitch_path=user_pitch["pitch_path"],
@@ -279,7 +304,11 @@ def analyze_performance(
             reference_lyrics=reference_lyrics,
             song_title=song_title,
             pipeline_span=pipeline_span,
+            offset_seconds=effective_offset,
         )
+
+        # Include sync metadata in results for the frontend
+        results["auto_sync"] = sync_result
 
         update_progress(self, "jury_voting", 95, "Le jury vote...")
         update_progress(self, "completed", 100, "Verdict rendu !")
