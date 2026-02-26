@@ -226,7 +226,7 @@ def trace_pipeline(
         trace = client.trace(
             name="voicejury.analyze_performance",
             session_id=f"session:{session_id}",
-            tags=["voicejury", "pipeline"],
+            tags=["project:voicejury", "voicejury", "pipeline", "tier:gpu-heavy"],
             metadata={
                 "session_id": session_id,
                 "song_title": song_title,

@@ -2,7 +2,7 @@
 
 > Architecture serveur Coolify unique pour **4 projets SourceFast** (augmenter.PRO, renov-bati, coach-credit, voicejury) avec services partages (PostgreSQL, Redis, LiteLLM Proxy, GPU Ollama, Langfuse, shared-whisper).
 
-Last updated: 2026-02-25
+Last updated: 2026-02-26
 
 ---
 
@@ -130,14 +130,13 @@ Carte mere : MSI MPG Z390 GAMING PLUS (4 DIMM, max 64 Go)
 |                                 +--------------------------------------+       |
 |                                                                               |
 |  +--------------------------+                                                 |
-|  | voicejury (3 containers) |  PRET A DEPLOYER (nettoyage disque requis)      |
-|  | api | frontend |         |                                                 |
-|  | worker-heavy              |                                                 |
+|  | voicejury (2 containers) |  PRET A DEPLOYER (nettoyage disque requis)      |
+|  | api | worker-heavy        |  Frontend migre sur Hostinger (kiaraoke.fr)     |
 |  +--------------------------+                                                 |
 +-------------------------------------------------------------------------------+
 ```
 
-**Note :** Les 34 containers actuels n'incluent pas voicejury (3 containers prets a deployer). Le total cible est 37 containers. Deploiement bloque par l'espace disque (13 Go libres, minimum ~10 Go requis pour build).
+**Note :** Les 34 containers actuels n'incluent pas voicejury (2 containers prets a deployer, frontend sur Hostinger). Le total cible est 36 containers. Deploiement bloque par l'espace disque (13 Go libres, minimum ~10 Go requis pour build).
 
 ### 2.2 Budget RAM Detaille
 
@@ -186,14 +185,14 @@ RENOV-BATI :
                                                     -------
   Sous-total renov-bati                               2176M  (~2.1 Go)
 
-VOICEJURY (pret a deployer, 3 containers) :
-  api + frontend + worker-heavy                       1800M  (~1.8 Go)
+VOICEJURY (pret a deployer, 2 containers, frontend sur Hostinger) :
+  api (512M) + worker-heavy (~1G CPU + GPU VRAM)      1536M  (~1.5 Go)
 
 SYSTEME :
   OS + Docker engine + Coolify                        2000M  (~2.0 Go)
   Ollama CPU buffers (5 instances)                     500M
                                                     =======
-  TOTAL (avec voicejury)                             18924M  (~18.5 Go)
+  TOTAL (avec voicejury)                             18660M  (~18.2 Go)
 
   Etat actuel (12 Go physique + 5.8 Go zram) :
     RAM physique disponible :                          2.3 Go
@@ -282,116 +281,115 @@ sk-voice-jury     -> team voice-jury       budget $10/mois
 ### 3.3 Routing & Fallback Chains (UPDATED 2026-02-25)
 
 ```yaml
-# deploy/litellm/litellm-config.yaml
+# unified-infrastructure/litellm/litellm-config.yaml (source of truth)
 model_list:
-  # --- MODELES LOCAUX (Ollama) ---
+  # --- MODELES LOCAUX (Ollama, stream: true) ---
 
   - model_name: qwen3-heavy           # GPU 1 (RTX 3080) -- analysis, persona, enrichment
     litellm_params:
       model: ollama/qwen3:8b
       api_base: http://host.docker.internal:11434
-      rpm: 20
-      tpm: 80000
-      timeout: 60
+      rpm: 20, tpm: 80000, timeout: 60, stream: true
 
   - model_name: qwen3-light           # GPU 0 (RTX 3070) -- scoring, classification
     litellm_params:
       model: ollama/qwen3:4b
       api_base: http://host.docker.internal:11435
-      rpm: 40
-      tpm: 60000
-      timeout: 30
+      rpm: 40, tpm: 60000, timeout: 30, stream: true
 
   - model_name: qwen2.5vl-vision      # GPU 2 (RTX 3070) -- OCR, image analysis, VLM
     litellm_params:
       model: ollama/qwen2.5vl:7b
       api_base: http://host.docker.internal:11436
-      rpm: 10
-      tpm: 30000
-      timeout: 90
+      rpm: 10, tpm: 30000, timeout: 90
 
   - model_name: deepseek-reasoning    # GPU 3 (RTX 3070) -- complex reasoning, CoT
     litellm_params:
       model: ollama/deepseek-r1:7b
       api_base: http://host.docker.internal:11438
-      rpm: 15
-      tpm: 50000
-      timeout: 120
+      rpm: 15, tpm: 50000, timeout: 120, stream: true
 
   - model_name: llama3.1-twitch       # GPU 4 (RTX 3060 Ti) -- twitch chatbot
     litellm_params:
       model: ollama/llama3.1:8b
       api_base: http://host.docker.internal:11437
-      rpm: 20
-      tpm: 40000
-      timeout: 30
+      rpm: 20, tpm: 40000, timeout: 30, stream: true
 
   # --- MODELES CLOUD GROQ (gratuit) ---
 
   - model_name: groq-fast
     litellm_params:
       model: groq/llama-3.1-8b-instant
-      rpm: 30
-      tpm: 6000
-      timeout: 10
+      api_key: os.environ/GROQ_API_KEY
+      rpm: 30, tpm: 6000, timeout: 10
 
   - model_name: groq-analysis
     litellm_params:
       model: groq/llama-3.1-70b-versatile
-      rpm: 10
-      tpm: 6000
-      timeout: 30
+      api_key: os.environ/GROQ_API_KEY
+      rpm: 10, tpm: 6000, timeout: 30
 
-  - model_name: groq-qwen3-32b        # NEW 2026-02-25 -- best French creative
+  - model_name: groq-qwen3-32b        # Best French creative (2026-02-25)
     litellm_params:
       model: groq/qwen/qwen3-32b
-      rpm: 60
-      tpm: 60000
-      timeout: 30
+      api_key: os.environ/GROQ_API_KEY
+      rpm: 60, tpm: 6000, timeout: 30
 
-  - model_name: groq-llama4-scout      # NEW 2026-02-25 -- multimodal scout
+  - model_name: groq-llama4-scout      # MoE multimodal (2026-02-25)
     litellm_params:
-      model: groq/llama-4-scout-17b-16e
-      rpm: 30
-      tpm: 30000
-      timeout: 30
+      model: groq/meta-llama/llama-4-scout-17b-16e-instruct
+      api_key: os.environ/GROQ_API_KEY
+      rpm: 30, tpm: 30000, timeout: 20
 
   # --- MODELES CLOUD OPENAI (payant, fallback ultime) ---
 
   - model_name: gpt-4o
     litellm_params:
       model: openai/gpt-4o
-      rpm: 60
-      timeout: 30
+      api_key: os.environ/OPENAI_API_KEY
+      rpm: 60, tpm: 150000, timeout: 30
 
   - model_name: gpt-4o-mini
     litellm_params:
       model: openai/gpt-4o-mini
-      rpm: 100
-      timeout: 15
+      api_key: os.environ/OPENAI_API_KEY
+      rpm: 100, tpm: 200000, timeout: 15
+
+  # --- EMBEDDINGS ---
+
+  - model_name: text-embedding-3-small
+    litellm_params:
+      model: openai/text-embedding-3-small
+      api_key: os.environ/OPENAI_API_KEY
+      rpm: 100, timeout: 15
 
 router_settings:
   routing_strategy: "least-busy"
   num_retries: 2
   allowed_fails: 3
   cooldown_time: 120
+  retry_after: 5
   fallbacks:
-    - qwen3-heavy: [groq-qwen3-32b, groq-analysis, gpt-4o]
-    - qwen3-light: [groq-fast, groq-qwen3-32b, gpt-4o-mini]
-    - qwen2.5vl-vision: [groq-llama4-scout, gpt-4o]
-    - deepseek-reasoning: [groq-qwen3-32b, gpt-4o]
-    - groq-fast: [groq-qwen3-32b, gpt-4o-mini]
-    - groq-qwen3-32b: [groq-analysis, gpt-4o]
-    - groq-llama4-scout: [groq-qwen3-32b, gpt-4o]
+    - qwen3-heavy: [deepseek-reasoning, groq-analysis, gpt-4o]
+    - qwen3-light: [groq-fast, gpt-4o-mini]
+    - qwen2.5vl-vision: [gpt-4o]
+    - deepseek-reasoning: [qwen3-heavy, groq-analysis, gpt-4o]
+    - groq-fast: [qwen3-light, gpt-4o-mini]
+    - groq-analysis: [qwen3-heavy, gpt-4o]
+    - groq-qwen3-32b: [groq-llama4-scout, groq-fast, qwen3-light]
+    - groq-llama4-scout: [groq-qwen3-32b, groq-fast]
   model_group_alias:
     "default": "qwen3-heavy"
     "fast": "groq-fast"
     "vision": "qwen2.5vl-vision"
     "cheap": "qwen3-light"
+    "reasoning": "deepseek-reasoning"
+    "embedding": "text-embedding-3-small"
     "jury-comment": "groq-qwen3-32b"
-    # Backward-compatible
+    # Backward-compatible (augmenter.PRO legacy)
     "mistral-nemo": "qwen3-heavy"
     "llama3.2": "qwen3-light"
+    "llama3.2-vision": "qwen2.5vl-vision"
 
 litellm_settings:
   cache: true
@@ -408,6 +406,7 @@ litellm_settings:
   drop_params: true
   turn_off_message_logging: true
 ```
+
 
 ### 3.4 Fallback en 3 Couches
 
@@ -925,29 +924,30 @@ Monitoring proactif : `INFO memory` toutes les 5 min, alerte si > 80% (deploye 2
 
 ## 7. Voicejury — Architecture Specifique
 
-### 7.1 Containers (3 en prod + 1 optionnel)
+### 7.1 Containers (2 en prod + 1 optionnel)
 
 | Container | Image | Memory | Role |
 |-----------|-------|--------|------|
-| `frontend` | Dockerfile.prod (nginx) | 256M | React SPA, Traefik -> tuasunincroyabletalent.fr |
-| `api` | Dockerfile (python:3.11-slim) | 512M | FastAPI REST, Traefik -> api.tuasunincroyabletalent.fr |
+| `api` | Dockerfile (python:3.11-slim) | 512M | FastAPI REST, Traefik -> api.tuasunincroyabletalent.fr / api.kiaraoke.fr |
 | `worker-heavy` | Dockerfile.optimized (gpu-worker-base) | 6G limit | Celery GPU (Demucs, CREPE, Whisper), GPU-85c38fae |
 | `worker-pool` | Dockerfile.optimized | 512M | Optionnel (profile: multi-gpu), queue `gpu` uniquement |
 
+> **Frontend :** Migre vers Next.js sur Hostinger (https://kiaraoke.fr). Repo : https://github.com/pi3Block/frontend.kiaraoke.fr. Le frontend n'est plus dans ce docker-compose.
+
 **Statut :** Code et docker-compose.coolify.yml prets a deployer. Le deploiement necessite un nettoyage disque prealable (etape 0 du guide Last Idea.md) car le serveur est a 95% d'utilisation disque.
 
-### 7.2 Pipeline 7 Etapes
+### 7.2 Pipeline 6 Etapes
 
 ```
 analyze_performance (shared_task, gpu-heavy queue)
 |
+|-- Step 0: Unload Ollama Light (keep_alive:0, libere ~4 Go VRAM GPU 0)
 |-- Step 1: Demucs -- Separation voix utilisateur          [GPU, ~25s]
 |-- Step 2: Demucs -- Separation voix reference (cache)    [GPU, ~25s ou 0s si cache]
-|-- Step 3: CREPE -- Pitch utilisateur (full model)        [GPU, ~4s]
-|-- Step 4: CREPE -- Pitch reference (tiny model)          [GPU, ~1.5s]
-|-- Step 5: Whisper -- Transcription utilisateur           [HTTP shared-whisper, ~2-3s avec VAD]
-|-- Step 6: Genius -- Paroles originales                   [HTTP API, ~1s]
-+-- Step 7: Scoring + Jury LLM (parallele x3)             [HTTP LiteLLM/Ollama, ~3s]
+|-- Step 3: CREPE -- Pitch user (full) + ref (tiny)        [GPU, ~4s + ~1.5s]
+|-- Step 4: Whisper -- Transcription utilisateur           [HTTP shared-whisper, ~2-3s avec VAD]
+|-- Step 5: Genius -- Paroles originales                   [HTTP API, ~1s]
++-- Step 6: Scoring + Jury LLM (parallele x3)             [HTTP LiteLLM/Ollama, ~3s]
 ```
 
 **Total** : ~40-65s (premiere analyse) ou ~15-25s (reference en cache).
@@ -994,15 +994,25 @@ Le jury genere 3 commentaires IA (Le Cassant, L'Encourageant, Le Technique) avec
 **Tier 1 — LiteLLM Proxy -> Groq qwen3-32b (NOUVEAU 2026-02-25)**
 
 ```python
-# Tier 1: LiteLLM route vers Groq qwen3-32b (gratuit, meilleur francais)
-import litellm
-litellm.completion(
-    model="jury-comment",  # alias -> groq-qwen3-32b
-    messages=[{"role": "user", "content": prompt}],
-    api_base="http://host.docker.internal:4000",
-    max_tokens=300, temperature=0.8,
+# Tier 1: LiteLLM proxy → Groq qwen3-32b (httpx async, pas de SDK litellm)
+headers = {
+    "Authorization": f"Bearer {LITELLM_API_KEY}",
+    "Content-Type": "application/json",
+}
+response = await client.post(
+    f"{LITELLM_HOST}/chat/completions",
+    headers=headers,
+    json={
+        "model": LITELLM_JURY_MODEL,  # alias "jury-comment" -> groq-qwen3-32b
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 300,
+        "temperature": 0.8,
+    },
+    timeout=15.0,
 )
 ```
+
+> **Note :** Le SDK `litellm` Python a ete supprime (lourd ~200 Mo, synchrone). Les appels passent par `httpx.AsyncClient` en HTTP direct vers le proxy LiteLLM (format OpenAI `/chat/completions`).
 
 **Tier 2 — Ollama Light (GPU 0)**
 
@@ -1111,7 +1121,7 @@ Tier 1: shared-whisper HTTP
   - GPU 4 (RTX 3060 Ti), modele actuellement charge: medium
   - Endpoint: http://shared-whisper:9000/asr
   - Latence: ~2-3s pour 3 min d'audio
-  - Fallback automatique si HTTP 5xx ou timeout 30s
+  - Fallback automatique si HTTP 5xx ou timeout 120s (SHARED_WHISPER_TIMEOUT)
 
 Tier 2: Groq Whisper API (NOUVEAU 2026-02-25)
   - Modele: whisper-large-v3-turbo
@@ -1174,10 +1184,10 @@ WHISPER_LOCAL_FALLBACK=false
 +-----------------------------------------------------------+
 |                     coolify network                         |
 |                                                             |
-|  +----------+  +----------+  +------------------------+    |
-|  | frontend |  |   api    |  |     worker-heavy       |    |
-|  |  :80     |  |  :8080   |  |  (GPU-85c38fae)        |    |
-|  +----------+  +----------+  +------------------------+    |
+|  +----------+  +------------------------+                  |
+|  |   api    |  |     worker-heavy       |                  |
+|  |  :8080   |  |  (GPU-85c38fae)        |                  |
+|  +----------+  +------------------------+                  |
 |                                         |                   |
 |  +--------------+  +--------------+     |                   |
 |  |shared-postgres|  |shared-redis  |     |                   |
@@ -1217,16 +1227,17 @@ WHISPER_LOCAL_FALLBACK=false
                             v
 +----------------------------------------------------------------+
 |                      TRAEFIK (Coolify)                            |
-|  tuasunincroyabletalent.fr -> frontend:80                        |
 |  api.tuasunincroyabletalent.fr -> api:8080                       |
+|  api.kiaraoke.fr -> api:8080                                     |
 +---------------------------+------------------------------------+
-            +---------------+---------------+
-            v                               v
-+-------------------+          +----------------------+
-|   Frontend        |          |     Backend API       |
-|   React + Vite    |<-------->|     FastAPI + Uvicorn |
-|   Nginx (prod)    |  REST    |     Pydantic v2       |
-+-------------------+          +----------+-----------+
+                            |
+      +---------------------+---------------------+
+      |                                           |
++-------------------+               +----------------------+
+| Frontend (externe)|               |     Backend API       |
+| Next.js Hostinger |<--- HTTPS --->|     FastAPI + Uvicorn |
+| kiaraoke.fr       |   REST API    |     Pydantic v2       |
++-------------------+               +----------+-----------+
                                           | Celery task
                                           v
                                +----------------------+
@@ -1450,7 +1461,8 @@ const response = await fetch('http://litellm:4000/chat/completions', {
 |  Queue depth, failed jobs, latence par job type       |
 |                                                       |
 |  Flower            -> Queues Celery (Python workers)  |
-|  flower.augmenter.pro                                 |
+|  flower.augmenter.pro (DB 0: augmenter, renov-bati)   |
+|  flower-voicejury.augmenter.pro (DB 2: voicejury)     |
 |  Task history, worker health, concurrency             |
 |                                                       |
 |  Uptime Kuma       -> Healthchecks 60s               |
@@ -1536,8 +1548,8 @@ Coolify Dashboard
 |-- [RB] renov-bati (docker-compose, 5 containers)
 |   +-- backend + frontend + 3 workers Python (etl, crawler, scoring)
 |
-+-- [VJ] voicejury (docker-compose, 3 containers) -- PRET A DEPLOYER
-    +-- api + frontend + 2 GPU workers
++-- [VJ] voicejury (docker-compose, 2 containers) -- PRET A DEPLOYER
+    +-- api + worker-heavy (frontend sur Hostinger)
 ```
 
 ### 11.2 Predefined Network
@@ -1717,7 +1729,7 @@ vm.swappiness=150
 3. [ ] Configurer env vars dans Coolify (section 7.7)
 4. [ ] Deployer docker-compose voicejury (api, frontend, worker-heavy, worker-pool)
 5. [ ] Tester pipeline complet (upload audio -> analyse -> jury LLM -> resultats)
-6. [ ] Verifier Langfuse traces + Flower visibility
+6. [x] Verifier Langfuse traces + Flower visibility (flower-voicejury.augmenter.pro, Redis DB 2)
 7. [ ] Verifier GPU time-sharing (Ollama Light <-> Demucs)
 
 ### Fichiers a Creer/Modifier

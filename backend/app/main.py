@@ -90,7 +90,7 @@ async def root():
 
 @app.get("/health")
 async def health():
-    """Detailed health check — verifies Redis and PostgreSQL connectivity."""
+    """Detailed health check — verifies Redis, PostgreSQL, and Celery worker."""
     checks = {"api": True}
 
     # Redis
@@ -111,6 +111,16 @@ async def health():
         checks["postgres"] = True
     except Exception:
         checks["postgres"] = False
+
+    # Celery worker (check if at least one worker responds to ping)
+    try:
+        from celery import Celery
+        celery_app = Celery(broker=settings.redis_url)
+        inspect = celery_app.control.inspect(timeout=2.0)
+        ping_result = inspect.ping()
+        checks["celery_worker"] = bool(ping_result)
+    except Exception:
+        checks["celery_worker"] = False
 
     status = "healthy" if all(checks.values()) else "degraded"
     return {"status": status, "version": "0.1.0", "services": checks}

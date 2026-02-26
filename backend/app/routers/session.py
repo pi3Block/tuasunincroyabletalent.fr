@@ -2,9 +2,12 @@
 Session management routes.
 """
 import uuid
+import logging
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, BackgroundTasks, UploadFile, File
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 from app.services.youtube import youtube_service
 from app.services.spotify import spotify_service
@@ -729,7 +732,7 @@ async def cleanup_lyrics_cache():
 # ============================================
 
 async def _persist_results(session_id: str, session: dict, results: dict) -> None:
-    """Persist analysis results to PostgreSQL (fire-and-forget, errors logged)."""
+    """Persist analysis results to PostgreSQL for history."""
     try:
         from app.services.database import get_db
         from app.models.session_results import SessionResult
@@ -741,6 +744,7 @@ async def _persist_results(session_id: str, session: dict, results: dict) -> Non
                 select(SessionResult).where(SessionResult.session_id == session_id)
             )
             if existing.scalar_one_or_none():
+                logger.debug("Results already persisted for %s", session_id)
                 return
 
             row = SessionResult(
@@ -758,7 +762,9 @@ async def _persist_results(session_id: str, session: dict, results: dict) -> Non
                 jury_comments=results.get("jury_comments"),
             )
             db.add(row)
+            # commit is handled by get_db() context manager
+        logger.info("Results persisted for session %s (score=%s)", session_id, results.get("score"))
     except Exception as e:
-        print(f"[PersistResults] Failed to save results for {session_id}: {e}")
+        logger.error("Failed to persist results for %s: %s", session_id, e)
 
 

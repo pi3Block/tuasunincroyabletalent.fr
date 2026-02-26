@@ -13,8 +13,10 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # Database
+    # Database (via PgBouncer :6432 in production, direct :5432 for dev/migrations)
     database_url: str = "postgresql://voicejury:voicejury_secret@localhost:5432/voicejury"
+    # Set DATABASE_URL to PgBouncer in Coolify:
+    # postgresql://augmenter:${PG_PASSWORD}@shared-postgres:6432/voicejury_db
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"

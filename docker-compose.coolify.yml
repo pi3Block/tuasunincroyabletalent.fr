@@ -4,13 +4,14 @@
 # Single self-contained file for Coolify deployment
 # GPU NVIDIA required for worker service
 #
-# SHARED INFRASTRUCTURE (2026-02-25):
+# SHARED INFRASTRUCTURE (2026-02-26):
 # - PostgreSQL: shared-postgres (postgis/postgis:16-3.4-alpine + pgvector)
 #   Database: voicejury_db, User: augmenter (shared superuser)
 # - Redis: shared-redis (redis:7-alpine)
-#   DB index 2 (broker)
+#   DB index 2 (broker + sessions)
 # - LiteLLM: litellm-proxy:4000 (LLM gateway, Groq free tier)
 # - Langfuse: langfuse:3000 (LLM tracing)
+# - Flower: flower-voicejury.augmenter.pro (Celery monitoring, Redis DB 2)
 # - All accessed via coolify network DNS
 #
 # BUILD OPTIMIZATION:
@@ -34,9 +35,10 @@ services:
     volumes:
       - audio-data:/app/audio_files
     environment:
-      # Shared infrastructure — hostnames are Coolify container names (with UUID suffix)
-      # Override via Coolify env vars if UUID changes after redeployment
-      # DATABASE_URL and REDIS_URL must be set in Coolify env panel (no nested var defaults)
+      # Shared infrastructure — hostnames are Coolify container names
+      # DATABASE_URL and REDIS_URL must be set in Coolify env panel
+      # Use PgBouncer :6432 for connection pooling (PgBouncer 1.21+ supports prepared statements)
+      # Example: postgresql://augmenter:${PG_PASSWORD}@pgbouncer:6432/voicejury_db
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=${REDIS_URL}
       - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11435}
@@ -45,8 +47,15 @@ services:
       - GENIUS_API_TOKEN=${GENIUS_API_TOKEN:-}
       - SECRET_KEY=${SECRET_KEY}
       - DEBUG=false
+      # Sentry error tracking (optional)
+      - SENTRY_DSN=${SENTRY_DSN:-}
+      - SENTRY_ENVIRONMENT=${SENTRY_ENVIRONMENT:-production}
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
     restart: unless-stopped
     networks:
       - voicejury-network
@@ -76,7 +85,7 @@ services:
     build:
       context: ./worker
       dockerfile: Dockerfile.optimized
-    command: ["celery", "-A", "tasks.celery_app", "worker", "--loglevel=info", "--pool=solo", "-Q", "gpu-heavy,gpu,default", "-n", "heavy@%h"]
+    command: ["celery", "-A", "tasks.celery_app", "worker", "--loglevel=info", "--pool=solo", "-Q", "gpu-heavy,gpu,default", "-n", "heavy@%h", "-B"]
     volumes:
       - audio-data:/app/audio_files
       - model-cache:/root/.cache
@@ -100,6 +109,9 @@ services:
       - LITELLM_HOST=${LITELLM_HOST:-http://host.docker.internal:4000}
       - LITELLM_API_KEY=${LITELLM_API_KEY:-}
       - LITELLM_JURY_MODEL=${LITELLM_JURY_MODEL:-jury-comment}
+      # Sentry error tracking (optional)
+      - SENTRY_DSN=${SENTRY_DSN:-}
+      - SENTRY_ENVIRONMENT=${SENTRY_ENVIRONMENT:-production}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     deploy:
@@ -149,6 +161,8 @@ services:
             - driver: nvidia
               device_ids: ['GPU-85c38fae-1bcf-d15b-4f36-e1f581acd76e']
               capabilities: [gpu]
+        limits:
+          memory: 512M
     profiles:
       - multi-gpu
     restart: unless-stopped
