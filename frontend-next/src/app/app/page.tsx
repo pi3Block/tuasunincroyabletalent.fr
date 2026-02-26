@@ -19,6 +19,7 @@ import { useAudioRecorder } from "@/hooks/useAudioRecorder";
 import { usePitchDetection } from "@/hooks/usePitchDetection";
 import { useWordTimestamps } from "@/hooks/useWordTimestamps";
 import { useOrientation } from "@/hooks/useOrientation";
+import Image from "next/image";
 import Link from "next/link";
 
 function formatDuration(ms: number): string {
@@ -58,9 +59,11 @@ function TrackCard({ track }: { track: Track }) {
   return (
     <div className="flex items-center gap-4 bg-gray-800 rounded-xl p-4">
       {track.album.image ? (
-        <img
+        <Image
           src={track.album.image}
           alt={track.album.name || ""}
+          width={80}
+          height={80}
           className="w-20 h-20 rounded-lg object-cover"
         />
       ) : (

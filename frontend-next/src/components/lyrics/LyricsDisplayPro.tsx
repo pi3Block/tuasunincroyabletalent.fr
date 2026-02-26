@@ -61,6 +61,8 @@ interface LyricsDisplayProProps {
   showDebug?: boolean
   /** Custom class name */
   className?: string
+  /** Override ScrollArea class name (e.g. "h-full" for landscape) */
+  scrollAreaClassName?: string
 }
 import { useLyricsSync } from '@/hooks/useLyricsSync'
 import { useLyricsScroll } from '@/hooks/useLyricsScroll'
@@ -336,6 +338,7 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
   onLineTap,
   showDebug = false,
   className,
+  scrollAreaClassName,
 }: LyricsDisplayProProps) {
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -526,7 +529,7 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
 
       {/* Lyrics - Main content */}
       <ScrollArea
-        className="h-[300px] md:h-[400px] lg:h-[450px]"
+        className={scrollAreaClassName || "h-[300px] md:h-[400px] lg:h-[450px]"}
         ref={containerRef as React.RefObject<HTMLDivElement | null>}
       >
         <div

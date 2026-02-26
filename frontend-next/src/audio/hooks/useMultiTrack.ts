@@ -244,6 +244,7 @@ export function useMultiTrack({
 
   // Cleanup on unmount
   useEffect(() => {
+    const instances = trackInstancesRef.current
     return () => {
       // Stop animation frame
       if (animationFrameRef.current) {
@@ -251,12 +252,12 @@ export function useMultiTrack({
       }
 
       // Cleanup all track instances
-      trackInstancesRef.current.forEach((instance) => {
+      instances.forEach((instance) => {
         instance.audio.pause()
         instance.audio.src = ''
         instance.processor.dispose()
       })
-      trackInstancesRef.current.clear()
+      instances.clear()
 
       // Reset store
       reset()

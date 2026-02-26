@@ -80,7 +80,6 @@ const SCROLL_DEBOUNCE_MS = 150
 function calculateCurrentLineIndex(
   lines: LyricLine[],
   adjustedTime: number,
-  _currentLineIndex: number
 ): number {
   if (lines.length === 0) return 0
 
@@ -160,7 +159,7 @@ export const LyricsDisplay = React.memo(function LyricsDisplay({
       }
     }
 
-    const newIndex = calculateCurrentLineIndex(lines, adjustedTime, currentLineIndex)
+    const newIndex = calculateCurrentLineIndex(lines, adjustedTime)
     if (newIndex !== currentLineIndex) {
       setCurrentLineIndex(newIndex)
       onLineChange?.(newIndex)

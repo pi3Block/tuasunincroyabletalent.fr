@@ -113,7 +113,8 @@ export const LandscapeRecordingLayout = memo(function LandscapeRecordingLayout({
             offset={lyricsOffset}
             onOffsetChange={onOffsetChange}
             showOffsetControls={true}
-            className="h-full flex flex-col [&_.h-\\[300px\\]]:!h-full [&_.md\\:h-\\[400px\\]]:!h-full [&_.lg\\:h-\\[450px\\]]:!h-full"
+            className="h-full flex flex-col"
+            scrollAreaClassName="h-full"
           />
         ) : (
           <div className="flex-1 flex items-center justify-center bg-gray-800/50 rounded-lg">

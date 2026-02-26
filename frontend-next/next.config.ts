@@ -15,6 +15,15 @@ const securityHeaders = [
 const nextConfig: NextConfig = {
   output: "standalone", // Requis pour Hostinger (Node.js)
 
+  images: {
+    remotePatterns: [
+      {
+        protocol: "https",
+        hostname: "i.scdn.co",
+      },
+    ],
+  },
+
   async rewrites() {
     return [
       {

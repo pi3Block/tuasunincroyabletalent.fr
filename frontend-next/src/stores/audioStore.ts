@@ -90,6 +90,7 @@ export const useAudioStore = create<AudioState>((set) => ({
   removeTrack: (id) => {
     const key = getTrackKey(id)
     set((state) => {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { [key]: _, ...rest } = state.tracks
       return { tracks: rest }
     })

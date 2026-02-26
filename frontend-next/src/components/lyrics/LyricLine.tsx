@@ -175,7 +175,7 @@ export const LyricLine = memo(forwardRef<HTMLDivElement, LyricLineProps>(
 
       // Standard text rendering
       return line.text
-    }, [line, displayMode, isActive, currentWordIndex, wordProgress])
+    }, [line, displayMode, isActive, isPast, currentWordIndex, wordProgress])
 
     return (
       <div

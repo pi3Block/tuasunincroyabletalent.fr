@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import Image from 'next/image'
 import { api, type Track, type RecentTrack } from '@/api/client'
 
 interface TrackSearchProps {
@@ -101,9 +102,11 @@ export function TrackSearch({ onSelect }: TrackSearchProps) {
                 className="w-full flex items-center gap-3 bg-gray-800/50 hover:bg-gray-700 rounded-xl p-3 transition-colors text-left border border-gray-700/50"
               >
                 {track.album_image ? (
-                  <img
+                  <Image
                     src={track.album_image}
                     alt=""
+                    width={48}
+                    height={48}
                     className="w-12 h-12 rounded-lg object-cover flex-shrink-0"
                   />
                 ) : (
@@ -140,9 +143,11 @@ export function TrackSearch({ onSelect }: TrackSearchProps) {
             >
               {/* Album Art */}
               {track.album.image ? (
-                <img
+                <Image
                   src={track.album.image}
                   alt={track.album.name || ''}
+                  width={56}
+                  height={56}
                   className="w-14 h-14 rounded-lg object-cover flex-shrink-0"
                 />
               ) : (
