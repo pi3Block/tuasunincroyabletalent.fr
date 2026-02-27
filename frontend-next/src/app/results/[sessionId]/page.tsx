@@ -119,7 +119,7 @@ export default async function ResultsPage({ params }: Props) {
         </div>
 
         {/* Jury votes */}
-        {results.jury_comments && (
+        {Array.isArray(results.jury_comments) && results.jury_comments.length > 0 && (
           <>
             <div className="flex justify-center gap-4">
               {results.jury_comments.map(

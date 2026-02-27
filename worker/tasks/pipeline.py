@@ -21,6 +21,7 @@ import os
 import json
 import logging
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from celery import shared_task
 
@@ -241,11 +242,20 @@ def analyze_performance(
             except Exception:
                 pass
 
-            # Upload user vocals/instrumentals to storage (StudioMode access)
+            # Upload user vocals/instrumentals to storage — parallel (StudioMode access)
             user_vocals_local = Path(user_separation["vocals_path"])
             user_instru_local = Path(user_separation["instrumentals_path"])
-            storage.upload_from_file(user_vocals_local, f"sessions/{session_id}_user/vocals.wav")
-            storage.upload_from_file(user_instru_local, f"sessions/{session_id}_user/instrumentals.wav")
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                pool.submit(
+                    storage.upload_from_file,
+                    user_vocals_local,
+                    f"sessions/{session_id}_user/vocals.wav",
+                )
+                pool.submit(
+                    storage.upload_from_file,
+                    user_instru_local,
+                    f"sessions/{session_id}_user/instrumentals.wav",
+                )
 
             update_progress(self, "separating_user_done", 20, "Voix isolee !")
 
@@ -269,10 +279,19 @@ def analyze_performance(
                 )
                 ref_vocals_path = str(ref_vocals_local)
                 ref_instrumentals_path = str(ref_instru_local)
-                # Ensure session_ref tracks exist in storage for StudioMode
+                # Ensure session_ref tracks exist in storage for StudioMode — parallel
                 if not storage.exists(f"sessions/{session_id}_ref/vocals.wav"):
-                    storage.upload_from_file(ref_vocals_local, f"sessions/{session_id}_ref/vocals.wav")
-                    storage.upload_from_file(ref_instru_local, f"sessions/{session_id}_ref/instrumentals.wav")
+                    with ThreadPoolExecutor(max_workers=2) as pool:
+                        pool.submit(
+                            storage.upload_from_file,
+                            ref_vocals_local,
+                            f"sessions/{session_id}_ref/vocals.wav",
+                        )
+                        pool.submit(
+                            storage.upload_from_file,
+                            ref_instru_local,
+                            f"sessions/{session_id}_ref/instrumentals.wav",
+                        )
             else:
                 # CACHE MISS: download reference audio, separate, upload to cache + session_ref
                 logger.info("No storage cache for %s, separating reference...", youtube_id)
@@ -297,15 +316,37 @@ def analyze_performance(
                 ref_vocals_local = Path(ref_vocals_path)
                 ref_instru_local = Path(ref_instrumentals_path)
 
-                # Upload to permanent cache in storage
+                # Upload to permanent cache + session_ref — all in parallel
+                with ThreadPoolExecutor(max_workers=4) as pool:
+                    futures = [
+                        pool.submit(
+                            storage.upload_from_file,
+                            ref_vocals_local,
+                            f"sessions/{session_id}_ref/vocals.wav",
+                        ),
+                        pool.submit(
+                            storage.upload_from_file,
+                            ref_instru_local,
+                            f"sessions/{session_id}_ref/instrumentals.wav",
+                        ),
+                    ]
+                    if youtube_id:
+                        futures += [
+                            pool.submit(
+                                storage.upload_from_file,
+                                ref_vocals_local,
+                                f"cache/{youtube_id}/vocals.wav",
+                            ),
+                            pool.submit(
+                                storage.upload_from_file,
+                                ref_instru_local,
+                                f"cache/{youtube_id}/instrumentals.wav",
+                            ),
+                        ]
+                    for f in futures:
+                        f.result()  # propagate upload errors
                 if youtube_id:
-                    storage.upload_from_file(ref_vocals_local, f"cache/{youtube_id}/vocals.wav")
-                    storage.upload_from_file(ref_instru_local, f"cache/{youtube_id}/instrumentals.wav")
                     logger.info("Saved ref separation to storage cache: %s", youtube_id)
-
-                # Upload to session_ref for StudioMode
-                storage.upload_from_file(ref_vocals_local, f"sessions/{session_id}_ref/vocals.wav")
-                storage.upload_from_file(ref_instru_local, f"sessions/{session_id}_ref/instrumentals.wav")
 
                 update_progress(self, "separating_reference_done", 35, "Reference prete !")
 
@@ -339,7 +380,27 @@ def analyze_performance(
             user_pitch = do_extract_pitch(user_separation["vocals_path"], f"{session_id}_user", fast_mode=False)
 
             update_progress(self, "extracting_pitch_ref", 50, "Analyse de la reference...")
-            ref_pitch = do_extract_pitch(str(ref_vocals_path), f"{session_id}_ref", fast_mode=True)
+            # Fix #4: check pitch cache before running CREPE on reference
+            ref_pitch_cache_key = (
+                f"cache/{youtube_id}/pitch_data.npz" if youtube_id else None
+            )
+            if ref_pitch_cache_key and storage.exists(ref_pitch_cache_key):
+                logger.info("Pitch cache HIT for reference %s — skipping CREPE", youtube_id)
+                cached_npz = ref_temp / "pitch_data_cached.npz"
+                storage.download_to_file(ref_pitch_cache_key, cached_npz)
+                ref_pitch = {"pitch_path": str(cached_npz), "stats": {}, "status": "cached"}
+            else:
+                ref_pitch = do_extract_pitch(
+                    str(ref_vocals_path), f"{session_id}_ref", fast_mode=True
+                )
+                # Persist pitch to storage cache for future sessions
+                if ref_pitch_cache_key and ref_pitch.get("pitch_path"):
+                    storage.upload_from_file(
+                        Path(ref_pitch["pitch_path"]),
+                        ref_pitch_cache_key,
+                        content_type="application/octet-stream",
+                    )
+                    logger.info("Cached reference pitch to storage: %s", youtube_id)
             update_progress(self, "extracting_pitch_done", 55, "Justesse analysee !")
 
             # ========================================================
@@ -401,17 +462,24 @@ def analyze_performance(
 
 
 @shared_task(bind=True, name="tasks.pipeline.prepare_reference")
-def prepare_reference(self, session_id: str, reference_audio_path: str) -> dict:
+def prepare_reference(
+    self,
+    session_id: str,
+    reference_audio_path: str,
+    youtube_id: str = None,
+) -> dict:
     """
     Pre-process reference audio (separate vocals, extract pitch) for StudioMode.
 
-    Downloads reference from storage (if URL), separates with Demucs,
-    uploads vocals/instrumentals to storage for StudioMode access via audio.py,
-    then cleans up temp files.
+    Storage cache strategy (3 levels):
+      1. Demucs cache:  cache/{youtube_id}/vocals.wav  → skip Demucs entirely
+      2. Pitch cache:   cache/{youtube_id}/pitch_data.npz → skip CREPE entirely
+      3. Session copy:  sessions/{session_id}_ref/vocals.wav → StudioMode access
 
-    Storage output:
-      sessions/{session_id}_ref/vocals.wav
-      sessions/{session_id}_ref/instrumentals.wav
+    Perf targets (warm cache):
+      Demucs+CREPE miss (1st time):  ~65s
+      Demucs cached, CREPE miss:     ~35s
+      Both cached (2nd session+):    ~10s
     """
     from tasks.audio_separation import do_separate_audio
     from tasks.pitch_analysis import do_extract_pitch
@@ -420,42 +488,127 @@ def prepare_reference(self, session_id: str, reference_audio_path: str) -> dict:
     ref_temp = _temp_dir(f"{session_id}_ref")
 
     try:
-        self.update_state(state="PROGRESS", meta={"step": "downloading", "progress": 10})
+        vocals_local = None
+        instrumentals_local = None
 
-        # Download reference audio from storage if it's a URL
-        local_ref_path = _resolve_audio(
-            reference_audio_path,
-            ref_temp / "reference.wav",
+        # ================================================================
+        # DEMUCS CACHE CHECK — skip GPU separation if already done
+        # ================================================================
+        demucs_cached = youtube_id and storage.exists(
+            f"cache/{youtube_id}/vocals.wav"
         )
 
-        self.update_state(state="PROGRESS", meta={"step": "separating", "progress": 30})
+        if demucs_cached:
+            logger.info("Demucs cache HIT for %s — skipping separation", youtube_id)
+            self.update_state(
+                state="PROGRESS",
+                meta={"step": "downloading_cached", "progress": 20},
+            )
+            # Download in parallel (both files needed locally for CREPE)
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                f_v = pool.submit(
+                    storage.download_to_file,
+                    f"cache/{youtube_id}/vocals.wav",
+                    ref_temp / "vocals.wav",
+                )
+                f_i = pool.submit(
+                    storage.download_to_file,
+                    f"cache/{youtube_id}/instrumentals.wav",
+                    ref_temp / "instrumentals.wav",
+                )
+                vocals_local = f_v.result()
+                instrumentals_local = f_i.result()
+        else:
+            logger.info("Demucs cache MISS for %s — separating...", youtube_id or "unknown")
+            self.update_state(
+                state="PROGRESS",
+                meta={"step": "downloading", "progress": 10},
+            )
+            local_ref = _resolve_audio(
+                reference_audio_path,
+                ref_temp / "reference.wav",
+            )
+            self.update_state(
+                state="PROGRESS",
+                meta={"step": "separating", "progress": 30},
+            )
+            result = do_separate_audio(local_ref, f"{session_id}_ref")
+            vocals_local = Path(result["vocals_path"])
+            instrumentals_local = Path(result["instrumentals_path"])
 
-        # Separate vocals from reference
-        # AUDIO_OUTPUT_DIR=/tmp/kiaraoke -> outputs to /tmp/kiaraoke/{session_id}_ref/
-        separation_result = do_separate_audio(local_ref_path, f"{session_id}_ref")
+            # Persist to permanent cache (parallel, non-blocking for session upload)
+            if youtube_id:
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    pool.submit(
+                        storage.upload_from_file,
+                        vocals_local,
+                        f"cache/{youtube_id}/vocals.wav",
+                    )
+                    pool.submit(
+                        storage.upload_from_file,
+                        instrumentals_local,
+                        f"cache/{youtube_id}/instrumentals.wav",
+                    )
+                logger.info("Saved Demucs output to storage cache: %s", youtube_id)
 
-        vocals_local = Path(separation_result["vocals_path"])
-        instrumentals_local = Path(separation_result["instrumentals_path"])
-
-        # Upload to storage for StudioMode access (audio.py redirects to these URLs)
-        vocals_url = storage.upload_from_file(
-            vocals_local, f"sessions/{session_id}_ref/vocals.wav"
+        # ================================================================
+        # UPLOAD SESSION COPIES — parallel (StudioMode access via audio.py)
+        # ================================================================
+        self.update_state(
+            state="PROGRESS",
+            meta={"step": "uploading_session", "progress": 55},
         )
-        instru_url = storage.upload_from_file(
-            instrumentals_local, f"sessions/{session_id}_ref/instrumentals.wav"
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f_v = pool.submit(
+                storage.upload_from_file,
+                vocals_local,
+                f"sessions/{session_id}_ref/vocals.wav",
+            )
+            f_i = pool.submit(
+                storage.upload_from_file,
+                instrumentals_local,
+                f"sessions/{session_id}_ref/instrumentals.wav",
+            )
+            vocals_url = f_v.result()
+            instru_url = f_i.result()
+
+        # ================================================================
+        # PITCH CACHE CHECK — skip CREPE if already done for this video
+        # ================================================================
+        self.update_state(
+            state="PROGRESS",
+            meta={"step": "extracting_pitch", "progress": 70},
         )
 
-        self.update_state(state="PROGRESS", meta={"step": "extracting_pitch", "progress": 70})
+        pitch_path = None
+        pitch_cache_key = f"cache/{youtube_id}/pitch_data.npz" if youtube_id else None
 
-        # Extract pitch (used locally within this task only — not uploaded to storage)
-        pitch_result = do_extract_pitch(str(vocals_local), f"{session_id}_ref")
+        if pitch_cache_key and storage.exists(pitch_cache_key):
+            logger.info("Pitch cache HIT for %s — skipping CREPE", youtube_id)
+            cached_npz = ref_temp / "pitch_data_cached.npz"
+            storage.download_to_file(pitch_cache_key, cached_npz)
+            pitch_path = str(cached_npz)
+        else:
+            # Fix #1: use tiny model for reference (3x faster than full)
+            pitch_result = do_extract_pitch(
+                str(vocals_local), f"{session_id}_ref", fast_mode=True
+            )
+            pitch_path = pitch_result.get("pitch_path", "")
+            # Cache pitch for future sessions with same video
+            if pitch_cache_key and pitch_path:
+                storage.upload_from_file(
+                    Path(pitch_path),
+                    pitch_cache_key,
+                    content_type="application/octet-stream",
+                )
+                logger.info("Saved pitch data to storage cache: %s", youtube_id)
 
         return {
             "session_id": session_id,
             "status": "ready",
             "reference_vocals_url": vocals_url,
             "reference_instrumentals_url": instru_url,
-            "reference_pitch_path": pitch_result.get("pitch_path", ""),
+            "reference_pitch_path": pitch_path or "",
         }
 
     finally:

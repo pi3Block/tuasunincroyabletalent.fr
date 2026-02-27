@@ -171,7 +171,7 @@ export const RecentPerformancesSection = memo(
     useEffect(() => {
       api
         .getResultsHistory(6)
-        .then(setPerformances)
+        .then((data) => setPerformances(Array.isArray(data) ? data : []))
         .catch(() => {})
         .finally(() => setLoading(false));
     }, []);

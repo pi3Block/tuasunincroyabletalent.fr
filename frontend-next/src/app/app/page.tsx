@@ -1086,7 +1086,7 @@ export default function AppPage() {
             )}
 
             <div className="flex justify-center gap-4">
-              {results.jury_comments.map((jury, i) => (
+              {Array.isArray(results.jury_comments) && results.jury_comments.map((jury, i) => (
                 <div
                   key={i}
                   className={`w-14 h-14 rounded-full flex items-center justify-center text-2xl ${
@@ -1105,7 +1105,7 @@ export default function AppPage() {
                 Le jury a dit:
               </h3>
               <div className="space-y-3 lg:grid lg:grid-cols-3 lg:gap-6 lg:space-y-0">
-                {results.jury_comments.map((jury, i) => (
+                {Array.isArray(results.jury_comments) && results.jury_comments.map((jury, i) => (
                   <div
                     key={i}
                     className="bg-gray-800 rounded-xl p-4 text-left"
