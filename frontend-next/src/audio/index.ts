@@ -16,6 +16,7 @@ export type {
   AudioTracksResponse,
   AudioPlayerOptions,
   StudioContext,
+  StudioTransportControls,
 } from './types'
 
 // Core

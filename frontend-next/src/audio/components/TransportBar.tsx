@@ -12,6 +12,8 @@ interface TransportBarProps {
   onPause: () => void
   onStop: () => void
   onSeek: (time: number) => void
+  /** Inline single-row layout for bottom bar */
+  compact?: boolean
   className?: string
 }
 
@@ -26,6 +28,7 @@ export function TransportBar({
   onPause,
   onStop,
   onSeek,
+  compact = false,
   className,
 }: TransportBarProps) {
   const transport = useTransport()
@@ -57,6 +60,96 @@ export function TransportBar({
     ? (transport.currentTime / transport.duration) * 100
     : 0
 
+  // Compact (inline) layout — used in AppBottomBar
+  if (compact) {
+    return (
+      <div className={cn('flex items-center gap-2', className)}>
+        {/* Skip back */}
+        <button
+          type="button"
+          onClick={handleSkipBack}
+          className={cn(
+            'h-8 w-8 rounded-full flex items-center justify-center shrink-0',
+            'text-muted-foreground hover:text-foreground transition-colors',
+            'touch-manipulation active:scale-95'
+          )}
+          title="Reculer de 10 secondes"
+          aria-label="Reculer de 10 secondes"
+        >
+          <SkipBack className="h-4 w-4" />
+        </button>
+
+        {/* Stop */}
+        <button
+          type="button"
+          onClick={onStop}
+          className={cn(
+            'h-8 w-8 rounded-full flex items-center justify-center shrink-0',
+            'text-muted-foreground hover:text-foreground transition-colors',
+            'touch-manipulation active:scale-95'
+          )}
+          title="Arrêter"
+          aria-label="Arrêter"
+        >
+          <Square className="h-3.5 w-3.5" />
+        </button>
+
+        {/* Play/Pause */}
+        <button
+          type="button"
+          onClick={handlePlayPause}
+          className={cn(
+            'h-9 w-9 rounded-full flex items-center justify-center shrink-0',
+            'bg-primary text-primary-foreground shadow',
+            'hover:bg-primary/90 transition-all',
+            'touch-manipulation active:scale-95',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+          )}
+          aria-label={transport.playing ? 'Pause' : 'Lecture'}
+        >
+          {transport.playing ? (
+            <Pause className="h-4 w-4" />
+          ) : (
+            <Play className="h-4 w-4 ml-0.5" />
+          )}
+        </button>
+
+        {/* Skip forward */}
+        <button
+          type="button"
+          onClick={handleSkipForward}
+          className={cn(
+            'h-8 w-8 rounded-full flex items-center justify-center shrink-0',
+            'text-muted-foreground hover:text-foreground transition-colors',
+            'touch-manipulation active:scale-95'
+          )}
+          title="Avancer de 10 secondes"
+          aria-label="Avancer de 10 secondes"
+        >
+          <SkipForward className="h-4 w-4" />
+        </button>
+
+        {/* Time + Slider */}
+        <span className="text-xs font-mono text-muted-foreground tabular-nums shrink-0 ml-1">
+          {formatTime(transport.currentTime)}
+        </span>
+        <div className="flex-1 min-w-[80px] relative">
+          <Slider
+            value={[transport.currentTime]}
+            max={transport.duration || 100}
+            step={0.1}
+            onValueChange={handleSeekChange}
+            className="cursor-pointer"
+          />
+        </div>
+        <span className="text-xs font-mono text-muted-foreground tabular-nums shrink-0">
+          {formatTime(transport.duration)}
+        </span>
+      </div>
+    )
+  }
+
+  // Default vertical layout
   return (
     <div
       className={cn(

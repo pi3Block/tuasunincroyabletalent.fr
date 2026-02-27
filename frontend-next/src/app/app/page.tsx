@@ -2,8 +2,9 @@
 
 /**
  * Interactive app page — 100% Client-Side Rendering
- * Migrated from App.tsx (lines 400-993) without the landing page logic.
- * Status 'idle' auto-transitions to 'selecting'.
+ * Unified layout: sidebar (Mixer) + split center (Video | Lyrics) + sticky bottom bar.
+ * Mobile portrait: vertical stack layout preserved.
+ * Mobile landscape: LandscapeRecordingLayout fixed overlay preserved.
  */
 
 import { useCallback, useEffect, useState, useRef } from "react";
@@ -13,7 +14,8 @@ import { YouTubePlayer } from "@/components/app/YouTubePlayer";
 import { PitchIndicator } from "@/components/app/PitchIndicator";
 import { LyricsDisplayPro } from "@/components/lyrics/LyricsDisplayPro";
 import { LandscapeRecordingLayout } from "@/components/app/LandscapeRecordingLayout";
-import { StudioMode } from "@/audio";
+import { AppSidebar } from "@/components/app/AppSidebar";
+import { AppBottomBar } from "@/components/app/AppBottomBar";
 import { api, type Track } from "@/api/client";
 import { useAudioRecorder } from "@/hooks/useAudioRecorder";
 import { usePitchDetection } from "@/hooks/usePitchDetection";
@@ -22,6 +24,8 @@ import { useOrientation } from "@/hooks/useOrientation";
 import { useSSE, type SSEEvent } from "@/hooks/useSSE";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useAudioStore, useTransport, useMasterVolume } from "@/stores/audioStore";
+import { cn } from "@/lib/utils";
+import type { StudioTransportControls, StudioContext } from "@/audio/types";
 import Image from "next/image";
 import Link from "next/link";
 
@@ -95,11 +99,50 @@ function ScoreCard({ label, value }: { label: string; value: number }) {
   };
 
   return (
-    <div className="bg-gray-800 rounded-lg p-3">
+    <div className="bg-card border border-border rounded-lg p-3">
       <p className={`text-2xl font-bold ${getColor(value)}`}>
         {Math.round(value)}%
       </p>
-      <p className="text-xs text-gray-500">{label}</p>
+      <p className="text-xs text-muted-foreground">{label}</p>
+    </div>
+  );
+}
+
+/** Slim track info banner for the unified desktop layout */
+function TrackBannerSlim({
+  track,
+  onReset,
+}: {
+  track: Track | null;
+  onReset: () => void;
+}) {
+  if (!track) return null;
+  return (
+    <div className="shrink-0 h-12 flex items-center gap-3 px-4 border-b border-border/50 bg-card/60 backdrop-blur-sm">
+      {track.album.image && (
+        <Image
+          src={track.album.image}
+          alt={track.album.name || ""}
+          width={32}
+          height={32}
+          className="w-8 h-8 rounded-md object-cover shrink-0"
+        />
+      )}
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-semibold truncate leading-tight">
+          {track.name}
+        </p>
+        <p className="text-xs text-muted-foreground truncate leading-none">
+          {track.artists.join(", ")}
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={onReset}
+        className="shrink-0 text-xs text-muted-foreground hover:text-foreground transition-colors px-2 py-1 rounded-md hover:bg-muted"
+      >
+        Changer
+      </button>
     </div>
   );
 }
@@ -142,11 +185,20 @@ export default function AppPage() {
 
   const [youtubeUrl, setYoutubeUrl] = useState("");
   const [submittingFallback, setSubmittingFallback] = useState(false);
-  const [practiceMode, setPracticeMode] = useState(false);
+  const [studioControls, setStudioControls] =
+    useState<StudioTransportControls | null>(null);
   const [karaokeMode, setKaraokeMode] = useState(true);
   const [usePollingFallback, setUsePollingFallback] = useState(false);
 
   const { useLandscapeMobileLayout } = useOrientation();
+
+  // Derived studio context for AppSidebar
+  const studioContext: StudioContext =
+    status === "results"
+      ? "results"
+      : status === "analyzing"
+        ? "analyzing"
+        : "practice";
 
   const {
     duration: recordingDuration,
@@ -572,6 +624,7 @@ export default function AppPage() {
     }
     setAnalysisTaskId(null);
     setAnalysisProgress(null);
+    setStudioControls(null);
     reset();
     setStatus("selecting");
   }, [
@@ -582,13 +635,34 @@ export default function AppPage() {
     setStatus,
   ]);
 
-  return (
-    <div className="min-h-screen flex flex-col safe-area-top safe-area-bottom">
-      {/* Main Content */}
-      <main className="flex-1 flex flex-col items-center justify-center p-4 md:p-8 lg:p-12">
-        {/* Error Banner */}
+  // Shared lyrics display props
+  const displayMode = karaokeMode && wordLines ? "karaoke" : "line";
+  const lyricsDisplayProps = {
+    lyrics: lyrics || "",
+    syncedLines: lyricsLines,
+    wordLines: karaokeMode ? wordLines : null,
+    currentTime: playbackTime,
+    isPlaying: isVideoPlaying,
+    displayMode: displayMode as "karaoke" | "line" | "word",
+    offset: lyricsOffset,
+    onOffsetChange: handleOffsetChange,
+    showOffsetControls: true,
+  };
+
+  // ─── NON-UNIFIED STATES (selecting / preparing / downloading / needs_fallback) ───
+  const isUnifiedState = [
+    "ready",
+    "recording",
+    "uploading",
+    "analyzing",
+    "results",
+  ].includes(status);
+
+  if (!isUnifiedState) {
+    return (
+      <div className="min-h-[calc(100dvh-3.5rem)] flex flex-col items-center justify-center p-4 md:p-8">
         {error && (
-          <div className="w-full max-w-md md:max-w-2xl lg:max-w-4xl mb-4 bg-red-500/20 border border-red-500 rounded-lg p-3 text-red-300 text-sm text-center">
+          <div className="w-full max-w-md md:max-w-2xl mb-4 bg-destructive/20 border border-destructive rounded-lg p-3 text-destructive-foreground text-sm text-center">
             {error}
           </div>
         )}
@@ -600,29 +674,27 @@ export default function AppPage() {
               <h2 className="text-xl font-semibold">Choisis ta chanson</h2>
               <Link
                 href="/"
-                className="text-gray-400 hover:text-white text-sm"
+                className="text-muted-foreground hover:text-foreground text-sm"
               >
                 Retour
               </Link>
             </div>
-
             <TrackSearch onSelect={handleTrackSelect} />
           </div>
         )}
 
         {/* PREPARING */}
         {status === "preparing" && selectedTrack && (
-          <div className="text-center space-y-6 w-full max-w-md md:max-w-2xl lg:max-w-4xl">
+          <div className="text-center space-y-6 w-full max-w-md md:max-w-2xl">
             <TrackCard track={selectedTrack} />
-
             <div className="space-y-2">
-              <div className="w-12 h-12 mx-auto border-4 border-gold-400 border-t-transparent rounded-full animate-spin" />
-              <p className="text-gray-400">
+              <div className="w-12 h-12 mx-auto border-4 border-primary/50 border-t-transparent rounded-full animate-spin" />
+              <p className="text-muted-foreground">
                 Recherche de la référence audio...
               </p>
               {youtubeMatch && (
-                <p className="text-xs text-gray-500">
-                  Trouvé: {youtubeMatch.title}
+                <p className="text-xs text-muted-foreground/70">
+                  Trouvé : {youtubeMatch.title}
                 </p>
               )}
             </div>
@@ -631,28 +703,24 @@ export default function AppPage() {
 
         {/* DOWNLOADING */}
         {status === "downloading" && selectedTrack && (
-          <div className="text-center space-y-6 w-full max-w-md md:max-w-2xl lg:max-w-4xl">
+          <div className="text-center space-y-6 w-full max-w-md md:max-w-2xl">
             <TrackCard track={selectedTrack} />
-
             <div className="space-y-2">
-              <div className="w-12 h-12 mx-auto border-4 border-primary-400 border-t-transparent rounded-full animate-spin" />
-              <p className="text-gray-400">Téléchargement en cours...</p>
+              <div className="w-12 h-12 mx-auto border-4 border-primary/50 border-t-transparent rounded-full animate-spin" />
+              <p className="text-muted-foreground">Téléchargement en cours...</p>
               {youtubeMatch && (
-                <div className="bg-gray-800 rounded-lg p-3 text-sm">
-                  <p className="text-white truncate">
-                    {youtubeMatch.title}
-                  </p>
-                  <p className="text-gray-500">
+                <div className="bg-card border border-border rounded-lg p-3 text-sm">
+                  <p className="text-foreground truncate">{youtubeMatch.title}</p>
+                  <p className="text-muted-foreground">
                     {youtubeMatch.channel} •{" "}
                     {formatSeconds(youtubeMatch.duration)}
                   </p>
                 </div>
               )}
             </div>
-
             <button
               onClick={() => handleReset()}
-              className="text-gray-400 hover:text-white text-sm"
+              className="text-muted-foreground hover:text-foreground text-sm"
             >
               Annuler
             </button>
@@ -661,20 +729,18 @@ export default function AppPage() {
 
         {/* NEEDS_FALLBACK */}
         {status === "needs_fallback" && selectedTrack && (
-          <div className="text-center space-y-6 w-full max-w-md md:max-w-2xl lg:max-w-4xl">
+          <div className="text-center space-y-6 w-full max-w-md md:max-w-2xl">
             <TrackCard track={selectedTrack} />
-
             <div className="bg-yellow-500/20 border border-yellow-500 rounded-lg p-4 text-left">
               <p className="text-yellow-300 font-medium mb-2">
                 Référence audio non trouvée
               </p>
               <p className="text-yellow-400/80 text-sm">
-                Le Jury ne trouve pas ta version de référence. Colle un
-                lien YouTube (Karaoké ou Original) pour qu&apos;on puisse
-                te juger équitablement !
+                Le Jury ne trouve pas ta version de référence. Colle un lien
+                YouTube (Karaoké ou Original) pour qu&apos;on puisse te juger
+                équitablement !
               </p>
             </div>
-
             <div className="space-y-3">
               <div className="md:flex md:gap-3">
                 <input
@@ -682,480 +748,570 @@ export default function AppPage() {
                   value={youtubeUrl}
                   onChange={(e) => setYoutubeUrl(e.target.value)}
                   placeholder="https://youtube.com/watch?v=..."
-                  className="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-ring"
+                  className="w-full bg-card border border-border rounded-xl px-4 py-3 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                 />
-
                 <button
                   onClick={handleFallbackSubmit}
                   disabled={!youtubeUrl.trim() || submittingFallback}
-                  className="w-full md:w-auto md:whitespace-nowrap mt-3 md:mt-0 bg-primary hover:bg-primary/90 disabled:bg-gray-600 disabled:cursor-not-allowed text-primary-foreground font-bold py-3 px-6 rounded-xl transition"
+                  className="w-full md:w-auto md:whitespace-nowrap mt-3 md:mt-0 bg-primary hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed text-primary-foreground font-bold py-3 px-6 rounded-xl transition"
                 >
-                  {submittingFallback
-                    ? "Vérification..."
-                    : "Utiliser ce lien"}
+                  {submittingFallback ? "Vérification..." : "Utiliser ce lien"}
                 </button>
               </div>
             </div>
-
             <button
               onClick={() => handleReset()}
-              className="text-gray-400 hover:text-white text-sm"
+              className="text-muted-foreground hover:text-foreground text-sm"
             >
               Changer de chanson
             </button>
           </div>
         )}
+      </div>
+    );
+  }
 
-        {/* READY */}
-        {status === "ready" && selectedTrack && sessionId && (
-          <>
-            {useLandscapeMobileLayout && !practiceMode && (
-              <LandscapeRecordingLayout
-                youtubeMatch={youtubeMatch}
-                lyrics={lyrics}
-                lyricsLines={lyricsLines}
-                wordLines={karaokeMode ? wordLines : null}
-                playbackTime={playbackTime}
-                isVideoPlaying={isVideoPlaying}
-                displayMode={
-                  karaokeMode && wordLines ? "karaoke" : "line"
-                }
-                lyricsOffset={lyricsOffset}
-                onOffsetChange={handleOffsetChange}
-                onTimeUpdate={setPlaybackTime}
-                onStateChange={setIsVideoPlaying}
-                isRecording={false}
-                actionButton={
-                  <button
-                    onClick={handleStartRecording}
-                    className="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-3 px-6 rounded-full text-base shadow-lg transform transition hover:scale-105 active:scale-95 flex items-center justify-center gap-2"
-                  >
-                    <span className="text-xl">🎙️</span>
-                    Enregistrer
-                  </button>
-                }
-              />
-            )}
+  // ─── UNIFIED STATES (ready / recording / uploading / analyzing / results) ────
 
-            {(!useLandscapeMobileLayout || practiceMode) && (
-              <div className="w-full max-w-md md:max-w-4xl lg:max-w-7xl xl:max-w-[90%] 2xl:max-w-[85%] space-y-6">
-                <TrackCard track={selectedTrack} />
+  return (
+    <>
+      {/* ── Mobile landscape overlay (fixed, preserved as-is) ── */}
+      {useLandscapeMobileLayout &&
+        (status === "ready" || status === "recording") && (
+          <LandscapeRecordingLayout
+            youtubeMatch={youtubeMatch}
+            lyrics={lyrics}
+            lyricsLines={lyricsLines}
+            wordLines={karaokeMode ? wordLines : null}
+            playbackTime={playbackTime}
+            isVideoPlaying={isVideoPlaying}
+            displayMode={karaokeMode && wordLines ? "karaoke" : "line"}
+            lyricsOffset={lyricsOffset}
+            onOffsetChange={handleOffsetChange}
+            onTimeUpdate={setPlaybackTime}
+            onStateChange={setIsVideoPlaying}
+            isRecording={status === "recording"}
+            recordingDuration={
+              status === "recording" ? recordingDuration : undefined
+            }
+            actionButton={
+              status === "ready" ? (
+                <button
+                  onClick={handleStartRecording}
+                  className="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-3 px-6 rounded-full text-base shadow-lg transform transition hover:scale-105 active:scale-95 flex items-center justify-center gap-2"
+                >
+                  <span className="text-xl">🎙️</span>
+                  Enregistrer
+                </button>
+              ) : (
+                <button
+                  onClick={handleStopRecording}
+                  className="w-full bg-gray-700 hover:bg-gray-600 text-white font-bold py-3 px-6 rounded-full text-base shadow-lg transform transition hover:scale-105 active:scale-95"
+                >
+                  Arrêter
+                </button>
+              )
+            }
+          />
+        )}
 
-                <div className="flex justify-center">
-                  <div className="inline-flex rounded-lg bg-gray-800 p-1">
-                    <button
-                      onClick={() => setPracticeMode(false)}
-                      className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
-                        !practiceMode
-                          ? "bg-primary-500 text-white shadow"
-                          : "text-gray-400 hover:text-white"
-                      }`}
-                    >
-                      Vidéo + Paroles
-                    </button>
-                    <button
-                      onClick={() => setPracticeMode(true)}
-                      className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
-                        practiceMode
-                          ? "bg-primary-500 text-white shadow"
-                          : "text-gray-400 hover:text-white"
-                      }`}
-                    >
-                      Mode Studio
-                    </button>
-                  </div>
-                </div>
+      {/* ── Desktop unified layout (lg+) ── */}
+      <div className="hidden lg:flex h-[calc(100dvh-3.5rem)] overflow-hidden">
+        {sessionId && (
+          <AppSidebar
+            sessionId={sessionId}
+            studioContext={studioContext}
+            onTransportReady={setStudioControls}
+          />
+        )}
 
-                {practiceMode ? (
-                  <div className="space-y-4">
-                    <StudioMode
-                      sessionId={sessionId}
-                      context="practice"
+        <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+          {/* Slim track banner */}
+          <TrackBannerSlim track={selectedTrack} onReset={handleReset} />
+
+          {/* Center zone: left content + right lyrics */}
+          <div className="flex flex-1 min-h-0 overflow-hidden">
+            {/* LEFT — main content zone */}
+            <div className="flex-1 min-w-0 overflow-y-auto p-4 flex flex-col gap-3">
+              {/* Video (ready + recording) */}
+              {(status === "ready" || status === "recording") &&
+                youtubeMatch && (
+                  <>
+                    <YouTubePlayer
+                      video={youtubeMatch}
+                      onTimeUpdate={setPlaybackTime}
+                      onStateChange={setIsVideoPlaying}
                     />
-
-                    <div className="bg-blue-500/20 border border-blue-500 rounded-lg p-4 text-center">
-                      <p className="text-blue-300 font-medium">
-                        Mode Pratique
-                      </p>
-                      <p className="text-blue-400/80 text-sm mt-1">
-                        Entraîne-toi en ajustant le volume de la voix et
-                        de l&apos;instrumental
-                      </p>
-                    </div>
-
-                    <button
-                      onClick={handleStartRecording}
-                      className="w-full lg:max-w-sm lg:mx-auto bg-red-500 hover:bg-red-600 text-white font-bold py-5 lg:py-3 px-10 rounded-full text-xl lg:text-lg shadow-lg transform transition hover:scale-105 active:scale-95 flex items-center justify-center gap-3"
-                    >
-                      <span className="text-2xl">🎙️</span>
-                      Enregistrer
-                    </button>
-
-                    <button
-                      onClick={handleReset}
-                      className="w-full text-gray-400 hover:text-white text-sm"
-                    >
-                      Changer de chanson
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex flex-col lg:flex-row gap-6">
-                    <div className="flex-1 space-y-4">
-                      {youtubeMatch && (
-                        <YouTubePlayer
-                          video={youtubeMatch}
-                          onTimeUpdate={setPlaybackTime}
-                          onStateChange={setIsVideoPlaying}
-                        />
-                      )}
-
-                      <div className="bg-green-500/20 border border-green-500 rounded-lg p-4 text-center">
-                        <p className="text-green-300 font-medium">
-                          Prêt à enregistrer !
-                        </p>
-                        <p className="text-green-400/80 text-sm mt-1">
-                          Lance la vidéo et appuie sur Enregistrer quand
-                          tu es prêt
-                        </p>
-                      </div>
-
-                      <button
-                        onClick={handleStartRecording}
-                        className="w-full lg:max-w-sm lg:mx-auto bg-red-500 hover:bg-red-600 text-white font-bold py-5 lg:py-3 px-10 rounded-full text-xl lg:text-lg shadow-lg transform transition hover:scale-105 active:scale-95 flex items-center justify-center gap-3"
-                      >
-                        <span className="text-2xl">🎙️</span>
-                        Enregistrer
-                      </button>
-
-                      <button
-                        onClick={handleReset}
-                        className="w-full text-gray-400 hover:text-white text-sm"
-                      >
-                        Changer de chanson
-                      </button>
-                    </div>
-
-                    <div className="flex-1">
-                      {lyricsStatus === "loading" && (
-                        <div className="flex items-center justify-center gap-2 text-gray-400 text-sm py-4">
-                          <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
-                          <span>Chargement des paroles...</span>
-                        </div>
-                      )}
-                      {lyricsStatus === "found" && (
-                        <div className="flex items-center justify-center gap-2 text-green-400 text-sm pb-2">
-                          <span>✓</span>
-                          <span>Paroles disponibles</span>
-                        </div>
-                      )}
-                      {lyricsStatus === "not_found" && (
-                        <div className="flex items-center justify-center gap-2 text-yellow-400 text-sm py-4">
-                          <span>⚠</span>
-                          <span>Paroles non disponibles</span>
-                        </div>
-                      )}
-
-                      {lyrics && lyricsStatus === "found" && (
-                        <LyricsDisplayPro
-                          lyrics={lyrics}
-                          syncedLines={lyricsLines}
-                          wordLines={karaokeMode ? wordLines : null}
-                          currentTime={playbackTime}
-                          isPlaying={isVideoPlaying}
-                          displayMode={
-                            karaokeMode && wordLines ? "karaoke" : "line"
-                          }
-                          offset={lyricsOffset}
-                          onOffsetChange={handleOffsetChange}
-                          showOffsetControls={true}
-                        />
-                      )}
-                      {isGeneratingWordTimestamps && (
-                        <div className="flex items-center justify-center gap-2 text-blue-400 text-xs mt-2">
-                          <div className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
-                          <span>Génération du mode karaoké...</span>
-                        </div>
-                      )}
-                      {wordTimestampsStatus === "found" && wordLines && (
-                        <div className="flex items-center justify-center gap-2 mt-2">
-                          <button
-                            onClick={() => setKaraokeMode(!karaokeMode)}
-                            className={`flex items-center gap-2 text-xs px-3 py-1.5 rounded-full transition-colors ${
-                              karaokeMode
-                                ? "bg-purple-500/20 text-purple-400 hover:bg-purple-500/30"
-                                : "bg-gray-500/20 text-gray-400 hover:bg-gray-500/30"
-                            }`}
-                          >
-                            <span>
-                              {karaokeMode ? "🎤" : "📝"}
-                            </span>
-                            <span>
-                              {karaokeMode
-                                ? "Mode karaoké"
-                                : "Mode ligne"}
-                            </span>
-                          </button>
-                          <button
-                            onClick={regenerateWordTimestamps}
-                            disabled={isGeneratingWordTimestamps}
-                            className="flex items-center gap-1 text-xs px-2 py-1.5 rounded-full bg-orange-500/20 text-orange-400 hover:bg-orange-500/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                            title="Régénérer les timestamps karaoké"
-                          >
-                            <span>🔄</span>
-                            <span>Régénérer</span>
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
+                    {status === "recording" && (
+                      <PitchIndicator pitchData={pitchData} />
+                    )}
+                  </>
                 )}
-              </div>
-            )}
-          </>
-        )}
 
-        {/* RECORDING */}
-        {status === "recording" && (
-          <>
-            {useLandscapeMobileLayout && (
-              <LandscapeRecordingLayout
-                youtubeMatch={youtubeMatch}
-                lyrics={lyrics}
-                lyricsLines={lyricsLines}
-                wordLines={karaokeMode ? wordLines : null}
-                playbackTime={playbackTime}
-                isVideoPlaying={isVideoPlaying}
-                displayMode={
-                  karaokeMode && wordLines ? "karaoke" : "line"
-                }
-                lyricsOffset={lyricsOffset}
-                onOffsetChange={handleOffsetChange}
-                onTimeUpdate={setPlaybackTime}
-                onStateChange={setIsVideoPlaying}
-                isRecording={true}
-                recordingDuration={recordingDuration}
-                actionButton={
-                  <button
-                    onClick={handleStopRecording}
-                    className="w-full bg-gray-700 hover:bg-gray-600 text-white font-bold py-3 px-6 rounded-full text-base shadow-lg transform transition hover:scale-105 active:scale-95"
-                  >
-                    Arrêter
-                  </button>
-                }
-              />
-            )}
-
-            {!useLandscapeMobileLayout && (
-              <div className="w-full max-w-md md:max-w-4xl lg:max-w-7xl xl:max-w-[90%] 2xl:max-w-[85%] space-y-4">
-                <div className="flex items-center justify-center gap-3 bg-red-500/20 border border-red-500 rounded-lg p-3">
-                  <div className="w-4 h-4 bg-red-500 rounded-full animate-pulse" />
-                  <p className="text-red-400 font-bold">
-                    Enregistrement en cours...{" "}
-                    {formatSeconds(recordingDuration)}
-                  </p>
-                </div>
-
-                <PitchIndicator pitchData={pitchData} />
-
-                <div className="flex flex-col lg:flex-row gap-6">
-                  <div className="flex-1 space-y-4">
-                    {youtubeMatch && (
-                      <YouTubePlayer
-                        video={youtubeMatch}
-                        onTimeUpdate={setPlaybackTime}
-                        onStateChange={setIsVideoPlaying}
-                      />
-                    )}
-
-                    <button
-                      onClick={handleStopRecording}
-                      className="w-full bg-gray-700 hover:bg-gray-600 text-white font-bold py-4 px-8 rounded-full text-lg shadow-lg transform transition hover:scale-105 active:scale-95"
-                    >
-                      Arrêter l&apos;enregistrement
-                    </button>
-                  </div>
-
-                  <div className="flex-1">
-                    {lyrics && (
-                      <LyricsDisplayPro
-                        lyrics={lyrics}
-                        syncedLines={lyricsLines}
-                        wordLines={karaokeMode ? wordLines : null}
-                        currentTime={playbackTime}
-                        isPlaying={isVideoPlaying}
-                        displayMode={
-                          karaokeMode && wordLines ? "karaoke" : "line"
-                        }
-                        offset={lyricsOffset}
-                        onOffsetChange={handleOffsetChange}
-                        showOffsetControls={true}
-                      />
-                    )}
+              {/* Uploading */}
+              {status === "uploading" && (
+                <div className="flex-1 flex flex-col items-center justify-center gap-4">
+                  <div className="w-16 h-16 border-4 border-primary/30 border-t-primary rounded-full animate-spin" />
+                  <div className="text-center">
+                    <p className="text-lg font-semibold">
+                      Envoi de ton enregistrement...
+                    </p>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Préparation de l&apos;analyse
+                    </p>
                   </div>
                 </div>
-              </div>
-            )}
-          </>
-        )}
+              )}
 
-        {/* UPLOADING */}
-        {status === "uploading" && (
-          <div className="text-center space-y-4">
-            <div className="w-20 h-20 mx-auto border-4 border-primary-400 border-t-transparent rounded-full animate-spin" />
-            <p className="text-xl font-semibold">
-              Envoi de ton enregistrement...
-            </p>
-            <p className="text-gray-400">
-              Préparation de l&apos;analyse
-            </p>
+              {/* Analyzing */}
+              {status === "analyzing" && (
+                <div className="flex-1 flex flex-col items-center justify-center gap-6">
+                  <div className="relative">
+                    <div className="w-20 h-20 border-4 border-primary/30 border-t-primary rounded-full animate-spin" />
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <span className="text-3xl">👨‍⚖️</span>
+                    </div>
+                  </div>
+                  <div className="text-center">
+                    <p className="text-xl font-bold text-primary">
+                      Le jury délibère...
+                    </p>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Analyse de ta performance en cours
+                    </p>
+                  </div>
+                  {analysisProgress && (
+                    <div className="w-full max-w-xs space-y-2">
+                      <div className="h-2 bg-muted rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-primary transition-all duration-700 ease-out"
+                          style={{ width: `${analysisProgress.progress}%` }}
+                        />
+                      </div>
+                      <p className="text-xs text-muted-foreground text-center">
+                        {getProgressLabel(analysisProgress.step)} (
+                        {analysisProgress.progress}%)
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Results */}
+              {status === "results" && results && (
+                <div className="space-y-5">
+                  {/* Score */}
+                  <div className="text-center">
+                    <div className="w-24 h-24 mx-auto rounded-full bg-linear-to-br from-yellow-400 to-yellow-600 flex items-center justify-center shadow-lg">
+                      <span className="text-4xl font-bold text-gray-900">
+                        {results.score}
+                      </span>
+                    </div>
+                    <p className="text-muted-foreground mt-2 text-sm">
+                      Score global
+                    </p>
+                  </div>
+
+                  {/* Sub-scores */}
+                  <div className="grid grid-cols-3 gap-3">
+                    <ScoreCard label="Justesse" value={results.pitch_accuracy} />
+                    <ScoreCard label="Rythme" value={results.rhythm_accuracy} />
+                    <ScoreCard
+                      label="Paroles"
+                      value={results.lyrics_accuracy}
+                    />
+                  </div>
+
+                  {/* Auto-sync info */}
+                  {results.auto_sync && results.auto_sync.confidence > 0.3 && (
+                    <div className="text-center text-xs text-muted-foreground">
+                      Sync auto:{" "}
+                      {results.auto_sync.offset_seconds > 0 ? "+" : ""}
+                      {results.auto_sync.offset_seconds.toFixed(1)}s
+                      {results.auto_sync.confidence < 0.5 &&
+                        " (faible confiance)"}
+                    </div>
+                  )}
+
+                  {/* Jury votes */}
+                  <div className="flex justify-center gap-4">
+                    {Array.isArray(results.jury_comments) &&
+                      results.jury_comments.map((jury, i) => (
+                        <div
+                          key={i}
+                          className={cn(
+                            "w-12 h-12 rounded-full flex items-center justify-center text-xl",
+                            jury.vote === "yes"
+                              ? "bg-green-500/20 border-2 border-green-500"
+                              : "bg-red-500/20 border-2 border-red-500",
+                          )}
+                        >
+                          {jury.vote === "yes" ? "👍" : "👎"}
+                        </div>
+                      ))}
+                  </div>
+
+                  {/* Jury comments */}
+                  <div>
+                    <h3 className="text-sm font-semibold mb-3">
+                      Le jury a dit :
+                    </h3>
+                    <div className="grid grid-cols-3 gap-3">
+                      {Array.isArray(results.jury_comments) &&
+                        results.jury_comments.map((jury, i) => (
+                          <div
+                            key={i}
+                            className="bg-card border border-border rounded-xl p-3 text-left"
+                          >
+                            <div className="flex items-center gap-1.5 mb-1.5">
+                              <span className="font-medium text-yellow-400 text-xs">
+                                {jury.persona}
+                              </span>
+                              <span
+                                className={cn(
+                                  "text-xs",
+                                  jury.vote === "yes"
+                                    ? "text-green-400"
+                                    : "text-red-400",
+                                )}
+                              >
+                                ({jury.vote === "yes" ? "OUI" : "NON"})
+                              </span>
+                            </div>
+                            <p className="text-muted-foreground text-xs italic">
+                              &ldquo;{jury.comment}&rdquo;
+                            </p>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+
+                  {/* Full results link */}
+                  {sessionId && (
+                    <div className="flex justify-center">
+                      <Link
+                        href={`/results/${sessionId}`}
+                        className="text-sm text-primary hover:text-primary/80 underline"
+                      >
+                        Voir les résultats détaillés →
+                      </Link>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* RIGHT — Lyrics column */}
+            <div className="w-[42%] min-w-[280px] max-w-[480px] border-l border-border/30 overflow-hidden flex flex-col">
+              {lyricsStatus === "loading" && (
+                <div className="flex-1 flex items-center justify-center gap-2 text-muted-foreground text-sm">
+                  <div className="w-4 h-4 border-2 border-muted-foreground border-t-transparent rounded-full animate-spin" />
+                  <span>Chargement des paroles...</span>
+                </div>
+              )}
+              {lyricsStatus === "not_found" && (
+                <div className="flex-1 flex items-center justify-center text-yellow-400 text-sm gap-1.5">
+                  <span>⚠</span>
+                  <span>Paroles non disponibles</span>
+                </div>
+              )}
+              {lyrics && lyricsStatus === "found" && (
+                <>
+                  <div className="flex-1 min-h-0 overflow-hidden">
+                    <LyricsDisplayPro
+                      {...lyricsDisplayProps}
+                      className="h-full"
+                    />
+                  </div>
+                  {/* Karaoke mode controls */}
+                  {wordTimestampsStatus === "found" && wordLines && (
+                    <div className="shrink-0 flex items-center justify-center gap-2 px-3 py-1.5 border-t border-border/30">
+                      <button
+                        onClick={() => setKaraokeMode(!karaokeMode)}
+                        className={cn(
+                          "flex items-center gap-1.5 text-xs px-3 py-1 rounded-full transition-colors",
+                          karaokeMode
+                            ? "bg-purple-500/20 text-purple-400 hover:bg-purple-500/30"
+                            : "bg-muted/50 text-muted-foreground hover:bg-muted",
+                        )}
+                      >
+                        <span>{karaokeMode ? "🎤" : "📝"}</span>
+                        <span>{karaokeMode ? "Karaoké" : "Ligne"}</span>
+                      </button>
+                      <button
+                        onClick={regenerateWordTimestamps}
+                        disabled={isGeneratingWordTimestamps}
+                        className="flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-orange-500/20 text-orange-400 hover:bg-orange-500/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        title="Régénérer les timestamps karaoké"
+                      >
+                        <span>🔄</span>
+                      </button>
+                    </div>
+                  )}
+                  {isGeneratingWordTimestamps && (
+                    <div className="shrink-0 flex items-center justify-center gap-2 text-blue-400 text-xs px-3 py-1.5 border-t border-border/30">
+                      <div className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+                      <span>Génération karaoké...</span>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Sticky bottom bar */}
+          <AppBottomBar
+            status={status as "ready" | "recording" | "uploading" | "analyzing" | "results" | "idle" | "selecting" | "preparing" | "needs_fallback" | "downloading"}
+            selectedTrack={selectedTrack}
+            studioControls={studioControls}
+            recordingDuration={recordingDuration}
+            onRecord={handleStartRecording}
+            onStopRecording={handleStopRecording}
+            onReset={handleReset}
+            analysisProgress={analysisProgress}
+          />
+        </div>
+      </div>
+
+      {/* ── Mobile portrait layout (< lg) ── */}
+      <div
+        className={cn(
+          "lg:hidden min-h-[calc(100dvh-3.5rem)] flex flex-col",
+          // Hide behind landscape overlay on mobile landscape
+          useLandscapeMobileLayout &&
+            (status === "ready" || status === "recording")
+            ? "invisible pointer-events-none"
+            : "",
+        )}
+      >
+        {error && (
+          <div className="mx-4 mt-4 bg-destructive/20 border border-destructive rounded-lg p-3 text-destructive-foreground text-sm text-center">
+            {error}
           </div>
         )}
 
-        {/* ANALYZING */}
-        {status === "analyzing" && sessionId && (
-          <div className="space-y-6 w-full max-w-md md:max-w-2xl lg:max-w-4xl">
-            <div className="text-center">
+        <main className="flex flex-col items-center justify-center p-4 gap-4 flex-1">
+          {selectedTrack && <TrackCard track={selectedTrack} />}
+
+          {/* READY — mobile */}
+          {status === "ready" && (
+            <div className="w-full max-w-md space-y-4">
+              {youtubeMatch && (
+                <YouTubePlayer
+                  video={youtubeMatch}
+                  onTimeUpdate={setPlaybackTime}
+                  onStateChange={setIsVideoPlaying}
+                />
+              )}
+
+              <div className="bg-green-500/20 border border-green-500 rounded-lg p-4 text-center">
+                <p className="text-green-300 font-medium">
+                  Prêt à enregistrer !
+                </p>
+                <p className="text-green-400/80 text-sm mt-1">
+                  Lance la vidéo et appuie sur Enregistrer quand tu es prêt
+                </p>
+              </div>
+
+              <button
+                onClick={handleStartRecording}
+                className="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-5 px-10 rounded-full text-xl shadow-lg transform transition hover:scale-105 active:scale-95 flex items-center justify-center gap-3"
+              >
+                <span className="text-2xl">🎙️</span>
+                Enregistrer
+              </button>
+
+              {lyrics && lyricsStatus === "found" && (
+                <LyricsDisplayPro {...lyricsDisplayProps} />
+              )}
+
+              <button
+                onClick={handleReset}
+                className="w-full text-muted-foreground hover:text-foreground text-sm"
+              >
+                Changer de chanson
+              </button>
+            </div>
+          )}
+
+          {/* RECORDING — mobile */}
+          {status === "recording" && (
+            <div className="w-full max-w-md space-y-4">
+              <div className="flex items-center justify-center gap-3 bg-red-500/20 border border-red-500 rounded-lg p-3">
+                <div className="w-4 h-4 bg-red-500 rounded-full animate-pulse" />
+                <p className="text-red-400 font-bold">
+                  Enregistrement en cours...{" "}
+                  {formatSeconds(recordingDuration)}
+                </p>
+              </div>
+
+              <PitchIndicator pitchData={pitchData} />
+
+              {youtubeMatch && (
+                <YouTubePlayer
+                  video={youtubeMatch}
+                  onTimeUpdate={setPlaybackTime}
+                  onStateChange={setIsVideoPlaying}
+                />
+              )}
+
+              <button
+                onClick={handleStopRecording}
+                className="w-full bg-gray-700 hover:bg-gray-600 text-white font-bold py-4 px-8 rounded-full text-lg shadow-lg transform transition hover:scale-105 active:scale-95"
+              >
+                Arrêter l&apos;enregistrement
+              </button>
+
+              {lyrics && (
+                <LyricsDisplayPro {...lyricsDisplayProps} />
+              )}
+            </div>
+          )}
+
+          {/* UPLOADING — mobile */}
+          {status === "uploading" && (
+            <div className="text-center space-y-4">
+              <div className="w-20 h-20 mx-auto border-4 border-primary/40 border-t-primary rounded-full animate-spin" />
+              <p className="text-xl font-semibold">
+                Envoi de ton enregistrement...
+              </p>
+              <p className="text-muted-foreground">
+                Préparation de l&apos;analyse
+              </p>
+            </div>
+          )}
+
+          {/* ANALYZING — mobile */}
+          {status === "analyzing" && (
+            <div className="space-y-6 w-full max-w-md text-center">
               <div className="relative inline-block">
-                <div className="w-20 h-20 mx-auto border-4 border-gold-400 border-t-transparent rounded-full animate-spin" />
+                <div className="w-20 h-20 mx-auto border-4 border-primary/30 border-t-primary rounded-full animate-spin" />
                 <div className="absolute inset-0 flex items-center justify-center">
                   <span className="text-3xl">👨‍⚖️</span>
                 </div>
               </div>
 
-              <div className="mt-4">
-                <p className="text-xl font-bold bg-gradient-to-r from-gold-400 to-gold-600 bg-clip-text text-transparent">
+              <div>
+                <p className="text-xl font-bold text-primary">
                   Le jury délibère...
                 </p>
-                <p className="text-gray-400 text-sm mt-1">
+                <p className="text-muted-foreground text-sm mt-1">
                   Analyse de ta performance en cours
                 </p>
               </div>
 
               {analysisProgress && (
-                <div className="mt-4 space-y-2">
-                  <div className="h-2 bg-gray-700 rounded-full overflow-hidden max-w-xs md:max-w-sm lg:max-w-md mx-auto">
+                <div className="space-y-2 max-w-xs mx-auto">
+                  <div className="h-2 bg-muted rounded-full overflow-hidden">
                     <div
-                      className="h-full bg-gradient-to-r from-gold-400 to-gold-600 transition-all duration-700 ease-out"
-                      style={{
-                        width: `${analysisProgress.progress}%`,
-                      }}
+                      className="h-full bg-primary transition-all duration-700 ease-out"
+                      style={{ width: `${analysisProgress.progress}%` }}
                     />
                   </div>
-
-                  <p className="text-gray-300 text-sm">
+                  <p className="text-muted-foreground text-sm">
                     {getProgressLabel(analysisProgress.step)} (
                     {analysisProgress.progress}%)
                   </p>
                 </div>
               )}
             </div>
+          )}
 
-            <StudioMode sessionId={sessionId} context="analyzing" />
-          </div>
-        )}
-
-        {/* RESULTS */}
-        {status === "results" && results && sessionId && (
-          <div className="space-y-6 w-full max-w-md md:max-w-2xl lg:max-w-5xl xl:max-w-6xl">
-            <div className="text-center">
-              <div className="relative inline-block">
-                <div className="w-28 h-28 mx-auto rounded-full bg-gradient-to-br from-gold-400 to-gold-600 flex items-center justify-center shadow-lg">
+          {/* RESULTS — mobile */}
+          {status === "results" && results && sessionId && (
+            <div className="space-y-6 w-full max-w-md md:max-w-2xl">
+              <div className="text-center">
+                <div className="w-28 h-28 mx-auto rounded-full bg-linear-to-br from-yellow-400 to-yellow-600 flex items-center justify-center shadow-lg">
                   <span className="text-4xl font-bold text-gray-900">
                     {results.score}
                   </span>
                 </div>
+                <p className="text-muted-foreground mt-2">Score global</p>
               </div>
-              <p className="text-gray-400 mt-2">Score global</p>
-            </div>
 
-            <div className="grid grid-cols-3 gap-3 lg:gap-6">
-              <ScoreCard label="Justesse" value={results.pitch_accuracy} />
-              <ScoreCard label="Rythme" value={results.rhythm_accuracy} />
-              <ScoreCard
-                label="Paroles"
-                value={results.lyrics_accuracy}
-              />
-            </div>
-
-            {results.auto_sync && results.auto_sync.confidence > 0.3 && (
-              <div className="text-center text-xs text-gray-500">
-                Sync auto: {results.auto_sync.offset_seconds > 0 ? "+" : ""}
-                {results.auto_sync.offset_seconds.toFixed(1)}s
-                {results.auto_sync.confidence < 0.5 && " (faible confiance)"}
+              <div className="grid grid-cols-3 gap-3">
+                <ScoreCard label="Justesse" value={results.pitch_accuracy} />
+                <ScoreCard label="Rythme" value={results.rhythm_accuracy} />
+                <ScoreCard label="Paroles" value={results.lyrics_accuracy} />
               </div>
-            )}
 
-            <div className="flex justify-center gap-4">
-              {Array.isArray(results.jury_comments) && results.jury_comments.map((jury, i) => (
-                <div
-                  key={i}
-                  className={`w-14 h-14 rounded-full flex items-center justify-center text-2xl ${
-                    jury.vote === "yes"
-                      ? "bg-green-500/20 border-2 border-green-500"
-                      : "bg-red-500/20 border-2 border-red-500"
-                  }`}
-                >
-                  {jury.vote === "yes" ? "👍" : "👎"}
+              {results.auto_sync && results.auto_sync.confidence > 0.3 && (
+                <div className="text-center text-xs text-muted-foreground">
+                  Sync auto:{" "}
+                  {results.auto_sync.offset_seconds > 0 ? "+" : ""}
+                  {results.auto_sync.offset_seconds.toFixed(1)}s
+                  {results.auto_sync.confidence < 0.5 &&
+                    " (faible confiance)"}
                 </div>
-              ))}
-            </div>
+              )}
 
-            <div>
-              <h3 className="text-lg font-semibold text-center mb-3">
-                Le jury a dit:
-              </h3>
-              <div className="space-y-3 lg:grid lg:grid-cols-3 lg:gap-6 lg:space-y-0">
-                {Array.isArray(results.jury_comments) && results.jury_comments.map((jury, i) => (
-                  <div
-                    key={i}
-                    className="bg-gray-800 rounded-xl p-4 text-left"
-                  >
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="font-medium text-gold-400">
-                        {jury.persona}
-                      </span>
-                      <span
-                        className={
-                          jury.vote === "yes"
-                            ? "text-green-400"
-                            : "text-red-400"
-                        }
-                      >
-                        ({jury.vote === "yes" ? "OUI" : "NON"})
-                      </span>
+              <div className="flex justify-center gap-4">
+                {Array.isArray(results.jury_comments) &&
+                  results.jury_comments.map((jury, i) => (
+                    <div
+                      key={i}
+                      className={cn(
+                        "w-14 h-14 rounded-full flex items-center justify-center text-2xl",
+                        jury.vote === "yes"
+                          ? "bg-green-500/20 border-2 border-green-500"
+                          : "bg-red-500/20 border-2 border-red-500",
+                      )}
+                    >
+                      {jury.vote === "yes" ? "👍" : "👎"}
                     </div>
-                    <p className="text-gray-300 text-sm italic">
-                      &ldquo;{jury.comment}&rdquo;
-                    </p>
-                  </div>
-                ))}
+                  ))}
               </div>
+
+              <div>
+                <h3 className="text-lg font-semibold text-center mb-3">
+                  Le jury a dit :
+                </h3>
+                <div className="space-y-3 md:grid md:grid-cols-3 md:gap-6 md:space-y-0">
+                  {Array.isArray(results.jury_comments) &&
+                    results.jury_comments.map((jury, i) => (
+                      <div
+                        key={i}
+                        className="bg-card border border-border rounded-xl p-4 text-left"
+                      >
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="font-medium text-yellow-400">
+                            {jury.persona}
+                          </span>
+                          <span
+                            className={
+                              jury.vote === "yes"
+                                ? "text-green-400"
+                                : "text-red-400"
+                            }
+                          >
+                            ({jury.vote === "yes" ? "OUI" : "NON"})
+                          </span>
+                        </div>
+                        <p className="text-muted-foreground text-sm italic">
+                          &ldquo;{jury.comment}&rdquo;
+                        </p>
+                      </div>
+                    ))}
+                </div>
+              </div>
+
+              <Link
+                href={`/results/${sessionId}`}
+                className="block text-center text-sm text-primary hover:text-primary/80 underline"
+              >
+                Voir les résultats détaillés →
+              </Link>
+
+              <button
+                onClick={handleReset}
+                className="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-bold py-4 px-8 rounded-full text-lg shadow-lg transform transition hover:scale-105 active:scale-95"
+              >
+                Recommencer
+              </button>
             </div>
-
-            <StudioMode sessionId={sessionId} context="results" />
-
-            <button
-              onClick={handleReset}
-              className="w-full lg:max-w-sm lg:mx-auto bg-primary hover:bg-primary/90 text-primary-foreground font-bold py-4 px-8 rounded-full text-lg shadow-lg transform transition hover:scale-105 active:scale-95"
-            >
-              Recommencer
-            </button>
-          </div>
-        )}
-      </main>
-
-      {/* Footer */}
-      <footer className="p-4 text-center text-gray-500 text-sm">
-        Powered by AI et{" "}
-        <a
-          href="https://pierrelegrand.fr"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-purple-400 hover:text-purple-300 underline"
-        >
-          pierrelegrand.fr
-        </a>
-      </footer>
-    </div>
+          )}
+        </main>
+      </div>
+    </>
   );
 }

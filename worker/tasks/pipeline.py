@@ -626,14 +626,11 @@ def prepare_reference(
                 local_ref_path = ref_temp / "reference.wav"
                 _download_youtube_audio(youtube_url, local_ref_path)
                 local_ref = str(local_ref_path)
-                # Upload reference.wav to storage so analyze_performance can fall back to it
-                if youtube_id:
-                    storage.upload_from_file(
-                        local_ref_path,
-                        f"cache/{youtube_id}/reference.wav",
-                        content_type="audio/wav",
-                    )
-                    logger.info("Uploaded reference.wav to storage: cache/%s/reference.wav", youtube_id)
+                # reference.wav is NOT uploaded to storage: full uncompressed WAV can be
+                # 50-150 MB and triggers 413 on the storage server. This is safe because:
+                # - This task populates Demucs cache (vocals.wav/instrumentals.wav) below
+                # - analyze_performance always runs AFTER this task (Celery solo pool)
+                # - analyze_performance checks Demucs cache first and never needs reference.wav
             else:
                 local_ref = _resolve_audio(
                     reference_audio_path,

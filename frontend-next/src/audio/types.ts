@@ -76,3 +76,11 @@ export interface AudioPlayerOptions {
 
 /** Studio mode context - where the studio is being used */
 export type StudioContext = 'analyzing' | 'results' | 'practice'
+
+/** Transport controls exposed by StudioMode to external consumers (e.g. AppBottomBar) */
+export interface StudioTransportControls {
+  play: () => Promise<void>
+  pause: () => void
+  stop: () => void
+  seek: (time: number) => void
+}

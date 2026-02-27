@@ -9,13 +9,17 @@ import { TransportBar } from './TransportBar'
 import { useAudioLoading, useAudioStore } from '@/stores/audioStore'
 import { Loader2, Music2, AlertCircle, RefreshCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import type { StudioContext } from '../types'
+import type { StudioContext, StudioTransportControls } from '../types'
 
 interface StudioModeProps {
   sessionId: string
   context?: StudioContext
   onReady?: () => void
   onError?: (error: Error) => void
+  /** Called when tracks are loaded and transport controls are ready */
+  onTransportReady?: (controls: StudioTransportControls) => void
+  /** Whether to show the inline TransportBar (default: false — moved to AppBottomBar) */
+  showTransport?: boolean
   className?: string
 }
 
@@ -36,6 +40,8 @@ export function StudioMode({
   context = 'results',
   onReady,
   onError,
+  onTransportReady,
+  showTransport = false,
   className,
 }: StudioModeProps) {
   const [error, setError] = React.useState<string | null>(null)
@@ -107,6 +113,14 @@ export function StudioMode({
       }
     }
   }, [])
+
+  // Notify parent when transport controls are ready
+  useEffect(() => {
+    if (isReady && onTransportReady) {
+      onTransportReady({ play, pause, stop, seek })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isReady])
 
   const handleRetry = useCallback(() => {
     setError(null)
@@ -261,13 +275,13 @@ export function StudioMode({
         </div>
       </div>
 
-      {/* Desktop: side-by-side layout; Mobile: stacked */}
-      <div className="lg:flex lg:gap-6 lg:items-start space-y-4 lg:space-y-0">
-        <TransportBar onPlay={play} onPause={pause} onStop={stop} onSeek={seek} className="lg:w-64 lg:shrink-0" />
-        <div className="lg:flex-1">
-          <TrackMixer showDownload={context === 'results'} />
-        </div>
-      </div>
+      {/* Transport bar (only when showTransport=true, e.g. results page) */}
+      {showTransport && (
+        <TransportBar onPlay={play} onPause={pause} onStop={stop} onSeek={seek} />
+      )}
+
+      {/* Mixer */}
+      <TrackMixer showDownload={context === 'results'} />
     </div>
   )
 }
