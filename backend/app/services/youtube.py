@@ -23,13 +23,17 @@ class YouTubeService:
         self.temp_dir.mkdir(parents=True, exist_ok=True)
 
     def _get_ydl_opts(self, output_path: str) -> dict[str, Any]:
-        """Get yt-dlp options for audio extraction."""
+        """Get yt-dlp options for audio extraction.
+
+        FLAC: lossless compression, ~15-20 MB vs ~50 MB WAV.
+        torchaudio/soundfile read FLAC natively — no quality loss for Demucs.
+        """
         return {
             'format': 'bestaudio/best',
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'wav',
-                'preferredquality': '192',
+                'preferredcodec': 'flac',
+                # preferredquality has no effect for lossless FLAC
             }],
             'outtmpl': output_path,
             'quiet': True,
@@ -112,7 +116,7 @@ class YouTubeService:
         Download audio from YouTube URL, upload to remote storage, return storage URL.
 
         Downloads to /tmp/kiaraoke/{session_id}/ first (GPU-accessible temp),
-        uploads to kiaraoke/{session_id}/{filename}.wav, then deletes the temp file.
+        uploads to kiaraoke/{session_id}/{filename}.flac, then deletes the temp file.
 
         Args:
             url: YouTube URL
@@ -138,20 +142,22 @@ class YouTubeService:
         await asyncio.to_thread(_download)
 
         # Find the downloaded file (yt-dlp adds extension after conversion)
-        wav_path = session_dir / f"{filename}.wav"
-        if not wav_path.exists():
-            for ext in ['.wav', '.webm', '.m4a', '.mp3']:
+        # Check FLAC first (preferred format), then fallback to others
+        audio_path = session_dir / f"{filename}.flac"
+        if not audio_path.exists():
+            for ext in ['.flac', '.wav', '.webm', '.m4a', '.mp3']:
                 candidate = session_dir / f"{filename}{ext}"
                 if candidate.exists():
-                    wav_path = candidate
+                    audio_path = candidate
                     break
             else:
                 raise FileNotFoundError(f"Downloaded file not found in {session_dir}")
 
         # Upload to remote storage
-        relative_path = f"{session_id}/{wav_path.name}"
-        print(f"[YouTube] Uploading {wav_path.name} → storage:{relative_path}")
-        storage_url = await storage.upload_file(wav_path, relative_path, "audio/wav")
+        content_type = "audio/flac" if audio_path.suffix == ".flac" else "audio/wav"
+        relative_path = f"{session_id}/{audio_path.name}"
+        print(f"[YouTube] Uploading {audio_path.name} → storage:{relative_path}")
+        storage_url = await storage.upload_file(audio_path, relative_path, content_type)
 
         # Cleanup temp directory
         shutil.rmtree(session_dir, ignore_errors=True)

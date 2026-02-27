@@ -96,14 +96,17 @@ def _download_youtube_audio(youtube_url: str, dest: Path) -> Path:
     Optimization A: download YouTube audio directly in the worker.
 
     Eliminates the backend→storage→worker double transit (~-15s on first run).
-    Uses the same yt-dlp options as backend/app/services/youtube.py.
+
+    Format: FLAC (lossless, ~15-20 MB vs ~50 MB WAV).
+    FLAC is ~50% lighter than uncompressed WAV while being fully lossless.
+    torchaudio/soundfile read FLAC natively — no quality loss for Demucs.
 
     Args:
         youtube_url: YouTube video URL
-        dest: Target .wav file path
+        dest: Target .flac file path
 
     Returns:
-        dest (the downloaded .wav file)
+        dest (the downloaded .flac file)
     """
     import yt_dlp
 
@@ -114,15 +117,15 @@ def _download_youtube_audio(youtube_url: str, dest: Path) -> Path:
         "format": "bestaudio/best",
         "postprocessors": [{
             "key": "FFmpegExtractAudio",
-            "preferredcodec": "wav",
-            "preferredquality": "192",
+            "preferredcodec": "flac",
+            # preferredquality has no effect for lossless FLAC
         }],
         "outtmpl": output_stem,
         "quiet": True,
         "no_warnings": True,
         "extract_flat": False,
     }
-    logger.info("Worker: downloading YouTube audio %s → %s", youtube_url, dest)
+    logger.info("Worker: downloading YouTube audio (FLAC) %s → %s", youtube_url, dest)
     with yt_dlp.YoutubeDL(opts) as ydl:
         ydl.download([youtube_url])
     if not dest.exists():
@@ -623,14 +626,14 @@ def prepare_reference(
             )
             if youtube_url:
                 # Optimization A: direct download from YouTube (skip backend→storage→worker transit)
-                local_ref_path = ref_temp / "reference.wav"
+                # FLAC: lossless, ~15-20 MB vs ~50 MB WAV — torchaudio reads it natively for Demucs
+                local_ref_path = ref_temp / "reference.flac"
                 _download_youtube_audio(youtube_url, local_ref_path)
                 local_ref = str(local_ref_path)
-                # reference.wav is NOT uploaded to storage: full uncompressed WAV can be
-                # 50-150 MB and triggers 413 on the storage server. This is safe because:
+                # reference.flac is NOT uploaded to storage (not needed for normal flow):
                 # - This task populates Demucs cache (vocals.wav/instrumentals.wav) below
                 # - analyze_performance always runs AFTER this task (Celery solo pool)
-                # - analyze_performance checks Demucs cache first and never needs reference.wav
+                # - analyze_performance checks Demucs cache first and never needs reference file
             else:
                 local_ref = _resolve_audio(
                     reference_audio_path,
