@@ -32,7 +32,7 @@ class LyricsOffset(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint('spotify_track_id', 'youtube_video_id', name='uq_track_video'),
+        UniqueConstraint('spotify_track_id', 'youtube_video_id', name='uq_lyrics_offset_track_video'),
         Index('idx_lyrics_offsets_lookup', 'spotify_track_id', 'youtube_video_id'),
     )
 

@@ -6,10 +6,12 @@
  * - SSR calls: use NEXT_PUBLIC_API_URL directly
  */
 
+const DIRECT_API_URL = process.env.NEXT_PUBLIC_API_URL || "https://api.kiaraoke.fr";
+
 const API_URL =
   typeof window !== "undefined"
-    ? "" // Browser: Next.js rewrites handle /api/* → api.kiaraoke.fr
-    : (process.env.NEXT_PUBLIC_API_URL || "https://api.kiaraoke.fr");
+    ? "" // Browser: prefer rewrite first; fallback to direct host on empty proxy response
+    : DIRECT_API_URL;
 
 export interface Track {
   id: string;
@@ -216,12 +218,15 @@ class ApiClient {
     endpoint: string,
     options?: RequestInit,
   ): Promise<T> {
-    const response = await fetch(`${this.baseUrl}${endpoint}`, {
-      headers: {
-        "Content-Type": "application/json",
-      },
-      ...options,
-    });
+    const doFetch = (url: string) =>
+      fetch(url, {
+        headers: {
+          "Content-Type": "application/json",
+        },
+        ...options,
+      });
+
+    let response = await doFetch(`${this.baseUrl}${endpoint}`);
 
     if (!response.ok) {
       const error = await response
@@ -230,7 +235,25 @@ class ApiClient {
       throw new Error(error.detail || `HTTP ${response.status}`);
     }
 
-    const text = await response.text();
+    let text = await response.text();
+
+    // Some hosts/proxies occasionally return 200 with empty body on rewritten /api/*
+    // requests. Retry once against direct API host to avoid breaking session start.
+    if (
+      typeof window !== "undefined" &&
+      this.baseUrl === "" &&
+      (!text || !text.trim())
+    ) {
+      response = await doFetch(`${DIRECT_API_URL}${endpoint}`);
+      if (!response.ok) {
+        const error = await response
+          .json()
+          .catch(() => ({ detail: "Unknown error" }));
+        throw new Error(error.detail || `HTTP ${response.status}`);
+      }
+      text = await response.text();
+    }
+
     if (!text || !text.trim()) {
       throw new Error(`Empty response from ${endpoint}`);
     }

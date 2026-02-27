@@ -76,6 +76,7 @@ export function useYouTubePlayer({
   const containerRef = useRef<HTMLDivElement>(null)
   const playerRef = useRef<YT.Player | null>(null)
   const intervalRef = useRef<number | null>(null)
+  const isPlayingRef = useRef(false)
 
   const [isReady, setIsReady] = useState(false)
   const [isPlaying, setIsPlaying] = useState(false)
@@ -154,11 +155,13 @@ export function useYouTubePlayer({
           onStateChange: (event) => {
             if (!mounted) return
 
-            const playing = event.data === window.YT.PlayerState.PLAYING
-            setIsPlaying(playing)
-            onStateChangeRef.current?.(playing)
-
-            if (playing) {
+            // Do not collapse all YouTube states into a boolean.
+            // During seek, YouTube often emits BUFFERING temporarily; treating it as "pause"
+            // causes transport glitches and can desync mirrored players.
+            if (event.data === window.YT.PlayerState.PLAYING) {
+              isPlayingRef.current = true
+              setIsPlaying(true)
+              onStateChangeRef.current?.(true)
               startTimePolling()
               // Update duration in case it wasn't available initially
               if (playerRef.current) {
@@ -166,7 +169,13 @@ export function useYouTubePlayer({
                 setDuration(d)
                 onDurationChangeRef.current?.(d)
               }
-            } else {
+            } else if (
+              event.data === window.YT.PlayerState.PAUSED ||
+              event.data === window.YT.PlayerState.ENDED
+            ) {
+              isPlayingRef.current = false
+              setIsPlaying(false)
+              onStateChangeRef.current?.(false)
               stopTimePolling()
               // Get final time when paused
               if (playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
@@ -174,6 +183,18 @@ export function useYouTubePlayer({
                 setCurrentTime(time)
                 onTimeUpdateRef.current?.(time)
               }
+            } else if (event.data === window.YT.PlayerState.BUFFERING) {
+              // Keep previous playing state during buffering.
+              // Avoid forwarding transient pause/play bursts to external transport.
+              if (isPlayingRef.current) {
+                startTimePolling()
+              }
+            } else {
+              // UNSTARTED / CUED: not playing.
+              isPlayingRef.current = false
+              setIsPlaying(false)
+              onStateChangeRef.current?.(false)
+              stopTimePolling()
             }
           },
         },

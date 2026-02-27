@@ -25,6 +25,7 @@ _EXISTS_TIMEOUT = 5.0
 _DOWNLOAD_TIMEOUT = 180.0  # reference.wav can be large
 _UPLOAD_ATTEMPTS = 3
 _UPLOAD_RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+_UPLOAD_FOLLOW_REDIRECTS = os.getenv("STORAGE_UPLOAD_FOLLOW_REDIRECTS", "true").lower() in {"1", "true", "yes", "on"}
 
 
 def _is_storage_url(path_or_url: str) -> bool:
@@ -86,16 +87,26 @@ class StorageClient:
             "Content-Type": content_type,
             "X-File-Path": full_path,
         }
-        with httpx.Client(follow_redirects=True) as client:
+        with httpx.Client(follow_redirects=_UPLOAD_FOLLOW_REDIRECTS) as client:
             last_exc: Exception | None = None
             for attempt in range(1, _UPLOAD_ATTEMPTS + 1):
                 try:
+                    logger.info(
+                        "Storage upload attempt %d/%d: path=%s bytes=%d follow_redirects=%s endpoint=%s",
+                        attempt,
+                        _UPLOAD_ATTEMPTS,
+                        full_path,
+                        len(data),
+                        _UPLOAD_FOLLOW_REDIRECTS,
+                        f"{self.base_url}/api/upload.php",
+                    )
                     response = client.post(
                         f"{self.base_url}/api/upload.php",
                         content=data,
                         headers=headers,
                         timeout=_UPLOAD_TIMEOUT,
                     )
+                    self._log_upload_response(response, full_path, attempt)
                     if response.status_code in _UPLOAD_RETRYABLE_STATUS:
                         raise httpx.HTTPStatusError(
                             f"Retryable status {response.status_code}",
@@ -123,6 +134,28 @@ class StorageClient:
                     time.sleep(backoff)
             assert last_exc is not None
             raise last_exc
+
+    def _log_upload_response(self, response: httpx.Response, full_path: str, attempt: int) -> None:
+        """Emit concise diagnostics for redirects/upstream failures."""
+        history = response.history or []
+        if history:
+            chain = []
+            for hop in history:
+                location = hop.headers.get("location", "")
+                chain.append(f"{hop.status_code} {hop.url} -> {location}")
+            logger.info(
+                "Storage upload redirect chain (attempt %d, %s): %s",
+                attempt,
+                full_path,
+                " | ".join(chain),
+            )
+        logger.info(
+            "Storage upload response (attempt %d, %s): status=%d final_url=%s",
+            attempt,
+            full_path,
+            response.status_code,
+            response.url,
+        )
 
     def upload_from_file(self, local_path: Path, relative_path: str, content_type: str = "audio/wav") -> str:
         """Upload a local file to storage, returns public URL."""

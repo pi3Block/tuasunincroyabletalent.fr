@@ -2,7 +2,7 @@
  * Multi-track orchestrator hook.
  * Synchronizes playback across multiple tracks.
  */
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useCallback, useState } from 'react'
 import { useAudioStore } from '@/stores/audioStore'
 import { TrackProcessor } from '../core/TrackProcessor'
 import {
@@ -37,6 +37,7 @@ export function useMultiTrack({
   const trackInstancesRef = useRef<Map<string, TrackInstance>>(new Map())
   const animationFrameRef = useRef<number | null>(null)
   const isInitializedRef = useRef(false)
+  const [isReady, setIsReady] = useState(false)
 
   const {
     tracks,
@@ -134,12 +135,14 @@ export function useMultiTrack({
   // Reset initialization state so loadTracks can be called again (e.g. retries)
   const resetInit = useCallback(() => {
     isInitializedRef.current = false
+    setIsReady(false)
   }, [])
 
   // Load all available tracks
   const loadTracks = useCallback(async () => {
     if (isInitializedRef.current) return
     isInitializedRef.current = true
+    setIsReady(false)
 
     setLoading(true, 'Chargement des pistes audio...')
 
@@ -179,9 +182,11 @@ export function useMultiTrack({
       setDuration(maxDuration)
 
       setLoading(false)
+      setIsReady(true)
       onReady?.()
     } catch (err) {
       setLoading(false)
+      setIsReady(false)
       const error = err instanceof Error ? err : new Error('Unknown error')
       onError?.(error)
     }
@@ -273,6 +278,7 @@ export function useMultiTrack({
 
       // Reset store
       reset()
+      setIsReady(false)
       isInitializedRef.current = false
     }
   }, [reset])
@@ -299,7 +305,10 @@ export function useMultiTrack({
   // Seek all tracks
   const seek = useCallback(
     (time: number) => {
-      const clampedTime = Math.max(0, Math.min(time, transport.duration))
+      // transport.duration can be 0 while metadata is still settling.
+      // Avoid clamping every incoming seek to 0 in that transient window.
+      const maxDuration = transport.duration > 0 ? transport.duration : Number.POSITIVE_INFINITY
+      const clampedTime = Math.max(0, Math.min(time, maxDuration))
       trackInstancesRef.current.forEach((instance) => {
         instance.audio.currentTime = clampedTime
       })
@@ -322,6 +331,6 @@ export function useMultiTrack({
     stop,
     seek,
     getProcessor,
-    isReady: Object.values(tracks).some((t) => t.loaded),
+    isReady,
   }
 }

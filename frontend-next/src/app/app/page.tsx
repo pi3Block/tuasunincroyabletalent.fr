@@ -191,7 +191,8 @@ export default function AppPage() {
   const [usePollingFallback, setUsePollingFallback] = useState(false);
   const [mixerOpen, setMixerOpen] = useState(false);
 
-  const { useLandscapeMobileLayout } = useOrientation();
+  const { useLandscapeMobileLayout, width } = useOrientation();
+  const isDesktopViewport = width >= 1024;
 
   // Derived studio context for mixer
   const studioContext: StudioContext =
@@ -362,6 +363,15 @@ export default function AppPage() {
     [],
   );
 
+  // If the active YouTube player instance changes (song/layout switch),
+  // drop stale imperative controls until the new player reports ready.
+  useEffect(() => {
+    setYoutubeControls(null);
+    setIsVideoPlaying(false);
+    setYoutubeDuration(0);
+    lastYtTimeRef.current = 0;
+  }, [youtubeMatch?.id, isDesktopViewport, setIsVideoPlaying]);
+
   // ── 6c. Crossfade YouTube → Multi-Track when ref stems load ──
   // Once multi-track has loaded, YouTube stays permanently muted (no unmute on status change).
   // Only unmute if multi-track was never loaded (initial YouTube-only phase or after full reset).
@@ -471,6 +481,19 @@ export default function AppPage() {
       }
     }, 5000);
     return () => clearInterval(id);
+  }, [useMultiTrackAudio, youtubeControls]);
+
+  // If user started multi-track before YouTube controls were ready,
+  // force a one-shot catch-up when controls finally become available.
+  useEffect(() => {
+    if (!useMultiTrackAudio || !youtubeControls) return;
+    const { currentTime, playing } = useAudioStore.getState().transport;
+    youtubeControls.seekTo(currentTime);
+    if (playing) {
+      youtubeControls.play();
+    } else {
+      youtubeControls.pause();
+    }
   }, [useMultiTrackAudio, youtubeControls]);
 
   const [analysisTaskId, setAnalysisTaskId] = useState<string | null>(null);
@@ -1060,8 +1083,9 @@ export default function AppPage() {
           />
         )}
 
-      {/* ── Desktop unified layout (lg+) ── */}
-      <div className="hidden lg:flex flex-col h-[calc(100dvh-3.5rem)] overflow-hidden">
+      {/* ── Desktop unified layout (>= lg) ── */}
+      {isDesktopViewport && (
+      <div className="flex flex-col h-[calc(100dvh-3.5rem)] overflow-hidden">
         <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
           {/* Slim track banner */}
           <TrackBannerSlim track={selectedTrack} onReset={handleReset} />
@@ -1343,11 +1367,13 @@ export default function AppPage() {
           />
         </div>
       </div>
+      )}
 
       {/* ── Mobile portrait layout (< lg) ── */}
+      {!isDesktopViewport && (
       <div
         className={cn(
-          "lg:hidden min-h-[calc(100dvh-3.5rem)] flex flex-col",
+          "min-h-[calc(100dvh-3.5rem)] flex flex-col",
           // Hide behind landscape overlay on mobile landscape
           useLandscapeMobileLayout &&
             (status === "ready" || status === "recording")
@@ -1651,6 +1677,7 @@ export default function AppPage() {
           )}
         </main>
       </div>
+      )}
     </>
   );
 }

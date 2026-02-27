@@ -63,7 +63,8 @@ class LyricsOffsetService:
                 youtube_video_id=youtube_video_id,
                 offset_seconds=Decimal(str(round(offset_seconds, 2))),
             ).on_conflict_do_update(
-                constraint='uq_track_video',
+                # Keep in sync with Alembic migration constraint name.
+                constraint='uq_lyrics_offset_track_video',
                 set_={
                     'offset_seconds': Decimal(str(round(offset_seconds, 2))),
                     'updated_at': func.now(),
