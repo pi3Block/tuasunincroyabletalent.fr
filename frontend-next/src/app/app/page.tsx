@@ -357,9 +357,14 @@ export default function AppPage() {
     return () => clearInterval(interval);
   }, [usePollingFallback, sessionId, status, setReferenceStatus, setStatus, setError]);
 
-  // Fetch lyrics when session is ready
+  // Fetch lyrics as soon as session exists (preparing/downloading/ready/...)
+  // Don't wait for reference to be ready — lyrics are independent of audio processing
   useEffect(() => {
-    if (!sessionId || status !== "ready" || lyricsStatus !== "idle") {
+    if (
+      !sessionId ||
+      ["idle", "selecting", "needs_fallback"].includes(status) ||
+      lyricsStatus !== "idle"
+    ) {
       return;
     }
 
@@ -403,11 +408,11 @@ export default function AppPage() {
     setLyricsStatus,
   ]);
 
-  // Fetch lyrics offset
+  // Fetch lyrics offset (same timing as lyrics — fire early)
   useEffect(() => {
     if (
       !sessionId ||
-      status !== "ready" ||
+      ["idle", "selecting", "needs_fallback"].includes(status) ||
       lyricsOffsetStatus !== "idle"
     ) {
       return;
@@ -524,8 +529,25 @@ export default function AppPage() {
 
         if (response.reference_status === "needs_fallback") {
           setStatus("needs_fallback");
-        } else {
-          setStatus("preparing");
+          return;
+        }
+
+        setStatus("preparing");
+
+        // Immediately check if reference is already ready.
+        // startSession always returns reference_status="pending" (background task runs after response),
+        // but with Optimization A + cache HIT, the backend sets "ready" in Redis within ~100ms.
+        // This avoids showing "Préparation..." when the reference was already cached.
+        try {
+          const current = await api.getSessionStatus(response.session_id);
+          if (current.reference_status === "ready") {
+            setStatus("ready");
+          } else if (current.reference_status === "needs_fallback") {
+            setStatus("needs_fallback");
+          }
+          // Otherwise stay in "preparing" — SSE/polling will handle the transition
+        } catch {
+          // SSE/polling will handle the transition
         }
       } catch (err) {
         setError(
@@ -649,8 +671,12 @@ export default function AppPage() {
     showOffsetControls: true,
   };
 
-  // ─── NON-UNIFIED STATES (selecting / preparing / downloading / needs_fallback) ───
+  // ─── NON-UNIFIED STATES (selecting / needs_fallback) ────────────────────────
+  // "preparing" and "downloading" are now unified: show full UI immediately with
+  // record button disabled, so the YouTube player and lyrics load right away.
   const isUnifiedState = [
+    "preparing",
+    "downloading",
     "ready",
     "recording",
     "uploading",
@@ -683,49 +709,7 @@ export default function AppPage() {
           </div>
         )}
 
-        {/* PREPARING */}
-        {status === "preparing" && selectedTrack && (
-          <div className="text-center space-y-6 w-full max-w-md md:max-w-2xl">
-            <TrackCard track={selectedTrack} />
-            <div className="space-y-2">
-              <div className="w-12 h-12 mx-auto border-4 border-primary/50 border-t-transparent rounded-full animate-spin" />
-              <p className="text-muted-foreground">
-                Recherche de la référence audio...
-              </p>
-              {youtubeMatch && (
-                <p className="text-xs text-muted-foreground/70">
-                  Trouvé : {youtubeMatch.title}
-                </p>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* DOWNLOADING */}
-        {status === "downloading" && selectedTrack && (
-          <div className="text-center space-y-6 w-full max-w-md md:max-w-2xl">
-            <TrackCard track={selectedTrack} />
-            <div className="space-y-2">
-              <div className="w-12 h-12 mx-auto border-4 border-primary/50 border-t-transparent rounded-full animate-spin" />
-              <p className="text-muted-foreground">Téléchargement en cours...</p>
-              {youtubeMatch && (
-                <div className="bg-card border border-border rounded-lg p-3 text-sm">
-                  <p className="text-foreground truncate">{youtubeMatch.title}</p>
-                  <p className="text-muted-foreground">
-                    {youtubeMatch.channel} •{" "}
-                    {formatSeconds(youtubeMatch.duration)}
-                  </p>
-                </div>
-              )}
-            </div>
-            <button
-              onClick={() => handleReset()}
-              className="text-muted-foreground hover:text-foreground text-sm"
-            >
-              Annuler
-            </button>
-          </div>
-        )}
+        {/* PREPARING / DOWNLOADING — now handled by unified state below */}
 
         {/* NEEDS_FALLBACK */}
         {status === "needs_fallback" && selectedTrack && (
@@ -833,9 +817,10 @@ export default function AppPage() {
           <div className="flex flex-1 min-h-0 overflow-hidden">
             {/* LEFT — main content zone */}
             <div className="flex-1 min-w-0 overflow-y-auto p-4 flex flex-col gap-3">
-              {/* Video (ready + recording) */}
-              {(status === "ready" || status === "recording") &&
-                youtubeMatch && (
+              {/* Video (preparing / downloading / ready / recording) */}
+              {["preparing", "downloading", "ready", "recording"].includes(
+                status,
+              ) && youtubeMatch && (
                   <>
                     <YouTubePlayer
                       video={youtubeMatch}
@@ -1002,7 +987,7 @@ export default function AppPage() {
             </div>
 
             {/* RIGHT — Lyrics column */}
-            <div className="w-[42%] min-w-[280px] max-w-[480px] border-l border-border/30 overflow-hidden flex flex-col">
+            <div className="w-[55%] min-w-[320px] border-l border-border/30 overflow-hidden flex flex-col">
               {lyricsStatus === "loading" && (
                 <div className="flex-1 flex items-center justify-center gap-2 text-muted-foreground text-sm">
                   <div className="w-4 h-4 border-2 border-muted-foreground border-t-transparent rounded-full animate-spin" />
@@ -1092,6 +1077,43 @@ export default function AppPage() {
 
         <main className="flex flex-col items-center justify-center p-4 gap-4 flex-1">
           {selectedTrack && <TrackCard track={selectedTrack} />}
+
+          {/* PREPARING / DOWNLOADING — mobile: show player immediately, record button loading */}
+          {(status === "preparing" || status === "downloading") && (
+            <div className="w-full max-w-md space-y-4">
+              {youtubeMatch && (
+                <YouTubePlayer
+                  video={youtubeMatch}
+                  onTimeUpdate={setPlaybackTime}
+                  onStateChange={setIsVideoPlaying}
+                />
+              )}
+
+              <div className="bg-muted/30 border border-border/50 rounded-lg p-3 flex items-center justify-center gap-2 text-muted-foreground text-sm">
+                <div className="w-4 h-4 border-2 border-muted-foreground/40 border-t-muted-foreground rounded-full animate-spin shrink-0" />
+                <span>Préparation de la référence audio...</span>
+              </div>
+
+              <button
+                disabled
+                className="w-full bg-muted text-muted-foreground font-bold py-5 px-10 rounded-full text-xl opacity-50 cursor-not-allowed flex items-center justify-center gap-3"
+              >
+                <div className="w-6 h-6 border-2 border-muted-foreground/40 border-t-muted-foreground rounded-full animate-spin" />
+                Préparation...
+              </button>
+
+              {lyrics && lyricsStatus === "found" && (
+                <LyricsDisplayPro {...lyricsDisplayProps} />
+              )}
+
+              <button
+                onClick={handleReset}
+                className="w-full text-muted-foreground hover:text-foreground text-sm"
+              >
+                Changer de chanson
+              </button>
+            </div>
+          )}
 
           {/* READY — mobile */}
           {status === "ready" && (

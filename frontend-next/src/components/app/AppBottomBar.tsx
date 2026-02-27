@@ -107,6 +107,13 @@ export const AppBottomBar = memo(function AppBottomBar({
 
       {/* Zone CENTRE — Statut contextuel */}
       <div className="shrink-0 flex items-center justify-center">
+        {(status === "preparing" || status === "downloading") && (
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <span className="hidden sm:inline">Préparation...</span>
+          </div>
+        )}
+
         {status === "ready" && (
           <div className="flex items-center gap-1.5 text-xs text-emerald-400">
             <CheckCircle2 className="h-3.5 w-3.5" />
@@ -158,6 +165,22 @@ export const AppBottomBar = memo(function AppBottomBar({
 
       {/* Zone DROITE — Bouton CTA */}
       <div className="flex-1 flex items-center justify-end gap-2">
+        {(status === "preparing" || status === "downloading") && (
+          <button
+            type="button"
+            disabled
+            className={cn(
+              "flex items-center gap-2 px-4 h-9 rounded-full",
+              "bg-muted/50 text-muted-foreground",
+              "font-semibold text-sm",
+              "cursor-not-allowed opacity-60"
+            )}
+          >
+            <Loader2 className="h-4 w-4 animate-spin" />
+            <span>Préparation...</span>
+          </button>
+        )}
+
         {status === "ready" && (
           <button
             type="button"
