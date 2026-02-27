@@ -117,7 +117,7 @@ export function TrackMixer({
           <h3 className="text-sm font-semibold text-foreground">Mixer</h3>
           <div className="flex items-center gap-2">
             <span className="text-xs text-muted-foreground">Master</span>
-            <div className="w-24">
+            <div className="w-24 lg:w-48 xl:w-64">
               <VolumeSlider
                 value={masterVolume}
                 onChange={setMasterVolume}
@@ -130,51 +130,53 @@ export function TrackMixer({
       )}
 
       <div className={cn('p-3 space-y-4', compact && 'p-2 space-y-3')}>
-        {/* Reference tracks */}
-        {refTracks.length > 0 && (
-          <div className="space-y-2">
-            <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider px-1">
-              Référence
-            </h4>
+        <div className="lg:grid lg:grid-cols-2 lg:gap-4 space-y-4 lg:space-y-0">
+          {/* Reference tracks */}
+          {refTracks.length > 0 && (
             <div className="space-y-2">
-              {refTracks.map(([key, state]) => (
-                <AudioTrack
-                  key={key}
-                  id={state.id}
-                  state={state}
-                  onVolumeChange={handleVolumeChange(state.id)}
-                  onMuteToggle={handleMuteToggle(state.id)}
-                  onSoloToggle={handleSoloToggle(state.id)}
-                  onDownload={showDownload ? handleDownload(state.id, state.url) : undefined}
-                  compact={compact}
-                />
-              ))}
+              <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider px-1">
+                Référence
+              </h4>
+              <div className="space-y-2">
+                {refTracks.map(([key, state]) => (
+                  <AudioTrack
+                    key={key}
+                    id={state.id}
+                    state={state}
+                    onVolumeChange={handleVolumeChange(state.id)}
+                    onMuteToggle={handleMuteToggle(state.id)}
+                    onSoloToggle={handleSoloToggle(state.id)}
+                    onDownload={showDownload ? handleDownload(state.id, state.url) : undefined}
+                    compact={compact}
+                  />
+                ))}
+              </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {/* User tracks */}
-        {userTracks.length > 0 && (
-          <div className="space-y-2">
-            <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider px-1">
-              Votre enregistrement
-            </h4>
+          {/* User tracks */}
+          {userTracks.length > 0 && (
             <div className="space-y-2">
-              {userTracks.map(([key, state]) => (
-                <AudioTrack
-                  key={key}
-                  id={state.id}
-                  state={state}
-                  onVolumeChange={handleVolumeChange(state.id)}
-                  onMuteToggle={handleMuteToggle(state.id)}
-                  onSoloToggle={handleSoloToggle(state.id)}
-                  onDownload={showDownload ? handleDownload(state.id, state.url) : undefined}
-                  compact={compact}
-                />
-              ))}
+              <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider px-1">
+                Votre enregistrement
+              </h4>
+              <div className="space-y-2">
+                {userTracks.map(([key, state]) => (
+                  <AudioTrack
+                    key={key}
+                    id={state.id}
+                    state={state}
+                    onVolumeChange={handleVolumeChange(state.id)}
+                    onMuteToggle={handleMuteToggle(state.id)}
+                    onSoloToggle={handleSoloToggle(state.id)}
+                    onDownload={showDownload ? handleDownload(state.id, state.url) : undefined}
+                    compact={compact}
+                  />
+                ))}
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   )

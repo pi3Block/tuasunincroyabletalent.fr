@@ -1,11 +1,13 @@
 """
 YouTube service for searching and downloading audio using yt-dlp.
+After storage migration: download_audio() uploads to remote storage and returns URL.
 """
 import asyncio
-import os
 import re
+import shutil
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import yt_dlp
 
@@ -16,8 +18,9 @@ class YouTubeService:
     """Service for YouTube search and audio download."""
 
     def __init__(self):
-        self.output_dir = Path(settings.audio_upload_dir)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        # Temp dir for yt-dlp downloads before upload to storage
+        self.temp_dir = Path(settings.audio_temp_dir)
+        self.temp_dir.mkdir(parents=True, exist_ok=True)
 
     def _get_ydl_opts(self, output_path: str) -> dict[str, Any]:
         """Get yt-dlp options for audio extraction."""
@@ -103,15 +106,26 @@ class YouTubeService:
         self,
         url: str,
         session_id: str,
-        filename: str = "reference"
-    ) -> Path:
+        filename: str = "reference",
+    ) -> str:
         """
-        Download audio from YouTube URL.
+        Download audio from YouTube URL, upload to remote storage, return storage URL.
 
-        Returns path to downloaded WAV file.
+        Downloads to /tmp/kiaraoke/{session_id}/ first (GPU-accessible temp),
+        uploads to kiaraoke/{session_id}/{filename}.wav, then deletes the temp file.
+
+        Args:
+            url: YouTube URL
+            session_id: Used to build temp path and storage path (e.g. "cache/{youtube_id}")
+            filename: Base filename (without extension)
+
+        Returns:
+            Storage public URL (https://storages.augmenter.pro/files/kiaraoke/...)
         """
-        # Create session directory
-        session_dir = self.output_dir / session_id
+        from app.services.storage import storage
+
+        # Create temp session directory
+        session_dir = self.temp_dir / session_id
         session_dir.mkdir(parents=True, exist_ok=True)
 
         output_path = str(session_dir / filename)
@@ -123,17 +137,27 @@ class YouTubeService:
 
         await asyncio.to_thread(_download)
 
-        # yt-dlp adds .wav extension after conversion
+        # Find the downloaded file (yt-dlp adds extension after conversion)
         wav_path = session_dir / f"{filename}.wav"
         if not wav_path.exists():
-            # Try without extension (in case it wasn't converted)
             for ext in ['.wav', '.webm', '.m4a', '.mp3']:
                 candidate = session_dir / f"{filename}{ext}"
                 if candidate.exists():
-                    return candidate
-            raise FileNotFoundError(f"Downloaded file not found in {session_dir}")
+                    wav_path = candidate
+                    break
+            else:
+                raise FileNotFoundError(f"Downloaded file not found in {session_dir}")
 
-        return wav_path
+        # Upload to remote storage
+        relative_path = f"{session_id}/{wav_path.name}"
+        print(f"[YouTube] Uploading {wav_path.name} → storage:{relative_path}")
+        storage_url = await storage.upload_file(wav_path, relative_path, "audio/wav")
+
+        # Cleanup temp directory
+        shutil.rmtree(session_dir, ignore_errors=True)
+        print(f"[YouTube] Download+upload complete: {storage_url}")
+
+        return storage_url
 
     async def get_video_info(self, url: str) -> dict[str, Any] | None:
         """Get video metadata without downloading."""

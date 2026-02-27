@@ -46,9 +46,9 @@ export function useOrientation(): OrientationState {
     const width = window.innerWidth
     const height = window.innerHeight
     const isLandscape = width > height
-    // Consider mobile if the smaller dimension is less than 768px
+    // Consider mobile if the smaller dimension is less than 640px (Tailwind sm breakpoint)
     const smallerDimension = Math.min(width, height)
-    const isMobile = smallerDimension < 768
+    const isMobile = smallerDimension < 640
 
     return {
       isLandscape,
@@ -65,7 +65,7 @@ export function useOrientation(): OrientationState {
       const height = window.innerHeight
       const isLandscape = width > height
       const smallerDimension = Math.min(width, height)
-      const isMobile = smallerDimension < 768
+      const isMobile = smallerDimension < 640
 
       setState({
         isLandscape,

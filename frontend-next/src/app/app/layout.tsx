@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Navbar } from "@/components/layout/navbar";
 
 export const metadata: Metadata = {
   title: "Studio",
@@ -11,5 +12,10 @@ export default function AppLayout({
 }: {
   children: React.ReactNode;
 }) {
-  return children;
+  return (
+    <>
+      <Navbar />
+      {children}
+    </>
+  );
 }

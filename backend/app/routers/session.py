@@ -1,6 +1,7 @@
 """
 Session management routes.
 """
+import time
 import uuid
 import logging
 from pathlib import Path
@@ -217,12 +218,15 @@ async def start_session(request: StartSessionRequest, background_tasks: Backgrou
         "duration_ms": duration_ms,
     })
 
+    # Add creation timestamp for cleanup tracking
+    session_data["created_at"] = time.time()
+
     # If good match found, start downloading in background
     if youtube_match and confidence >= 0.5:
         session_data["reference_status"] = "pending"
         session_data["youtube_url"] = youtube_match["url"]
         session_data["youtube_id"] = youtube_match["id"]
-        await redis_client.set_session(session_id, session_data)
+        await redis_client.set_session(session_id, session_data, ttl=10800)  # 3h TTL for cleanup
 
         # Queue background download (with cache support)
         background_tasks.add_task(
@@ -234,7 +238,7 @@ async def start_session(request: StartSessionRequest, background_tasks: Backgrou
     else:
         # Low confidence - need user to provide URL
         session_data["reference_status"] = "needs_fallback"
-        await redis_client.set_session(session_id, session_data)
+        await redis_client.set_session(session_id, session_data, ttl=10800)  # 3h TTL for cleanup
 
     return StartSessionResponse(
         session_id=session_id,
@@ -323,7 +327,10 @@ async def upload_recording(session_id: str, audio: UploadFile = File(...)):
     Upload user's vocal recording for analysis.
 
     Accepts WAV or WebM audio file from browser MediaRecorder.
+    Uploads directly to remote storage (storages.augmenter.pro).
     """
+    from app.services.storage import storage
+
     session = await redis_client.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -334,20 +341,17 @@ async def upload_recording(session_id: str, audio: UploadFile = File(...)):
             detail="Reference audio not ready yet"
         )
 
-    # Create session directory
-    session_dir = Path(settings.audio_upload_dir) / session_id
-    session_dir.mkdir(parents=True, exist_ok=True)
-
-    # Save uploaded file
-    user_audio_path = session_dir / f"user_recording{Path(audio.filename or '.webm').suffix}"
-
     content = await audio.read()
-    with open(user_audio_path, "wb") as f:
-        f.write(content)
+    ext = Path(audio.filename or "user_recording.webm").suffix or ".webm"
 
-    # Update session
+    # Upload directly to remote storage
+    relative_path = f"sessions/{session_id}/user_recording{ext}"
+    content_type = "audio/webm" if ext == ".webm" else "audio/wav"
+    storage_url = await storage.upload(content, relative_path, content_type)
+
+    # Update session with storage URL
     await redis_client.update_session(session_id, {
-        "user_audio_path": str(user_audio_path),
+        "user_audio_path": storage_url,
         "status": "recording_uploaded",
     })
 

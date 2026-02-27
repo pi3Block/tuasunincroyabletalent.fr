@@ -128,7 +128,7 @@ export const LyricLine = memo(forwardRef<HTMLDivElement, LyricLineProps>(
     // Next line is larger and white to help singers read ahead
     const textClasses = useMemo(() => {
       if (isActive) {
-        return 'text-xl sm:text-2xl md:text-2xl lg:text-3xl font-bold text-white drop-shadow-[0_0_8px_rgba(255,255,255,0.4)]'
+        return 'text-xl sm:text-2xl md:text-2xl lg:text-3xl xl:text-4xl font-bold text-white drop-shadow-[0_0_8px_rgba(255,255,255,0.4)]'
       }
       // Next line: larger and WHITE for maximum readability
       if (isNext) {

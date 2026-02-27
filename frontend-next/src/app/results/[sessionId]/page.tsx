@@ -52,11 +52,11 @@ export default async function ResultsPage({ params }: Props) {
 
   if (!results) {
     return (
-      <main className="min-h-screen flex flex-col items-center justify-center p-8 bg-gray-900 text-white">
+      <main className="flex flex-col items-center justify-center p-8 min-h-[calc(100vh-56px)]">
         <div className="text-center space-y-4">
           <span className="text-6xl">🎤</span>
           <h1 className="text-2xl font-bold">Résultats non trouvés</h1>
-          <p className="text-gray-400">
+          <p className="text-muted-foreground">
             Cette performance n&apos;existe pas ou a expiré.
           </p>
           <Link
@@ -77,18 +77,12 @@ export default async function ResultsPage({ params }: Props) {
   };
 
   return (
-    <main className="min-h-screen bg-gray-900 text-white p-4 md:p-8">
-      <div className="max-w-2xl mx-auto space-y-6">
-        {/* Header */}
-        <div className="text-center">
-          <Link href="/" className="text-2xl font-bold text-gold-400">
-            Kiaraoke
-          </Link>
-        </div>
+    <main className="p-4 md:p-8">
+      <div className="max-w-2xl md:max-w-3xl lg:max-w-5xl xl:max-w-6xl mx-auto space-y-6">
 
         {/* Score */}
         <div className="text-center">
-          <div className="w-28 h-28 mx-auto rounded-full bg-gradient-to-br from-gold-400 to-gold-600 flex items-center justify-center shadow-lg">
+          <div className="w-28 h-28 mx-auto rounded-full bg-linear-to-br from-gold-400 to-gold-600 flex items-center justify-center shadow-lg">
             <span className="text-4xl font-bold text-gray-900">
               {results.score}
             </span>
@@ -97,30 +91,30 @@ export default async function ResultsPage({ params }: Props) {
             <p className="text-lg font-semibold mt-3">{results.track_name}</p>
           )}
           {results.artist_name && (
-            <p className="text-gray-400">{results.artist_name}</p>
+            <p className="text-muted-foreground">{results.artist_name}</p>
           )}
-          <p className="text-gray-500 mt-1">Score global</p>
+          <p className="text-muted-foreground mt-1">Score global</p>
         </div>
 
         {/* Breakdown */}
         <div className="grid grid-cols-3 gap-3">
-          <div className="bg-gray-800 rounded-lg p-3 text-center">
+          <div className="bg-card rounded-lg p-3 text-center border border-border">
             <p className={`text-2xl font-bold ${getColor(results.pitch_accuracy)}`}>
               {Math.round(results.pitch_accuracy)}%
             </p>
-            <p className="text-xs text-gray-500">Justesse</p>
+            <p className="text-xs text-muted-foreground">Justesse</p>
           </div>
-          <div className="bg-gray-800 rounded-lg p-3 text-center">
+          <div className="bg-card rounded-lg p-3 text-center border border-border">
             <p className={`text-2xl font-bold ${getColor(results.rhythm_accuracy)}`}>
               {Math.round(results.rhythm_accuracy)}%
             </p>
-            <p className="text-xs text-gray-500">Rythme</p>
+            <p className="text-xs text-muted-foreground">Rythme</p>
           </div>
-          <div className="bg-gray-800 rounded-lg p-3 text-center">
+          <div className="bg-card rounded-lg p-3 text-center border border-border">
             <p className={`text-2xl font-bold ${getColor(results.lyrics_accuracy)}`}>
               {Math.round(results.lyrics_accuracy)}%
             </p>
-            <p className="text-xs text-gray-500">Paroles</p>
+            <p className="text-xs text-muted-foreground">Paroles</p>
           </div>
         </div>
 
@@ -147,39 +141,41 @@ export default async function ResultsPage({ params }: Props) {
               )}
             </div>
 
-            <div className="space-y-3">
-              <h2 className="text-lg font-semibold text-center">
+            <div>
+              <h2 className="text-lg font-semibold text-center mb-3">
                 Le jury a dit:
               </h2>
-              {results.jury_comments.map(
-                (
-                  jury: { persona: string; comment: string; vote: string },
-                  i: number,
-                ) => (
-                  <div
-                    key={i}
-                    className="bg-gray-800 rounded-xl p-4 text-left"
-                  >
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="font-medium text-gold-400">
-                        {jury.persona}
-                      </span>
-                      <span
-                        className={
-                          jury.vote === "yes"
-                            ? "text-green-400"
-                            : "text-red-400"
-                        }
-                      >
-                        ({jury.vote === "yes" ? "OUI" : "NON"})
-                      </span>
+              <div className="space-y-3 lg:grid lg:grid-cols-3 lg:gap-6 lg:space-y-0">
+                {results.jury_comments.map(
+                  (
+                    jury: { persona: string; comment: string; vote: string },
+                    i: number,
+                  ) => (
+                    <div
+                      key={i}
+                      className="bg-card rounded-xl p-4 text-left border border-border"
+                    >
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="font-medium text-gold-400">
+                          {jury.persona}
+                        </span>
+                        <span
+                          className={
+                            jury.vote === "yes"
+                              ? "text-green-400"
+                              : "text-red-400"
+                          }
+                        >
+                          ({jury.vote === "yes" ? "OUI" : "NON"})
+                        </span>
+                      </div>
+                      <p className="text-muted-foreground text-sm italic">
+                        &ldquo;{jury.comment}&rdquo;
+                      </p>
                     </div>
-                    <p className="text-gray-300 text-sm italic">
-                      &ldquo;{jury.comment}&rdquo;
-                    </p>
-                  </div>
-                ),
-              )}
+                  ),
+                )}
+              </div>
             </div>
           </>
         )}
@@ -188,7 +184,7 @@ export default async function ResultsPage({ params }: Props) {
         <div className="text-center">
           <a
             href="/app"
-            className="inline-block px-8 py-4 bg-gradient-to-r from-gold-400 to-gold-600 text-gray-900 font-bold rounded-full text-lg shadow-lg hover:scale-105 transition-transform"
+            className="inline-block px-8 py-4 bg-linear-to-r from-gold-400 to-gold-600 text-gray-900 font-bold rounded-full text-lg shadow-lg hover:scale-105 transition-transform"
           >
             C&apos;est mon tour !
           </a>

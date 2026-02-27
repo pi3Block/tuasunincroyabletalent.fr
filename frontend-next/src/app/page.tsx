@@ -3,6 +3,7 @@ import { HowItWorksSection } from "@/components/sections/how-it-works";
 import { RecentPerformancesSection } from "@/components/sections/recent-performances";
 import { TechStackSection } from "@/components/sections/tech-stack";
 import { FooterSection } from "@/components/layout/footer";
+import { Navbar } from "@/components/layout/navbar";
 
 /**
  * Landing page — SSG (Server Component composing Client Components)
@@ -10,12 +11,15 @@ import { FooterSection } from "@/components/layout/footer";
  */
 export default function HomePage() {
   return (
-    <main className="min-h-screen bg-gray-900 text-white overflow-x-hidden">
-      <HeroSection />
+    <div className="min-h-screen bg-gray-900 text-white overflow-x-hidden">
+      <Navbar />
+      <main>
+        <HeroSection />
       <HowItWorksSection />
       <RecentPerformancesSection />
       <TechStackSection />
       <FooterSection />
-    </main>
+      </main>
+    </div>
   );
 }

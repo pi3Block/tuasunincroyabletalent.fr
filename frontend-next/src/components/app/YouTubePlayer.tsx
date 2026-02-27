@@ -37,7 +37,7 @@ export function YouTubePlayer({
           </div>
         )}
       </div>
-      <div className="bg-gray-800 p-3">
+      <div className="lg:hidden bg-gray-800 p-3">
         <p className="text-white font-medium truncate text-sm">{video.title}</p>
         <p className="text-gray-400 text-xs">{video.channel}</p>
       </div>

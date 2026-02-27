@@ -494,6 +494,7 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
             onOffsetChange={onOffsetChange}
             onManualSync={handleManualSync}
             hasSyncedTimestamps={hasSyncedTimestamps}
+            defaultExpanded={typeof window !== 'undefined' && window.innerWidth >= 1024}
           />
         )}
 
@@ -529,7 +530,7 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
 
       {/* Lyrics - Main content */}
       <ScrollArea
-        className={scrollAreaClassName || "h-[300px] md:h-[400px] lg:h-[450px]"}
+        className={scrollAreaClassName || "h-[300px] md:h-[400px] lg:h-[500px] xl:h-[600px] 2xl:h-[700px]"}
         ref={containerRef as React.RefObject<HTMLDivElement | null>}
       >
         <div

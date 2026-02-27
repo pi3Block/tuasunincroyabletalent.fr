@@ -1,0 +1,140 @@
+"""
+Storage client for storages.augmenter.pro.
+
+API compatible with the Augmenter project:
+  POST /api/upload.php  — upload raw binary (X-File-Path header, Bearer auth)
+  POST /api/delete.php  — delete by path (JSON body)
+  GET  /files/{path}    — public URL (HTTP Range supported → use for 302 redirects)
+"""
+import logging
+from pathlib import Path
+
+import httpx
+
+from app.config import settings
+
+logger = logging.getLogger(__name__)
+
+_UPLOAD_TIMEOUT = 60.0   # large audio files
+_DELETE_TIMEOUT = 10.0
+_EXISTS_TIMEOUT = 5.0
+_DOWNLOAD_TIMEOUT = 120.0
+
+
+def _is_storage_url(path_or_url: str) -> bool:
+    """Detect if a value is a remote storage URL vs a local path."""
+    return path_or_url.startswith("http://") or path_or_url.startswith("https://")
+
+
+class StorageClient:
+    """Async HTTP client for storages.augmenter.pro (bucket: kiaraoke)."""
+
+    def __init__(self):
+        self.base_url = settings.storage_url.rstrip("/")
+        self.api_key = settings.storage_api_key
+        self.bucket = settings.storage_bucket
+
+    def _auth_headers(self) -> dict:
+        return {"Authorization": f"Bearer {self.api_key}"}
+
+    def public_url(self, storage_path: str) -> str:
+        """Return public URL for a storage path (bucket already included if needed)."""
+        if _is_storage_url(storage_path):
+            return storage_path
+        # Ensure bucket prefix
+        if not storage_path.startswith(self.bucket + "/"):
+            storage_path = f"{self.bucket}/{storage_path}"
+        return f"{self.base_url}/files/{storage_path}"
+
+    def storage_path(self, relative: str) -> str:
+        """Return full bucket/relative path from a relative path."""
+        return f"{self.bucket}/{relative}"
+
+    async def upload(self, data: bytes, relative_path: str, content_type: str = "audio/wav") -> str:
+        """
+        Upload raw bytes to storage.
+
+        Args:
+            data: Raw file content
+            relative_path: Path inside bucket (e.g. "cache/dQw4.../vocals.wav")
+            content_type: MIME type
+
+        Returns:
+            Public URL of the uploaded file
+        """
+        full_path = self.storage_path(relative_path)
+        headers = {
+            **self._auth_headers(),
+            "Content-Type": content_type,
+            "X-File-Path": full_path,
+        }
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.post(
+                    f"{self.base_url}/api/upload.php",
+                    content=data,
+                    headers=headers,
+                    timeout=_UPLOAD_TIMEOUT,
+                )
+                response.raise_for_status()
+                result = response.json()
+                url = result.get("url") or self.public_url(full_path)
+                logger.info("Storage upload OK: %s (%d bytes)", full_path, len(data))
+                return url
+            except Exception as e:
+                logger.error("Storage upload failed for %s: %s", full_path, e)
+                raise
+
+    async def upload_file(self, local_path: Path, relative_path: str, content_type: str = "audio/wav") -> str:
+        """Upload a local file to storage, returns public URL."""
+        data = local_path.read_bytes()
+        return await self.upload(data, relative_path, content_type)
+
+    async def delete(self, relative_path: str) -> None:
+        """Delete a file from storage (non-fatal on error)."""
+        full_path = self.storage_path(relative_path)
+        headers = {**self._auth_headers(), "Content-Type": "application/json"}
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.post(
+                    f"{self.base_url}/api/delete.php",
+                    json={"path": full_path},
+                    headers=headers,
+                    timeout=_DELETE_TIMEOUT,
+                )
+                if response.status_code not in (200, 204, 404):
+                    logger.warning("Storage delete returned %d for %s", response.status_code, full_path)
+                else:
+                    logger.debug("Storage delete OK: %s", full_path)
+            except Exception as e:
+                logger.warning("Storage delete failed for %s (non-fatal): %s", full_path, e)
+
+    async def exists(self, relative_path: str) -> bool:
+        """Check if a file exists in storage via HEAD request."""
+        url = self.public_url(relative_path)
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.head(url, timeout=_EXISTS_TIMEOUT)
+                return response.status_code == 200
+            except Exception:
+                return False
+
+    async def download(self, relative_path: str) -> bytes:
+        """Download file content from storage."""
+        url = self.public_url(relative_path)
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, timeout=_DOWNLOAD_TIMEOUT)
+            response.raise_for_status()
+            return response.content
+
+    async def download_to_file(self, relative_path: str, local_path: Path) -> Path:
+        """Download from storage to a local file, returns local_path."""
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        data = await self.download(relative_path)
+        local_path.write_bytes(data)
+        logger.debug("Storage download OK: %s → %s", relative_path, local_path)
+        return local_path
+
+
+# Singleton — import and use directly
+storage = StorageClient()

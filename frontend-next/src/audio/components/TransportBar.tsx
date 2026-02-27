@@ -96,7 +96,7 @@ export function TransportBar({
           type="button"
           onClick={handleSkipBack}
           className={cn(
-            'h-12 w-12 rounded-full flex items-center justify-center',
+            'h-12 w-12 lg:h-9 lg:w-9 rounded-full flex items-center justify-center',
             'bg-muted/50 text-muted-foreground',
             'hover:bg-muted hover:text-foreground transition-colors',
             'touch-manipulation active:scale-95'
@@ -104,7 +104,7 @@ export function TransportBar({
           title="Reculer de 10 secondes"
           aria-label="Reculer de 10 secondes"
         >
-          <SkipBack className="h-5 w-5" />
+          <SkipBack className="h-5 w-5 lg:h-4 lg:w-4" />
         </button>
 
         {/* Stop button */}
@@ -112,7 +112,7 @@ export function TransportBar({
           type="button"
           onClick={onStop}
           className={cn(
-            'h-12 w-12 rounded-full flex items-center justify-center',
+            'h-12 w-12 lg:h-9 lg:w-9 rounded-full flex items-center justify-center',
             'bg-muted/50 text-muted-foreground',
             'hover:bg-muted hover:text-foreground transition-colors',
             'touch-manipulation active:scale-95'
@@ -120,7 +120,7 @@ export function TransportBar({
           title="Arrêter"
           aria-label="Arrêter"
         >
-          <Square className="h-5 w-5" />
+          <Square className="h-5 w-5 lg:h-4 lg:w-4" />
         </button>
 
         {/* Play/Pause button - larger and prominent */}
@@ -128,7 +128,7 @@ export function TransportBar({
           type="button"
           onClick={handlePlayPause}
           className={cn(
-            'h-16 w-16 rounded-full flex items-center justify-center',
+            'h-16 w-16 lg:h-12 lg:w-12 rounded-full flex items-center justify-center',
             'bg-primary text-primary-foreground shadow-lg',
             'hover:bg-primary/90 transition-all',
             'touch-manipulation active:scale-95',
@@ -137,9 +137,9 @@ export function TransportBar({
           aria-label={transport.playing ? 'Pause' : 'Lecture'}
         >
           {transport.playing ? (
-            <Pause className="h-7 w-7" />
+            <Pause className="h-7 w-7 lg:h-5 lg:w-5" />
           ) : (
-            <Play className="h-7 w-7 ml-1" />
+            <Play className="h-7 w-7 lg:h-5 lg:w-5 ml-1" />
           )}
         </button>
 
@@ -148,7 +148,7 @@ export function TransportBar({
           type="button"
           onClick={handleSkipForward}
           className={cn(
-            'h-12 w-12 rounded-full flex items-center justify-center',
+            'h-12 w-12 lg:h-9 lg:w-9 rounded-full flex items-center justify-center',
             'bg-muted/50 text-muted-foreground',
             'hover:bg-muted hover:text-foreground transition-colors',
             'touch-manipulation active:scale-95'
@@ -156,11 +156,8 @@ export function TransportBar({
           title="Avancer de 10 secondes"
           aria-label="Avancer de 10 secondes"
         >
-          <SkipForward className="h-5 w-5" />
+          <SkipForward className="h-5 w-5 lg:h-4 lg:w-4" />
         </button>
-
-        {/* Empty spacer to balance layout */}
-        <div className="h-12 w-12" />
       </div>
     </div>
   )

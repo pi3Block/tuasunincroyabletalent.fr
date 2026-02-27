@@ -32,8 +32,6 @@ services:
       dockerfile: Dockerfile
     expose:
       - "8080"
-    volumes:
-      - audio-data:/app/audio_files
     environment:
       # Shared infrastructure — hostnames are Coolify container names
       # DATABASE_URL and REDIS_URL must be set in Coolify env panel
@@ -47,6 +45,12 @@ services:
       - GENIUS_API_TOKEN=${GENIUS_API_TOKEN:-}
       - SECRET_KEY=${SECRET_KEY}
       - DEBUG=false
+      # Remote storage — storages.augmenter.pro (replaces local audio-data volume)
+      - STORAGE_URL=${STORAGE_URL:-https://storages.augmenter.pro}
+      - STORAGE_API_KEY=${STORAGE_API_KEY:-}
+      - STORAGE_BUCKET=${STORAGE_BUCKET:-kiaraoke}
+      - AUDIO_TEMP_DIR=/tmp/kiaraoke
+      - AUDIO_OUTPUT_DIR=/tmp/kiaraoke
       # Sentry error tracking (optional)
       - SENTRY_DSN=${SENTRY_DSN:-}
       - SENTRY_ENVIRONMENT=${SENTRY_ENVIRONMENT:-production}
@@ -94,7 +98,6 @@ services:
       dockerfile: Dockerfile.optimized
     command: ["celery", "-A", "tasks.celery_app", "worker", "--loglevel=info", "--pool=solo", "-Q", "gpu-heavy,gpu,default", "-n", "heavy@%h", "-B"]
     volumes:
-      - audio-data:/app/audio_files
       - model-cache:/root/.cache
     environment:
       # Shared infrastructure — Coolify container names with UUID suffix
@@ -110,6 +113,12 @@ services:
       - WHISPER_LOCAL_FALLBACK=false
       - GROQ_API_KEY=${GROQ_API_KEY:-}
       - CUDA_VISIBLE_DEVICES=0
+      # Remote storage — storages.augmenter.pro (replaces local audio-data volume)
+      - STORAGE_URL=${STORAGE_URL:-https://storages.augmenter.pro}
+      - STORAGE_API_KEY=${STORAGE_API_KEY:-}
+      - STORAGE_BUCKET=${STORAGE_BUCKET:-kiaraoke}
+      - AUDIO_TEMP_DIR=/tmp/kiaraoke
+      - AUDIO_OUTPUT_DIR=/tmp/kiaraoke
       # Langfuse tracing
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
       - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
@@ -149,7 +158,6 @@ services:
       dockerfile: Dockerfile.optimized
     command: ["celery", "-A", "tasks.celery_app", "worker", "--loglevel=info", "--pool=solo", "-Q", "gpu", "-n", "pool@%h"]
     volumes:
-      - audio-data:/app/audio_files
       - model-cache:/root/.cache
     environment:
       # DATABASE_URL and REDIS_URL must be set in Coolify env panel
@@ -161,6 +169,12 @@ services:
       # Whisper: shared-whisper primary, Groq cloud fallback, local disabled
       - WHISPER_LOCAL_FALLBACK=false
       - GROQ_API_KEY=${GROQ_API_KEY:-}
+      # Remote storage
+      - STORAGE_URL=${STORAGE_URL:-https://storages.augmenter.pro}
+      - STORAGE_API_KEY=${STORAGE_API_KEY:-}
+      - STORAGE_BUCKET=${STORAGE_BUCKET:-kiaraoke}
+      - AUDIO_TEMP_DIR=/tmp/kiaraoke
+      - AUDIO_OUTPUT_DIR=/tmp/kiaraoke
     extra_hosts:
       - "host.docker.internal:host-gateway"
     deploy:
@@ -182,8 +196,9 @@ services:
 # ============================================
 # Volumes (Persistent Data)
 # ============================================
+# audio-data volume removed: audio storage migrated to storages.augmenter.pro
+# GPU tasks use /tmp/kiaraoke/ for processing (auto-cleaned after each task)
 volumes:
-  audio-data:
   model-cache:
 
 # ============================================

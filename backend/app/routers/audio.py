@@ -1,15 +1,20 @@
 """
-Audio file serving routes with session-based authentication.
+Audio file serving routes.
 Serves separated audio tracks (vocals, instrumentals) for playback.
+
+After storage migration: redirects (302) to storages.augmenter.pro public URLs.
+Backward-compat: legacy local paths still served directly if files exist.
 """
+import asyncio
+import re
 from pathlib import Path
 from typing import Literal
-import re
 
 from fastapi import APIRouter, HTTPException, Header
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 
 from app.services.redis_client import redis_client
+from app.services.storage import storage
 from app.config import settings
 
 router = APIRouter()
@@ -17,6 +22,24 @@ router = APIRouter()
 # Valid track types
 TrackType = Literal["vocals", "instrumentals", "original"]
 SourceType = Literal["user", "ref"]
+
+
+def _is_storage_url(path: str) -> bool:
+    return path.startswith("http://") or path.startswith("https://")
+
+
+def _get_storage_relative(session_id: str, source: str, track_type: str) -> str:
+    """Build the storage relative path for a given source/track combination."""
+    if track_type == "original":
+        if source == "user":
+            # user_recording can be .webm or .wav — try webm first (most common)
+            return f"sessions/{session_id}/user_recording.webm"
+        else:
+            return f"cache/UNKNOWN/reference.wav"  # handled separately via session data
+    elif source == "ref":
+        return f"sessions/{session_id}_ref/{track_type}.wav"
+    else:
+        return f"sessions/{session_id}_user/{track_type}.wav"
 
 
 @router.get("/{session_id}/tracks")
@@ -37,34 +60,53 @@ async def list_available_tracks(session_id: str):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    base_path = Path(settings.audio_upload_dir)
+    user_audio_path = session.get("user_audio_path", "")
+    reference_path = session.get("reference_path", "")
 
-    def check_exists(source: str, track: str) -> bool:
-        if track == "original":
-            if source == "user":
-                # Check for both webm and wav
-                webm_path = base_path / session_id / "user_recording.webm"
-                wav_path = base_path / session_id / "user_recording.wav"
-                return webm_path.exists() or wav_path.exists()
-            else:
-                ref_path = session.get("reference_path", "")
-                return Path(ref_path).exists() if ref_path else False
-        else:
-            suffix = "_user" if source == "user" else "_ref"
-            return (base_path / f"{session_id}{suffix}" / f"{track}.wav").exists()
+    # Original tracks: check session data (storage URLs) or legacy local paths
+    user_original_ready = bool(user_audio_path) and (
+        _is_storage_url(user_audio_path) or Path(user_audio_path).exists()
+    )
+    ref_original_ready = bool(reference_path) and (
+        _is_storage_url(reference_path) or Path(reference_path).exists()
+    )
+
+    # Separated tracks: check storage (4 HEAD requests, concurrent)
+    async def _check(rel_path: str) -> bool:
+        try:
+            return await storage.exists(rel_path)
+        except Exception:
+            return False
+
+    ref_vocals_path = f"sessions/{session_id}_ref/vocals.wav"
+    ref_instru_path = f"sessions/{session_id}_ref/instrumentals.wav"
+    user_vocals_path = f"sessions/{session_id}_user/vocals.wav"
+    user_instru_path = f"sessions/{session_id}_user/instrumentals.wav"
+
+    (
+        ref_vocals_ready,
+        ref_instru_ready,
+        user_vocals_ready,
+        user_instru_ready,
+    ) = await asyncio.gather(
+        _check(ref_vocals_path),
+        _check(ref_instru_path),
+        _check(user_vocals_path),
+        _check(user_instru_path),
+    )
 
     return {
         "session_id": session_id,
         "tracks": {
             "ref": {
-                "vocals": check_exists("ref", "vocals"),
-                "instrumentals": check_exists("ref", "instrumentals"),
-                "original": check_exists("ref", "original"),
+                "vocals": ref_vocals_ready,
+                "instrumentals": ref_instru_ready,
+                "original": ref_original_ready,
             },
             "user": {
-                "vocals": check_exists("user", "vocals"),
-                "instrumentals": check_exists("user", "instrumentals"),
-                "original": check_exists("user", "original"),
+                "vocals": user_vocals_ready,
+                "instrumentals": user_instru_ready,
+                "original": user_original_ready,
             },
         }
     }
@@ -80,58 +122,82 @@ async def get_audio_track(
     """
     Serve separated audio track for a session.
 
+    After storage migration: returns a 302 redirect to the storage public URL.
+    The storage server (storages.augmenter.pro) supports HTTP Range for seeking.
+
+    Backward-compat: falls back to local file serving if reference_path/user_audio_path
+    is a legacy local path (sessions created before migration).
+
     Args:
         session_id: The session UUID
         source: 'user' for user recording, 'ref' for reference
         track_type: 'vocals', 'instrumentals', or 'original'
-
-    Returns:
-        Audio file (WAV) with streaming support for large files.
-
-    Example:
-        GET /api/audio/{session_id}/ref/vocals
-        GET /api/audio/{session_id}/user/instrumentals
     """
-    # Validate session exists
     session = await redis_client.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    base_path = Path(settings.audio_upload_dir)
-
-    # Determine file path
+    # ── Original tracks: use stored path/URL from session ──────────────────
     if track_type == "original":
-        # Original recording (not separated)
         if source == "user":
-            # Try webm first, then wav
-            file_path = base_path / session_id / "user_recording.webm"
-            if not file_path.exists():
-                file_path = base_path / session_id / "user_recording.wav"
-            media_type = "audio/webm" if file_path.suffix == ".webm" else "audio/wav"
+            file_ref = session.get("user_audio_path", "")
+            media_type = "audio/webm"
         else:
-            file_path = Path(session.get("reference_path", ""))
+            file_ref = session.get("reference_path", "")
             media_type = "audio/wav"
+
+        if not file_ref:
+            raise HTTPException(status_code=404, detail=f"Audio track not found: {source}/original")
+
+        if _is_storage_url(file_ref):
+            return RedirectResponse(url=file_ref, status_code=302)
+
+        # Legacy: serve from local filesystem
+        file_path = Path(file_ref)
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail=f"Audio track not found: {source}/original")
+        media_type = "audio/webm" if file_path.suffix == ".webm" else "audio/wav"
+        return await _serve_local_file(file_path, media_type, range)
+
+    # ── Separated tracks: storage URL (constructed from known pattern) ─────
+    if source == "ref":
+        rel_path = f"sessions/{session_id}_ref/{track_type}.wav"
     else:
-        # Separated track
-        suffix = "_user" if source == "user" else "_ref"
-        folder = base_path / f"{session_id}{suffix}"
-        file_path = folder / f"{track_type}.wav"
-        media_type = "audio/wav"
+        rel_path = f"sessions/{session_id}_user/{track_type}.wav"
 
-    if not file_path.exists():
-        raise HTTPException(
-            status_code=404,
-            detail=f"Audio track not found: {source}/{track_type}"
-        )
+    storage_url = storage.public_url(rel_path)
 
-    # Get file stats
+    # Quick storage existence check (also handles backward-compat via legacy dirs)
+    if await storage.exists(rel_path):
+        return RedirectResponse(url=storage_url, status_code=302)
+
+    # Backward-compat: try legacy local path
+    legacy_base = Path(settings.audio_upload_dir)
+    if source == "ref":
+        legacy_path = legacy_base / f"{session_id}_ref" / f"{track_type}.wav"
+    else:
+        legacy_path = legacy_base / f"{session_id}_user" / f"{track_type}.wav"
+
+    if legacy_path.exists():
+        return await _serve_local_file(legacy_path, "audio/wav", range)
+
+    raise HTTPException(
+        status_code=404,
+        detail=f"Audio track not found: {source}/{track_type}"
+    )
+
+
+async def _serve_local_file(
+    file_path: Path,
+    media_type: str,
+    range_header: str | None,
+) -> FileResponse | StreamingResponse:
+    """Serve a local file with optional Range support (legacy backward-compat)."""
     file_size = file_path.stat().st_size
 
-    # Support HTTP Range requests for seeking
-    if range:
-        return await _stream_range_response(file_path, range, file_size, media_type)
+    if range_header:
+        return await _stream_range_response(file_path, range_header, file_size, media_type)
 
-    # Full file response
     return FileResponse(
         path=str(file_path),
         media_type=media_type,
@@ -149,7 +215,7 @@ async def _stream_range_response(
     file_size: int,
     media_type: str
 ) -> StreamingResponse:
-    """Handle HTTP Range requests for audio seeking."""
+    """Handle HTTP Range requests for audio seeking (legacy local files)."""
     range_match = re.match(r"bytes=(\d+)-(\d*)", range_header)
     if not range_match:
         raise HTTPException(status_code=416, detail="Invalid Range header")

@@ -20,8 +20,11 @@ import { usePitchDetection } from "@/hooks/usePitchDetection";
 import { useWordTimestamps } from "@/hooks/useWordTimestamps";
 import { useOrientation } from "@/hooks/useOrientation";
 import { useSSE, type SSEEvent } from "@/hooks/useSSE";
+import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
+import { useAudioStore, useTransport, useMasterVolume } from "@/stores/audioStore";
 import Image from "next/image";
 import Link from "next/link";
+
 
 function formatDuration(ms: number): string {
   const minutes = Math.floor(ms / 60000);
@@ -59,7 +62,7 @@ function getProgressLabel(step: string): string {
 
 function TrackCard({ track }: { track: Track }) {
   return (
-    <div className="flex items-center gap-4 bg-gray-800 rounded-xl p-4">
+    <div className="flex items-center gap-4 bg-card border border-border rounded-xl p-4">
       {track.album.image ? (
         <Image
           src={track.album.image}
@@ -69,14 +72,14 @@ function TrackCard({ track }: { track: Track }) {
           className="w-20 h-20 rounded-lg object-cover"
         />
       ) : (
-        <div className="w-20 h-20 rounded-lg bg-gray-700 flex items-center justify-center">
+        <div className="w-20 h-20 rounded-lg bg-muted flex items-center justify-center">
           <span className="text-3xl">🎵</span>
         </div>
       )}
       <div className="text-left">
         <p className="font-semibold text-lg">{track.name}</p>
-        <p className="text-gray-400">{track.artists.join(", ")}</p>
-        <p className="text-sm text-gray-500">
+        <p className="text-muted-foreground">{track.artists.join(", ")}</p>
+        <p className="text-sm text-muted-foreground">
           {formatDuration(track.duration_ms)}
         </p>
       </div>
@@ -173,6 +176,23 @@ export default function AppPage() {
     autoGenerate: true,
     referenceReady:
       status === "ready" || status === "recording" || status === "results",
+  });
+
+  const transport = useTransport();
+  const masterVolume = useMasterVolume();
+  const play = useAudioStore((s) => s.play);
+  const pause = useAudioStore((s) => s.pause);
+  const seek = useAudioStore((s) => s.seek);
+  const setMasterVolume = useAudioStore((s) => s.setMasterVolume);
+
+  useKeyboardShortcuts({
+    enabled: status === "ready" || status === "results",
+    onPlayPause: () => (transport.playing ? pause() : play()),
+    onSeekBack: () => seek(Math.max(0, transport.currentTime - 10)),
+    onSeekForward: () =>
+      seek(Math.min(transport.duration, transport.currentTime + 10)),
+    onVolumeUp: () => setMasterVolume(Math.min(1, masterVolume + 0.05)),
+    onVolumeDown: () => setMasterVolume(Math.max(0, masterVolume - 0.05)),
   });
 
   const [analysisTaskId, setAnalysisTaskId] = useState<string | null>(null);
@@ -564,16 +584,6 @@ export default function AppPage() {
 
   return (
     <div className="min-h-screen flex flex-col safe-area-top safe-area-bottom">
-      {/* Header */}
-      <header className="bg-gradient-to-r from-primary-600 to-primary-500 p-4 text-center">
-        <Link href="/" className="text-2xl font-bold tracking-tight">
-          Kiaraoke
-        </Link>
-        <p className="text-sm text-primary-100 mt-1">
-          Fais-toi juger par l&apos;IA !
-        </p>
-      </header>
-
       {/* Main Content */}
       <main className="flex-1 flex flex-col items-center justify-center p-4 md:p-8 lg:p-12">
         {/* Error Banner */}
@@ -666,23 +676,25 @@ export default function AppPage() {
             </div>
 
             <div className="space-y-3">
-              <input
-                type="url"
-                value={youtubeUrl}
-                onChange={(e) => setYoutubeUrl(e.target.value)}
-                placeholder="https://youtube.com/watch?v=..."
-                className="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary-500"
-              />
+              <div className="md:flex md:gap-3">
+                <input
+                  type="url"
+                  value={youtubeUrl}
+                  onChange={(e) => setYoutubeUrl(e.target.value)}
+                  placeholder="https://youtube.com/watch?v=..."
+                  className="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-ring"
+                />
 
-              <button
-                onClick={handleFallbackSubmit}
-                disabled={!youtubeUrl.trim() || submittingFallback}
-                className="w-full bg-primary-500 hover:bg-primary-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-3 px-6 rounded-xl transition"
-              >
-                {submittingFallback
-                  ? "Vérification..."
-                  : "Utiliser ce lien"}
-              </button>
+                <button
+                  onClick={handleFallbackSubmit}
+                  disabled={!youtubeUrl.trim() || submittingFallback}
+                  className="w-full md:w-auto md:whitespace-nowrap mt-3 md:mt-0 bg-primary hover:bg-primary/90 disabled:bg-gray-600 disabled:cursor-not-allowed text-primary-foreground font-bold py-3 px-6 rounded-xl transition"
+                >
+                  {submittingFallback
+                    ? "Vérification..."
+                    : "Utiliser ce lien"}
+                </button>
+              </div>
             </div>
 
             <button
@@ -773,7 +785,7 @@ export default function AppPage() {
 
                     <button
                       onClick={handleStartRecording}
-                      className="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-5 px-10 rounded-full text-xl shadow-lg transform transition hover:scale-105 active:scale-95 flex items-center justify-center gap-3"
+                      className="w-full lg:max-w-sm lg:mx-auto bg-red-500 hover:bg-red-600 text-white font-bold py-5 lg:py-3 px-10 rounded-full text-xl lg:text-lg shadow-lg transform transition hover:scale-105 active:scale-95 flex items-center justify-center gap-3"
                     >
                       <span className="text-2xl">🎙️</span>
                       Enregistrer
@@ -809,7 +821,7 @@ export default function AppPage() {
 
                       <button
                         onClick={handleStartRecording}
-                        className="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-5 px-10 rounded-full text-xl shadow-lg transform transition hover:scale-105 active:scale-95 flex items-center justify-center gap-3"
+                        className="w-full lg:max-w-sm lg:mx-auto bg-red-500 hover:bg-red-600 text-white font-bold py-5 lg:py-3 px-10 rounded-full text-xl lg:text-lg shadow-lg transform transition hover:scale-105 active:scale-95 flex items-center justify-center gap-3"
                       >
                         <span className="text-2xl">🎙️</span>
                         Enregistrer
@@ -1021,7 +1033,7 @@ export default function AppPage() {
 
               {analysisProgress && (
                 <div className="mt-4 space-y-2">
-                  <div className="h-2 bg-gray-700 rounded-full overflow-hidden max-w-xs mx-auto">
+                  <div className="h-2 bg-gray-700 rounded-full overflow-hidden max-w-xs md:max-w-sm lg:max-w-md mx-auto">
                     <div
                       className="h-full bg-gradient-to-r from-gold-400 to-gold-600 transition-all duration-700 ease-out"
                       style={{
@@ -1044,7 +1056,7 @@ export default function AppPage() {
 
         {/* RESULTS */}
         {status === "results" && results && sessionId && (
-          <div className="space-y-6 w-full max-w-md md:max-w-2xl lg:max-w-4xl">
+          <div className="space-y-6 w-full max-w-md md:max-w-2xl lg:max-w-5xl xl:max-w-6xl">
             <div className="text-center">
               <div className="relative inline-block">
                 <div className="w-28 h-28 mx-auto rounded-full bg-gradient-to-br from-gold-400 to-gold-600 flex items-center justify-center shadow-lg">
@@ -1056,7 +1068,7 @@ export default function AppPage() {
               <p className="text-gray-400 mt-2">Score global</p>
             </div>
 
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-3 gap-3 lg:gap-6">
               <ScoreCard label="Justesse" value={results.pitch_accuracy} />
               <ScoreCard label="Rythme" value={results.rhythm_accuracy} />
               <ScoreCard
@@ -1088,41 +1100,43 @@ export default function AppPage() {
               ))}
             </div>
 
-            <div className="space-y-3">
-              <h3 className="text-lg font-semibold text-center">
+            <div>
+              <h3 className="text-lg font-semibold text-center mb-3">
                 Le jury a dit:
               </h3>
-              {results.jury_comments.map((jury, i) => (
-                <div
-                  key={i}
-                  className="bg-gray-800 rounded-xl p-4 text-left"
-                >
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="font-medium text-gold-400">
-                      {jury.persona}
-                    </span>
-                    <span
-                      className={
-                        jury.vote === "yes"
-                          ? "text-green-400"
-                          : "text-red-400"
-                      }
-                    >
-                      ({jury.vote === "yes" ? "OUI" : "NON"})
-                    </span>
+              <div className="space-y-3 lg:grid lg:grid-cols-3 lg:gap-6 lg:space-y-0">
+                {results.jury_comments.map((jury, i) => (
+                  <div
+                    key={i}
+                    className="bg-gray-800 rounded-xl p-4 text-left"
+                  >
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="font-medium text-gold-400">
+                        {jury.persona}
+                      </span>
+                      <span
+                        className={
+                          jury.vote === "yes"
+                            ? "text-green-400"
+                            : "text-red-400"
+                        }
+                      >
+                        ({jury.vote === "yes" ? "OUI" : "NON"})
+                      </span>
+                    </div>
+                    <p className="text-gray-300 text-sm italic">
+                      &ldquo;{jury.comment}&rdquo;
+                    </p>
                   </div>
-                  <p className="text-gray-300 text-sm italic">
-                    &ldquo;{jury.comment}&rdquo;
-                  </p>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
 
             <StudioMode sessionId={sessionId} context="results" />
 
             <button
               onClick={handleReset}
-              className="w-full bg-primary-500 hover:bg-primary-600 text-white font-bold py-4 px-8 rounded-full text-lg shadow-lg transform transition hover:scale-105 active:scale-95"
+              className="w-full lg:max-w-sm lg:mx-auto bg-primary hover:bg-primary/90 text-primary-foreground font-bold py-4 px-8 rounded-full text-lg shadow-lg transform transition hover:scale-105 active:scale-95"
             >
               Recommencer
             </button>

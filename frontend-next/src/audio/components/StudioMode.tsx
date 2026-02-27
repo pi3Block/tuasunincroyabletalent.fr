@@ -261,11 +261,13 @@ export function StudioMode({
         </div>
       </div>
 
-      {/* Transport controls */}
-      <TransportBar onPlay={play} onPause={pause} onStop={stop} onSeek={seek} />
-
-      {/* Track mixer */}
-      <TrackMixer showDownload={context === 'results'} />
+      {/* Desktop: side-by-side layout; Mobile: stacked */}
+      <div className="lg:flex lg:gap-6 lg:items-start space-y-4 lg:space-y-0">
+        <TransportBar onPlay={play} onPause={pause} onStop={stop} onSeek={seek} className="lg:w-64 lg:shrink-0" />
+        <div className="lg:flex-1">
+          <TrackMixer showDownload={context === 'results'} />
+        </div>
+      </div>
     </div>
   )
 }

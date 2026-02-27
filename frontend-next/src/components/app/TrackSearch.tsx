@@ -88,98 +88,104 @@ export function TrackSearch({ onSelect }: TrackSearchProps) {
         )}
       </div>
 
-      {/* Recent tracks (shown when no query) */}
-      {recentTracks.length > 0 && !query && (
-        <div className="space-y-3">
-          <p className="text-sm text-gray-400 flex items-center gap-2">
-            <span>🔥</span> Chansons récentes
-          </p>
-          <div className="space-y-2">
-            {recentTracks.map((track) => (
-              <button
-                key={track.spotify_track_id}
-                onClick={() => handleRecentTrackSelect(track)}
-                className="w-full flex items-center gap-3 bg-gray-800/50 hover:bg-gray-700 rounded-xl p-3 transition-colors text-left border border-gray-700/50"
-              >
-                {track.album_image ? (
-                  <Image
-                    src={track.album_image}
-                    alt=""
-                    width={48}
-                    height={48}
-                    className="w-12 h-12 rounded-lg object-cover flex-shrink-0"
-                  />
-                ) : (
-                  <div className="w-12 h-12 rounded-lg bg-gray-700 flex items-center justify-center flex-shrink-0">
-                    <span className="text-xl">🎵</span>
+      {/* Desktop 2-col layout: recent left, results right */}
+      <div className="lg:grid lg:grid-cols-[280px_1fr] lg:gap-6">
+        {/* Recent tracks (left column on desktop, top on mobile — shown when no query) */}
+        {recentTracks.length > 0 && !query && (
+          <div className="space-y-3 lg:order-1">
+            <p className="text-sm text-gray-400 flex items-center gap-2">
+              <span>🔥</span> Chansons récentes
+            </p>
+            <div className="space-y-2">
+              {recentTracks.map((track) => (
+                <button
+                  key={track.spotify_track_id}
+                  onClick={() => handleRecentTrackSelect(track)}
+                  className="w-full flex items-center gap-3 bg-gray-800/50 hover:bg-gray-700 rounded-xl p-3 transition-colors text-left border border-gray-700/50"
+                >
+                  {track.album_image ? (
+                    <Image
+                      src={track.album_image}
+                      alt=""
+                      width={48}
+                      height={48}
+                      className="w-12 h-12 rounded-lg object-cover shrink-0"
+                    />
+                  ) : (
+                    <div className="w-12 h-12 rounded-lg bg-gray-700 flex items-center justify-center shrink-0">
+                      <span className="text-xl">🎵</span>
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-white truncate">{track.track_name}</p>
+                    <p className="text-sm text-gray-400 truncate">{track.artist_name}</p>
                   </div>
-                )}
-                <div className="flex-1 min-w-0">
-                  <p className="font-medium text-white truncate">{track.track_name}</p>
-                  <p className="text-sm text-gray-400 truncate">{track.artist_name}</p>
-                </div>
-                <span className="text-gold-400 text-sm">⚡</span>
-              </button>
-            ))}
+                  <span className="text-gold-400 text-sm">⚡</span>
+                </button>
+              ))}
+            </div>
           </div>
+        )}
+
+        {/* Results column (right on desktop) */}
+        <div className="lg:order-2">
+          {/* Error */}
+          {error && (
+            <div className="bg-red-500/20 border border-red-500 rounded-lg p-3 text-red-300 text-sm">
+              {error}
+            </div>
+          )}
+
+          {/* Results */}
+          {tracks.length > 0 && (
+            <div className="space-y-2 max-h-96 lg:max-h-[600px] overflow-y-auto">
+              {tracks.map((track) => (
+                <button
+                  key={track.id}
+                  onClick={() => onSelect(track)}
+                  className="w-full flex items-center gap-3 bg-gray-800 hover:bg-gray-700 rounded-xl p-3 transition-colors text-left"
+                >
+                  {/* Album Art */}
+                  {track.album.image ? (
+                    <Image
+                      src={track.album.image}
+                      alt={track.album.name || ''}
+                      width={56}
+                      height={56}
+                      className="w-14 h-14 rounded-lg object-cover shrink-0"
+                    />
+                  ) : (
+                    <div className="w-14 h-14 rounded-lg bg-gray-700 flex items-center justify-center shrink-0">
+                      <span className="text-2xl">🎵</span>
+                    </div>
+                  )}
+
+                  {/* Track Info */}
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-white truncate">{track.name}</p>
+                    <p className="text-sm text-gray-400 truncate">
+                      {track.artists.join(', ')}
+                    </p>
+                    <p className="text-xs text-gray-500">
+                      {formatDuration(track.duration_ms)}
+                    </p>
+                  </div>
+
+                  {/* Select indicator */}
+                  <span className="text-muted-foreground text-xl">›</span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Empty state */}
+          {query && !loading && tracks.length === 0 && !error && (
+            <div className="text-center text-gray-500 py-8">
+              Aucun résultat pour &ldquo;{query}&rdquo;
+            </div>
+          )}
         </div>
-      )}
-
-      {/* Error */}
-      {error && (
-        <div className="bg-red-500/20 border border-red-500 rounded-lg p-3 text-red-300 text-sm">
-          {error}
-        </div>
-      )}
-
-      {/* Results */}
-      {tracks.length > 0 && (
-        <div className="space-y-2 max-h-96 overflow-y-auto">
-          {tracks.map((track) => (
-            <button
-              key={track.id}
-              onClick={() => onSelect(track)}
-              className="w-full flex items-center gap-3 bg-gray-800 hover:bg-gray-700 rounded-xl p-3 transition-colors text-left"
-            >
-              {/* Album Art */}
-              {track.album.image ? (
-                <Image
-                  src={track.album.image}
-                  alt={track.album.name || ''}
-                  width={56}
-                  height={56}
-                  className="w-14 h-14 rounded-lg object-cover flex-shrink-0"
-                />
-              ) : (
-                <div className="w-14 h-14 rounded-lg bg-gray-700 flex items-center justify-center flex-shrink-0">
-                  <span className="text-2xl">🎵</span>
-                </div>
-              )}
-
-              {/* Track Info */}
-              <div className="flex-1 min-w-0">
-                <p className="font-medium text-white truncate">{track.name}</p>
-                <p className="text-sm text-gray-400 truncate">
-                  {track.artists.join(', ')}
-                </p>
-                <p className="text-xs text-gray-500">
-                  {formatDuration(track.duration_ms)}
-                </p>
-              </div>
-
-              {/* Select indicator */}
-              <span className="text-primary-400 text-xl">›</span>
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* Empty state */}
-      {query && !loading && tracks.length === 0 && !error && (
-        <div className="text-center text-gray-500 py-8">
-          Aucun résultat pour &ldquo;{query}&rdquo;
-        </div>
-      )}
+      </div>
     </div>
   )
 }

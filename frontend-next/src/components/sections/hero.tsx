@@ -87,7 +87,7 @@ const AnimatedTitle = memo(function AnimatedTitle() {
   const words = ["Le", "Jury", "IA", "Vocal"];
 
   return (
-    <h1 className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-bold tracking-tight">
+    <h1 className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl xl:text-8xl font-bold tracking-tight">
       {words.map((word, i) => (
         <motion.span
           key={word}
@@ -116,7 +116,7 @@ const AnimatedTitle = memo(function AnimatedTitle() {
 const AnimatedMic = memo(function AnimatedMic() {
   return (
     <motion.div
-      className="relative w-32 h-32 md:w-40 md:h-40 mx-auto mb-8"
+      className="relative w-32 h-32 md:w-40 md:h-40 lg:w-48 lg:h-48 mx-auto mb-8"
       initial={{ scale: 0, rotate: -180 }}
       animate={{ scale: 1, rotate: 0 }}
       transition={{ type: "spring", stiffness: 200, damping: 15, delay: 0.5 }}
@@ -213,7 +213,7 @@ export const HeroSection = memo(function HeroSection() {
         <FloatingParticle key={i} {...particle} />
       ))}
 
-      <div className="relative z-10 max-w-4xl mx-auto text-center">
+      <div className="relative z-10 max-w-6xl mx-auto text-center">
         <AnimatedMic />
         <AnimatedTitle />
 
@@ -308,7 +308,7 @@ export const HeroSection = memo(function HeroSection() {
         </motion.div>
 
         <motion.div
-          className="mt-12 grid grid-cols-3 gap-8 max-w-md mx-auto"
+          className="mt-12 grid grid-cols-3 gap-8 max-w-md lg:max-w-2xl mx-auto"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ delay: 1.5 }}

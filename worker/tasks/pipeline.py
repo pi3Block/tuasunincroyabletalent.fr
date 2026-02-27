@@ -2,17 +2,20 @@
 Audio analysis pipeline - orchestrates all analysis tasks.
 Runs all processing directly (not as sub-tasks) to avoid Celery .get() issues.
 
-Performance optimizations:
-- Cache reference separation by YouTube video ID (2min saved per repeated song)
-- Use smaller CREPE model (tiny vs medium)
-- Parallelize user separation + ref check
+Storage migration (2026-02-27):
+- Audio files live on storages.augmenter.pro (bucket: kiaraoke)
+- GPU tasks use local temp /tmp/kiaraoke/ for processing
+- Pattern: download from storage -> GPU process -> upload to storage -> delete temp
 
-Improvements (2026-02-11):
-- Langfuse pipeline tracing (parent trace + child spans per step)
-- Structured logging (logging module)
-
-Improvements (2026-02-25):
-- GPU time-sharing with Ollama Light on GPU 0 (unload before Demucs)
+Storage paths:
+  cache/{youtube_id}/reference.wav         <- YouTube original (permanent)
+  cache/{youtube_id}/vocals.wav            <- Demucs ref cache (90 days)
+  cache/{youtube_id}/instrumentals.wav
+  sessions/{session_id}_ref/vocals.wav     <- StudioMode ref tracks
+  sessions/{session_id}_ref/instrumentals.wav
+  sessions/{session_id}_user/vocals.wav    <- User separated tracks
+  sessions/{session_id}_user/instrumentals.wav
+  sessions/{session_id}/user_recording.*   <- User raw recording (2h TTL)
 """
 import os
 import json
@@ -22,8 +25,35 @@ from pathlib import Path
 from celery import shared_task
 
 from .tracing import trace_pipeline, flush_traces, TracingSpan
+from .storage_client import get_storage
 
 logger = logging.getLogger(__name__)
+
+
+def _is_storage_url(path: str) -> bool:
+    return path.startswith("http://") or path.startswith("https://")
+
+
+def _temp_dir(name: str) -> Path:
+    """Create and return a temp processing dir under /tmp/kiaraoke/."""
+    base = Path(os.getenv("AUDIO_TEMP_DIR", "/tmp/kiaraoke"))
+    d = base / name
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _resolve_audio(url_or_path: str, dest: Path) -> str:
+    """
+    Ensure audio is available locally for GPU processing.
+
+    If url_or_path is a storage URL: download to dest and return local path.
+    If url_or_path is already a local path: return as-is (backward-compat).
+    """
+    if _is_storage_url(url_or_path):
+        storage = get_storage()
+        storage.download_to_file(url_or_path, dest)
+        return str(dest)
+    return url_or_path
 
 
 def update_progress(task, step: str, progress: int, detail: str = ""):
@@ -38,41 +68,12 @@ def update_progress(task, step: str, progress: int, detail: str = ""):
     )
 
 
-def get_ref_cache_dir(youtube_id: str) -> Path:
-    """Get the cache directory for a YouTube video's separated audio."""
-    return Path(os.getenv("AUDIO_OUTPUT_DIR", "/app/audio_files")) / "cache" / youtube_id
-
-
-def is_ref_separation_cached(youtube_id: str) -> bool:
-    """Check if reference vocals/instrumentals are already separated and cached."""
+def is_ref_separation_in_storage(youtube_id: str) -> bool:
+    """Check if reference separation (vocals.wav) is cached in remote storage."""
     if not youtube_id:
         return False
-    cache_dir = get_ref_cache_dir(youtube_id)
-    return (cache_dir / "vocals.wav").exists() and (cache_dir / "instrumentals.wav").exists()
-
-
-def copy_cached_ref_to_session(youtube_id: str, session_id: str) -> dict:
-    """Copy cached reference files to session directory for the Studio Mode."""
-    cache_dir = get_ref_cache_dir(youtube_id)
-    base_dir = Path(os.getenv("AUDIO_OUTPUT_DIR", "/app/audio_files"))
-    session_ref_dir = base_dir / f"{session_id}_ref"
-    session_ref_dir.mkdir(parents=True, exist_ok=True)
-
-    # Copy (not move) so cache stays intact
-    vocals_src = cache_dir / "vocals.wav"
-    instru_src = cache_dir / "instrumentals.wav"
-    vocals_dst = session_ref_dir / "vocals.wav"
-    instru_dst = session_ref_dir / "instrumentals.wav"
-
-    if not vocals_dst.exists():
-        shutil.copy2(vocals_src, vocals_dst)
-    if not instru_dst.exists():
-        shutil.copy2(instru_src, instru_dst)
-
-    return {
-        "vocals_path": str(vocals_dst),
-        "instrumentals_path": str(instru_dst),
-    }
+    storage = get_storage()
+    return storage.exists(f"cache/{youtube_id}/vocals.wav")
 
 
 def log_gpu_status():
@@ -115,11 +116,10 @@ def _unload_ollama_model_for_gpu():
             timeout=10.0,
         )
         if response.status_code == 200:
-            logger.info("Sent unload request for Ollama %s — waiting for VRAM release...", ollama_model)
+            logger.info("Sent unload request for Ollama %s -- waiting for VRAM release...", ollama_model)
         else:
             logger.warning("Ollama unload request returned status %d", response.status_code)
     except Exception as e:
-        # Non-fatal: GPU may already be free, or Ollama may not be running
         logger.warning("Failed to send Ollama unload request (GPU may already be free): %s", e)
         return
 
@@ -132,12 +132,12 @@ def _unload_ollama_model_for_gpu():
             if ps_resp.status_code == 200:
                 loaded_models = ps_resp.json().get("models", [])
                 if not loaded_models:
-                    logger.info("Ollama VRAM confirmed free — proceeding with Demucs/CREPE")
+                    logger.info("Ollama VRAM confirmed free -- proceeding with Demucs/CREPE")
                     return
         except Exception:
             pass  # Transient error, keep polling
 
-    logger.warning("Ollama model may still be in VRAM after 20s — proceeding anyway")
+    logger.warning("Ollama model may still be in VRAM after 20s -- proceeding anyway")
 
 
 @shared_task(bind=True, name="tasks.pipeline.analyze_performance")
@@ -148,101 +148,92 @@ def analyze_performance(
     reference_audio_path: str,
     song_title: str,
     artist_name: str,
-    youtube_id: str = None,  # NEW: for cache lookup
+    youtube_id: str = None,
 ) -> dict:
     """
     Full analysis pipeline for a vocal performance.
 
     Steps:
-    1. Separate vocals from user recording (remove bleed from speakers)
-    2. Separate vocals from reference (for comparison) - CACHED by YouTube ID
-    3. Extract pitch from both
-    4. Transcribe user vocals
-    5. Generate scores and feedback
+    1. Unload Ollama to free GPU VRAM
+    2. Download user audio from storage -> /tmp/kiaraoke/
+    3. Separate user audio (Demucs) -> upload user_vocals/instrumentals to storage
+    4. Check ref separation in storage cache:
+       - Cache HIT:  download ref vocals/instrumentals from storage
+       - Cache MISS: download reference audio, separate, upload to storage cache
+    5. Cross-correlation sync (auto offset detection)
+    6. Extract pitch (CREPE)
+    7. Transcribe user vocals (Whisper)
+    8. Fetch reference lyrics (Genius)
+    9. Score + Jury feedback (LLM, parallel x3 personas)
+    10. Cleanup /tmp/kiaraoke/
 
     Args:
         session_id: Session identifier
-        user_audio_path: Path to user's recording
-        reference_audio_path: Path to reference audio
+        user_audio_path: Storage URL or legacy local path for user recording
+        reference_audio_path: Storage URL or legacy local path for reference audio
         song_title: Name of the song
         artist_name: Artist name
-        youtube_id: YouTube video ID for cache lookup
-
-    Returns:
-        dict with all results
+        youtube_id: YouTube video ID for reference separation cache lookup
     """
-    # Import the actual processing functions (not Celery tasks)
     from tasks.audio_separation import do_separate_audio
     from tasks.pitch_analysis import do_extract_pitch
     from tasks.transcription import do_transcribe_audio
     from tasks.scoring import do_generate_feedback
     from tasks.lyrics import get_lyrics
 
-    output_dir = Path(os.getenv("AUDIO_OUTPUT_DIR", "/app/audio_files")) / session_id
-    output_dir.mkdir(parents=True, exist_ok=True)
+    storage = get_storage()
 
-    # ============================================
-    # GPU STATUS CHECK
-    # ============================================
-    has_gpu = log_gpu_status()
+    # Temp dirs for this session's GPU processing
+    user_temp = _temp_dir(f"{session_id}_user")
+    ref_temp = _temp_dir(f"{session_id}_ref")
+    session_temp = _temp_dir(session_id)
 
-    # ============================================
-    # GPU TIME-SHARING: Unload Ollama Light from GPU 0
-    # ============================================
-    # GPU 0 is shared between Ollama Light (qwen3:4b, ~4.1 GB) and
-    # Demucs (~4 GB) + CREPE (~1 GB). Unload to free VRAM.
-    if has_gpu:
-        _unload_ollama_model_for_gpu()
+    try:
+        # ============================================================
+        # GPU STATUS CHECK
+        # ============================================================
+        has_gpu = log_gpu_status()
 
-    # ============================================
-    # LANGFUSE PIPELINE TRACE
-    # ============================================
-    with trace_pipeline(
-        session_id=session_id,
-        song_title=song_title,
-        artist_name=artist_name,
-        has_gpu=has_gpu,
-        youtube_id=youtube_id,
-        task_id=self.request.id,
-    ) as pipeline_span:
+        # ============================================================
+        # GPU TIME-SHARING: Unload Ollama Heavy from GPU 1
+        # ============================================================
+        if has_gpu:
+            _unload_ollama_model_for_gpu()
 
-        # ============================================
-        # STEP 1: Separate user audio (Demucs)
-        # ============================================
-        update_progress(self, "loading_model", 5, "Chargement du modele Demucs...")
+        # ============================================================
+        # LANGFUSE PIPELINE TRACE
+        # ============================================================
+        with trace_pipeline(
+            session_id=session_id,
+            song_title=song_title,
+            artist_name=artist_name,
+            has_gpu=has_gpu,
+            youtube_id=youtube_id,
+            task_id=self.request.id,
+        ) as pipeline_span:
 
-        update_progress(self, "separating_user", 10, "Isolation de ta voix...")
-        user_separation = do_separate_audio(user_audio_path, f"{session_id}_user")
-        # Free GPU cache after Demucs (STFT tensors, intermediate buffers)
-        try:
-            import torch
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except Exception:
-            pass
-        update_progress(self, "separating_user_done", 20, "Voix isolee !")
+            # ========================================================
+            # STEP 1: Download user audio from storage (if URL)
+            # ========================================================
+            update_progress(self, "loading_model", 5, "Chargement du modele Demucs...")
 
-        # ============================================
-        # STEP 2: Separate reference audio (with CACHE)
-        # ============================================
-        ref_vocals_path = None
-        ref_instrumentals_path = None
+            # Guess extension from URL tail to preserve format for ffmpeg
+            ext_guess = ".webm"
+            if user_audio_path and "." in user_audio_path.split("/")[-1]:
+                ext_guess = "." + user_audio_path.rsplit(".", 1)[-1]
+            local_user_path = _resolve_audio(
+                user_audio_path,
+                session_temp / f"user_recording{ext_guess}",
+            )
 
-        # Check cache first (by YouTube video ID)
-        if youtube_id and is_ref_separation_cached(youtube_id):
-            logger.info("Reference separation found in cache for %s", youtube_id)
-            update_progress(self, "separating_reference_cached", 35, "Reference en cache !")
-            cached_paths = copy_cached_ref_to_session(youtube_id, session_id)
-            ref_vocals_path = cached_paths["vocals_path"]
-            ref_instrumentals_path = cached_paths["instrumentals_path"]
-        else:
-            # No cache - need to separate
-            logger.info("No cache for %s, separating reference...", youtube_id)
-            update_progress(self, "separating_reference", 25, "Preparation de la reference...")
-            ref_separation = do_separate_audio(reference_audio_path, f"{session_id}_ref")
-            ref_vocals_path = ref_separation["vocals_path"]
-            ref_instrumentals_path = ref_separation["instrumentals_path"]
-            # Free GPU cache after 2nd Demucs pass
+            # ========================================================
+            # STEP 2: Separate user audio (Demucs)
+            # AUDIO_OUTPUT_DIR=/tmp/kiaraoke -> outputs to /tmp/kiaraoke/{session_id}_user/
+            # ========================================================
+            update_progress(self, "separating_user", 10, "Isolation de ta voix...")
+            user_separation = do_separate_audio(local_user_path, f"{session_id}_user")
+
+            # Free GPU cache after Demucs
             try:
                 import torch
                 if torch.cuda.is_available():
@@ -250,146 +241,223 @@ def analyze_performance(
             except Exception:
                 pass
 
-            # Save to cache for future sessions
-            if youtube_id:
-                cache_dir = get_ref_cache_dir(youtube_id)
-                cache_dir.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(ref_vocals_path, cache_dir / "vocals.wav")
-                shutil.copy2(ref_instrumentals_path, cache_dir / "instrumentals.wav")
-                logger.info("Saved reference separation to cache: %s", youtube_id)
+            # Upload user vocals/instrumentals to storage (StudioMode access)
+            user_vocals_local = Path(user_separation["vocals_path"])
+            user_instru_local = Path(user_separation["instrumentals_path"])
+            storage.upload_from_file(user_vocals_local, f"sessions/{session_id}_user/vocals.wav")
+            storage.upload_from_file(user_instru_local, f"sessions/{session_id}_user/instrumentals.wav")
 
-            update_progress(self, "separating_reference_done", 35, "Reference prete !")
+            update_progress(self, "separating_user_done", 20, "Voix isolee !")
 
-        # ============================================
-        # STEP 2.5: Cross-correlation sync (auto offset detection)
-        # ============================================
-        update_progress(self, "computing_sync", 37, "Synchronisation automatique...")
+            # ========================================================
+            # STEP 3: Reference separation (with STORAGE CACHE)
+            # ========================================================
+            ref_vocals_path = None
+            ref_instrumentals_path = None
 
-        from tasks.sync import compute_sync_offset
-        try:
-            sync_result = compute_sync_offset(
-                user_vocals_path=user_separation["vocals_path"],
-                ref_vocals_path=str(ref_vocals_path),
+            if youtube_id and is_ref_separation_in_storage(youtube_id):
+                # CACHE HIT: download from storage to temp
+                logger.info("Reference separation found in storage cache for %s", youtube_id)
+                update_progress(self, "separating_reference_cached", 35, "Reference en cache !")
+                ref_vocals_local = storage.download_to_file(
+                    f"cache/{youtube_id}/vocals.wav",
+                    ref_temp / "vocals.wav",
+                )
+                ref_instru_local = storage.download_to_file(
+                    f"cache/{youtube_id}/instrumentals.wav",
+                    ref_temp / "instrumentals.wav",
+                )
+                ref_vocals_path = str(ref_vocals_local)
+                ref_instrumentals_path = str(ref_instru_local)
+                # Ensure session_ref tracks exist in storage for StudioMode
+                if not storage.exists(f"sessions/{session_id}_ref/vocals.wav"):
+                    storage.upload_from_file(ref_vocals_local, f"sessions/{session_id}_ref/vocals.wav")
+                    storage.upload_from_file(ref_instru_local, f"sessions/{session_id}_ref/instrumentals.wav")
+            else:
+                # CACHE MISS: download reference audio, separate, upload to cache + session_ref
+                logger.info("No storage cache for %s, separating reference...", youtube_id)
+                update_progress(self, "separating_reference", 25, "Preparation de la reference...")
+
+                local_ref = _resolve_audio(
+                    reference_audio_path,
+                    ref_temp / "reference.wav",
+                )
+                ref_separation = do_separate_audio(local_ref, f"{session_id}_ref")
+
+                # Free GPU cache after 2nd Demucs pass
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                except Exception:
+                    pass
+
+                ref_vocals_path = ref_separation["vocals_path"]
+                ref_instrumentals_path = ref_separation["instrumentals_path"]
+                ref_vocals_local = Path(ref_vocals_path)
+                ref_instru_local = Path(ref_instrumentals_path)
+
+                # Upload to permanent cache in storage
+                if youtube_id:
+                    storage.upload_from_file(ref_vocals_local, f"cache/{youtube_id}/vocals.wav")
+                    storage.upload_from_file(ref_instru_local, f"cache/{youtube_id}/instrumentals.wav")
+                    logger.info("Saved ref separation to storage cache: %s", youtube_id)
+
+                # Upload to session_ref for StudioMode
+                storage.upload_from_file(ref_vocals_local, f"sessions/{session_id}_ref/vocals.wav")
+                storage.upload_from_file(ref_instru_local, f"sessions/{session_id}_ref/instrumentals.wav")
+
+                update_progress(self, "separating_reference_done", 35, "Reference prete !")
+
+            # ========================================================
+            # STEP 3.5: Cross-correlation sync (auto offset detection)
+            # ========================================================
+            update_progress(self, "computing_sync", 37, "Synchronisation automatique...")
+
+            from tasks.sync import compute_sync_offset
+            try:
+                sync_result = compute_sync_offset(
+                    user_vocals_path=user_separation["vocals_path"],
+                    ref_vocals_path=str(ref_vocals_path),
+                )
+                auto_offset = sync_result["offset_seconds"]
+                sync_confidence = sync_result["confidence"]
+                logger.info(
+                    "Auto sync offset: %.3fs (confidence: %.2f)", auto_offset, sync_confidence,
+                )
+            except Exception as e:
+                logger.warning("Cross-correlation sync failed: %s, using offset=0", e)
+                auto_offset = 0.0
+                sync_confidence = 0.0
+                sync_result = {"offset_seconds": 0.0, "confidence": 0.0, "method": "fallback"}
+
+            # ========================================================
+            # STEP 4: Extract pitch (CREPE)
+            # Use 'full' model for user (accuracy), 'tiny' for ref (speed)
+            # ========================================================
+            update_progress(self, "extracting_pitch_user", 40, "Analyse de ta justesse...")
+            user_pitch = do_extract_pitch(user_separation["vocals_path"], f"{session_id}_user", fast_mode=False)
+
+            update_progress(self, "extracting_pitch_ref", 50, "Analyse de la reference...")
+            ref_pitch = do_extract_pitch(str(ref_vocals_path), f"{session_id}_ref", fast_mode=True)
+            update_progress(self, "extracting_pitch_done", 55, "Justesse analysee !")
+
+            # ========================================================
+            # STEP 5: Transcribe vocals (Whisper 3-tier fallback)
+            # ========================================================
+            update_progress(self, "transcribing", 60, "Transcription de tes paroles...")
+            transcription = do_transcribe_audio(user_separation["vocals_path"], session_id, "fr")
+            update_progress(self, "transcribing_done", 70, "Paroles transcrites !")
+
+            # ========================================================
+            # STEP 6: Fetch reference lyrics (Genius)
+            # ========================================================
+            update_progress(self, "fetching_lyrics", 75, "Recuperation des paroles officielles...")
+            lyrics_result = get_lyrics(artist_name, song_title)
+            reference_lyrics = lyrics_result.get("text", "")
+
+            if lyrics_result.get("status") == "found":
+                update_progress(self, "lyrics_found", 78, "Paroles trouvees !")
+                logger.info("Lyrics found from %s", lyrics_result.get("source"))
+            else:
+                update_progress(self, "lyrics_not_found", 78, "Paroles non trouvees (score neutre)")
+
+            # ========================================================
+            # STEP 7: Score + Jury feedback (parallel x3 personas)
+            # ========================================================
+            update_progress(self, "calculating_scores", 80, "Calcul des scores...")
+            update_progress(self, "jury_deliberation", 85, "Le jury se reunit...")
+
+            # Only apply auto offset if confidence is above threshold
+            effective_offset = auto_offset if sync_confidence > 0.3 else 0.0
+
+            results = do_generate_feedback(
+                session_id=session_id,
+                user_pitch_path=user_pitch["pitch_path"],
+                reference_pitch_path=ref_pitch["pitch_path"],
+                user_lyrics=transcription["text"],
+                reference_lyrics=reference_lyrics,
+                song_title=song_title,
+                pipeline_span=pipeline_span,
+                offset_seconds=effective_offset,
             )
-            auto_offset = sync_result["offset_seconds"]
-            sync_confidence = sync_result["confidence"]
-            logger.info(
-                "Auto sync offset: %.3fs (confidence: %.2f)", auto_offset, sync_confidence,
-            )
-        except Exception as e:
-            logger.warning("Cross-correlation sync failed: %s, using offset=0", e)
-            auto_offset = 0.0
-            sync_confidence = 0.0
-            sync_result = {"offset_seconds": 0.0, "confidence": 0.0, "method": "fallback"}
 
-        # ============================================
-        # STEP 3: Extract pitch (CREPE)
-        # Use 'full' model for user (accuracy matters)
-        # Use 'tiny' model for reference (speed matters, already cached)
-        # ============================================
-        update_progress(self, "extracting_pitch_user", 40, "Analyse de ta justesse...")
-        user_pitch = do_extract_pitch(user_separation["vocals_path"], f"{session_id}_user", fast_mode=False)
+            results["auto_sync"] = sync_result
 
-        update_progress(self, "extracting_pitch_ref", 50, "Analyse de la reference...")
-        ref_pitch = do_extract_pitch(str(ref_vocals_path), f"{session_id}_ref", fast_mode=True)
-        update_progress(self, "extracting_pitch_done", 55, "Justesse analysee !")
+            update_progress(self, "jury_voting", 95, "Le jury vote...")
+            update_progress(self, "completed", 100, "Verdict rendu !")
 
-        # ============================================
-        # STEP 4: Transcribe vocals (Whisper)
-        # ============================================
-        update_progress(self, "transcribing", 60, "Transcription de tes paroles...")
-        transcription = do_transcribe_audio(user_separation["vocals_path"], session_id, "fr")
-        update_progress(self, "transcribing_done", 70, "Paroles transcrites !")
+            flush_traces()
 
-        # ============================================
-        # STEP 5: Fetch reference lyrics (Genius)
-        # ============================================
-        update_progress(self, "fetching_lyrics", 75, "Recuperation des paroles officielles...")
-        lyrics_result = get_lyrics(artist_name, song_title)
-        reference_lyrics = lyrics_result.get("text", "")
+    finally:
+        # ============================================================
+        # CLEANUP: Delete all temp dirs for this session
+        # ============================================================
+        for temp_path in [session_temp, user_temp, ref_temp]:
+            shutil.rmtree(temp_path, ignore_errors=True)
+        logger.info("Cleaned up temp dirs for session %s", session_id)
 
-        if lyrics_result.get("status") == "found":
-            update_progress(self, "lyrics_found", 78, "Paroles trouvees !")
-            logger.info("Lyrics found from %s", lyrics_result.get("source"))
-        else:
-            update_progress(self, "lyrics_not_found", 78, "Paroles non trouvees (score neutre)")
-            logger.info("Lyrics not found: %s", lyrics_result.get("status"))
-
-        # ============================================
-        # STEP 6: Calculate scores
-        # ============================================
-        update_progress(self, "calculating_scores", 80, "Calcul des scores...")
-
-        # ============================================
-        # STEP 7: Generate jury feedback (Ollama — parallel)
-        # ============================================
-        update_progress(self, "jury_deliberation", 85, "Le jury se reunit...")
-
-        # Only apply auto offset if confidence is above threshold
-        effective_offset = auto_offset if sync_confidence > 0.3 else 0.0
-
-        results = do_generate_feedback(
-            session_id=session_id,
-            user_pitch_path=user_pitch["pitch_path"],
-            reference_pitch_path=ref_pitch["pitch_path"],
-            user_lyrics=transcription["text"],
-            reference_lyrics=reference_lyrics,
-            song_title=song_title,
-            pipeline_span=pipeline_span,
-            offset_seconds=effective_offset,
-        )
-
-        # Include sync metadata in results for the frontend
-        results["auto_sync"] = sync_result
-
-        update_progress(self, "jury_voting", 95, "Le jury vote...")
-        update_progress(self, "completed", 100, "Verdict rendu !")
-
-        # Flush Langfuse traces
-        flush_traces()
-
-    # Return results directly (contains session_id, score, pitch_accuracy, etc.)
-    # The frontend expects this flat structure, not nested under "results"
     return results
 
 
 @shared_task(bind=True, name="tasks.pipeline.prepare_reference")
 def prepare_reference(self, session_id: str, reference_audio_path: str) -> dict:
     """
-    Pre-process reference audio (separate vocals, extract pitch).
-    Called after YouTube download completes.
+    Pre-process reference audio (separate vocals, extract pitch) for StudioMode.
 
-    Files are stored in {session_id}_ref/ directory to match the API's expected paths:
-    - {session_id}_ref/vocals.wav
-    - {session_id}_ref/instrumentals.wav
-    This allows the StudioMode to access reference tracks before analysis.
+    Downloads reference from storage (if URL), separates with Demucs,
+    uploads vocals/instrumentals to storage for StudioMode access via audio.py,
+    then cleans up temp files.
+
+    Storage output:
+      sessions/{session_id}_ref/vocals.wav
+      sessions/{session_id}_ref/instrumentals.wav
     """
     from tasks.audio_separation import do_separate_audio
     from tasks.pitch_analysis import do_extract_pitch
 
-    base_dir = Path(os.getenv("AUDIO_OUTPUT_DIR", "/app/audio_files"))
-    # Use {session_id}_ref format to match API endpoint expectations
-    ref_dir = base_dir / f"{session_id}_ref"
-    ref_dir.mkdir(parents=True, exist_ok=True)
+    storage = get_storage()
+    ref_temp = _temp_dir(f"{session_id}_ref")
 
-    self.update_state(state="PROGRESS", meta={"step": "separating", "progress": 30})
+    try:
+        self.update_state(state="PROGRESS", meta={"step": "downloading", "progress": 10})
 
-    # Separate vocals from reference - outputs to {session_id}_ref/
-    separation_result = do_separate_audio(reference_audio_path, f"{session_id}_ref")
+        # Download reference audio from storage if it's a URL
+        local_ref_path = _resolve_audio(
+            reference_audio_path,
+            ref_temp / "reference.wav",
+        )
 
-    # Files are already in correct location: {session_id}_ref/vocals.wav
-    ref_vocals_path = Path(separation_result["vocals_path"])
-    ref_instrumentals_path = Path(separation_result["instrumentals_path"])
+        self.update_state(state="PROGRESS", meta={"step": "separating", "progress": 30})
 
-    self.update_state(state="PROGRESS", meta={"step": "extracting_pitch", "progress": 70})
+        # Separate vocals from reference
+        # AUDIO_OUTPUT_DIR=/tmp/kiaraoke -> outputs to /tmp/kiaraoke/{session_id}_ref/
+        separation_result = do_separate_audio(local_ref_path, f"{session_id}_ref")
 
-    # Extract pitch from reference vocals
-    pitch_result = do_extract_pitch(str(ref_vocals_path), f"{session_id}_ref")
+        vocals_local = Path(separation_result["vocals_path"])
+        instrumentals_local = Path(separation_result["instrumentals_path"])
 
-    return {
-        "session_id": session_id,
-        "status": "ready",
-        "reference_vocals_path": str(ref_vocals_path),
-        "reference_instrumentals_path": str(ref_instrumentals_path),
-        "reference_pitch_path": pitch_result["pitch_path"],
-    }
+        # Upload to storage for StudioMode access (audio.py redirects to these URLs)
+        vocals_url = storage.upload_from_file(
+            vocals_local, f"sessions/{session_id}_ref/vocals.wav"
+        )
+        instru_url = storage.upload_from_file(
+            instrumentals_local, f"sessions/{session_id}_ref/instrumentals.wav"
+        )
+
+        self.update_state(state="PROGRESS", meta={"step": "extracting_pitch", "progress": 70})
+
+        # Extract pitch (used locally within this task only — not uploaded to storage)
+        pitch_result = do_extract_pitch(str(vocals_local), f"{session_id}_ref")
+
+        return {
+            "session_id": session_id,
+            "status": "ready",
+            "reference_vocals_url": vocals_url,
+            "reference_instrumentals_url": instru_url,
+            "reference_pitch_path": pitch_result.get("pitch_path", ""),
+        }
+
+    finally:
+        shutil.rmtree(ref_temp, ignore_errors=True)
+        logger.info("Cleaned up temp dir for prepare_reference session %s", session_id)

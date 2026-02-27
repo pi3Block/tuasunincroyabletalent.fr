@@ -40,9 +40,15 @@ class Settings(BaseSettings):
     secret_key: str = "dev-secret-key-change-in-production"
     debug: bool = True
 
-    # Audio
-    audio_upload_dir: str = "/app/audio_files"
+    # Audio (local temp only — persistent storage uses storages.augmenter.pro)
+    audio_upload_dir: str = "/app/audio_files"  # legacy fallback, prefer audio_temp_dir
+    audio_temp_dir: str = "/tmp/kiaraoke"       # GPU processing temp dir
     max_audio_duration: int = 300  # 5 minutes max
+
+    # Storage — storages.augmenter.pro (same API as Augmenter project)
+    storage_url: str = "https://storages.augmenter.pro"
+    storage_api_key: str = ""
+    storage_bucket: str = "kiaraoke"
 
 
 settings = Settings()

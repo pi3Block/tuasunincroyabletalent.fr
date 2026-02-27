@@ -1,9 +1,8 @@
 "use client";
 
-import { memo, useState } from "react";
+import { memo, useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import {
-  Play,
   Star,
   Clock,
   TrendingUp,
@@ -11,75 +10,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import Link from "next/link";
-
-const MOCK_PERFORMANCES = [
-  {
-    id: "1",
-    username: "Marie_Chanteuse",
-    avatar: null,
-    songTitle: "Je veux",
-    artist: "Zaz",
-    score: 87,
-    duration: "3:24",
-    timestamp: new Date(Date.now() - 1000 * 60 * 15),
-    juryComment: "Belle interprétation avec beaucoup d'émotion !",
-  },
-  {
-    id: "2",
-    username: "Lucas_Music",
-    avatar: null,
-    songTitle: "Dernière danse",
-    artist: "Indila",
-    score: 92,
-    duration: "3:32",
-    timestamp: new Date(Date.now() - 1000 * 60 * 45),
-    juryComment: "Technique vocale impressionnante, bravo !",
-  },
-  {
-    id: "3",
-    username: "SophieMusic",
-    avatar: null,
-    songTitle: "Formidable",
-    artist: "Stromae",
-    score: 78,
-    duration: "4:08",
-    timestamp: new Date(Date.now() - 1000 * 60 * 120),
-    juryComment: "Du potentiel, continue à travailler !",
-  },
-  {
-    id: "4",
-    username: "Antoine_Voice",
-    avatar: null,
-    songTitle: "La Bohème",
-    artist: "Charles Aznavour",
-    score: 95,
-    duration: "4:15",
-    timestamp: new Date(Date.now() - 1000 * 60 * 180),
-    juryComment: "Performance exceptionnelle, un vrai talent !",
-  },
-  {
-    id: "5",
-    username: "Emma_Sing",
-    avatar: null,
-    songTitle: "Papaoutai",
-    artist: "Stromae",
-    score: 84,
-    duration: "3:52",
-    timestamp: new Date(Date.now() - 1000 * 60 * 240),
-    juryComment: "Très bon rythme et bonne énergie !",
-  },
-  {
-    id: "6",
-    username: "Thomas_K",
-    avatar: null,
-    songTitle: "Tous les mêmes",
-    artist: "Stromae",
-    score: 81,
-    duration: "3:26",
-    timestamp: new Date(Date.now() - 1000 * 60 * 300),
-    juryComment: "Bonne maîtrise, quelques petites imprécisions.",
-  },
-];
+import { api, type PerformanceHistoryItem } from "@/api/client";
 
 function formatRelativeTime(date: Date): string {
   const now = new Date();
@@ -107,17 +38,16 @@ function getScoreGradient(score: number): string {
   return "from-red-500 to-rose-600";
 }
 
-function getInitials(username: string): string {
-  return username.split("_")[0].substring(0, 2).toUpperCase();
-}
-
 const PerformanceCard = memo(function PerformanceCard({
   performance,
   index,
 }: {
-  performance: (typeof MOCK_PERFORMANCES)[0];
+  performance: PerformanceHistoryItem;
   index: number;
 }) {
+  const juryComment = performance.jury_comments[0]?.comment ?? "";
+  const timestamp = new Date(performance.created_at);
+
   return (
     <motion.div
       className="relative min-w-[280px] md:min-w-[320px] snap-center"
@@ -134,54 +64,52 @@ const PerformanceCard = memo(function PerformanceCard({
         transition={{ duration: 0.2 }}
       >
         <div
-          className={`absolute top-4 right-4 px-3 py-1 rounded-full bg-gradient-to-r ${getScoreGradient(performance.score)} text-white text-sm font-bold shadow-lg`}
+          className={`absolute top-4 right-4 px-3 py-1 rounded-full bg-linear-to-r ${getScoreGradient(performance.total_score)} text-white text-sm font-bold shadow-lg`}
         >
-          {performance.score}%
+          {performance.total_score}%
         </div>
 
         <div className="flex items-center gap-3 mb-4">
-          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-white font-bold text-sm">
-            {getInitials(performance.username)}
+          <div className="w-10 h-10 rounded-full bg-linear-to-br from-purple-500 to-pink-500 flex items-center justify-center text-white font-bold text-sm">
+            🎤
           </div>
           <div>
-            <div className="text-white font-medium text-sm">
-              {performance.username.replace("_", " ")}
-            </div>
+            <div className="text-white font-medium text-sm">Anonyme</div>
             <div className="text-gray-500 text-xs flex items-center gap-1">
               <Clock className="w-3 h-3" />
-              {formatRelativeTime(performance.timestamp)}
+              {formatRelativeTime(timestamp)}
             </div>
           </div>
         </div>
 
         <div className="mb-4">
           <h4 className="text-white font-semibold text-lg truncate">
-            {performance.songTitle}
+            {performance.track_name}
           </h4>
-          <p className="text-gray-400 text-sm truncate">{performance.artist}</p>
-        </div>
-
-        <div className="p-3 rounded-lg bg-white/5 border border-white/5 mb-4">
-          <p className="text-gray-300 text-sm italic">
-            &ldquo;{performance.juryComment}&rdquo;
+          <p className="text-gray-400 text-sm truncate">
+            {performance.artist_name}
           </p>
         </div>
 
-        <div className="flex items-center justify-between text-xs text-gray-500">
-          <div className="flex items-center gap-1">
-            <Play className="w-3 h-3" />
-            <span>{performance.duration}</span>
+        {juryComment && (
+          <div className="p-3 rounded-lg bg-white/5 border border-white/5 mb-4">
+            <p className="text-gray-300 text-sm italic">
+              &ldquo;{juryComment}&rdquo;
+            </p>
           </div>
+        )}
+
+        <div className="flex items-center justify-end text-xs">
           <div className="flex items-center gap-1">
             <Star
-              className={`w-3 h-3 ${getScoreColor(performance.score)}`}
+              className={`w-3 h-3 ${getScoreColor(performance.total_score)}`}
             />
-            <span className={getScoreColor(performance.score)}>
-              {performance.score >= 90
+            <span className={getScoreColor(performance.total_score)}>
+              {performance.total_score >= 90
                 ? "Excellent"
-                : performance.score >= 80
+                : performance.total_score >= 80
                   ? "Très bien"
-                  : performance.score >= 70
+                  : performance.total_score >= 70
                     ? "Bien"
                     : "À améliorer"}
             </span>
@@ -189,6 +117,28 @@ const PerformanceCard = memo(function PerformanceCard({
         </div>
       </motion.div>
     </motion.div>
+  );
+});
+
+const SkeletonCard = memo(function SkeletonCard() {
+  return (
+    <div className="relative min-w-[280px] md:min-w-[320px] snap-center">
+      <div className="p-5 rounded-2xl bg-white/5 border border-white/10 animate-pulse">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 rounded-full bg-white/10" />
+          <div className="space-y-2">
+            <div className="h-3 w-24 rounded bg-white/10" />
+            <div className="h-2 w-16 rounded bg-white/10" />
+          </div>
+        </div>
+        <div className="space-y-2 mb-4">
+          <div className="h-5 w-40 rounded bg-white/10" />
+          <div className="h-3 w-28 rounded bg-white/10" />
+        </div>
+        <div className="h-12 rounded-lg bg-white/10 mb-4" />
+        <div className="h-3 w-16 rounded bg-white/10 ml-auto" />
+      </div>
+    </div>
   );
 });
 
@@ -211,12 +161,27 @@ const LiveIndicator = memo(function LiveIndicator() {
 
 export const RecentPerformancesSection = memo(
   function RecentPerformancesSection() {
+    const [performances, setPerformances] = useState<PerformanceHistoryItem[]>(
+      [],
+    );
+    const [loading, setLoading] = useState(true);
     const [currentIndex, setCurrentIndex] = useState(0);
     const visibleCount = 3;
 
+    useEffect(() => {
+      api
+        .getResultsHistory(6)
+        .then(setPerformances)
+        .catch(() => {})
+        .finally(() => setLoading(false));
+    }, []);
+
+    // Masquer la section si aucune donnée après chargement
+    if (!loading && performances.length === 0) return null;
+
     const canScrollLeft = currentIndex > 0;
     const canScrollRight =
-      currentIndex < MOCK_PERFORMANCES.length - visibleCount;
+      currentIndex < performances.length - visibleCount;
 
     const scrollLeft = () => {
       if (canScrollLeft) setCurrentIndex(currentIndex - 1);
@@ -244,16 +209,18 @@ export const RecentPerformancesSection = memo(
             <div>
               <div className="flex items-center gap-3 mb-3">
                 <LiveIndicator />
-                <motion.span
-                  className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-green-500/20 border border-green-500/30 text-green-400 text-sm"
-                  initial={{ opacity: 0, x: -20 }}
-                  whileInView={{ opacity: 1, x: 0 }}
-                  viewport={{ once: true }}
-                  transition={{ delay: 0.3 }}
-                >
-                  <TrendingUp className="w-3 h-3" />
-                  {MOCK_PERFORMANCES.length} aujourd&apos;hui
-                </motion.span>
+                {!loading && (
+                  <motion.span
+                    className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-green-500/20 border border-green-500/30 text-green-400 text-sm"
+                    initial={{ opacity: 0, x: -20 }}
+                    whileInView={{ opacity: 1, x: 0 }}
+                    viewport={{ once: true }}
+                    transition={{ delay: 0.3 }}
+                  >
+                    <TrendingUp className="w-3 h-3" />
+                    {performances.length} récentes
+                  </motion.span>
+                )}
               </div>
 
               <h2 className="text-3xl md:text-4xl font-bold text-white">
@@ -264,76 +231,84 @@ export const RecentPerformancesSection = memo(
               </h2>
             </div>
 
-            <div className="hidden md:flex items-center gap-2">
-              <motion.button
-                className={`p-2 rounded-full border ${
-                  canScrollLeft
-                    ? "border-white/20 text-white hover:bg-white/10"
-                    : "border-white/10 text-white/30 cursor-not-allowed"
-                }`}
-                onClick={scrollLeft}
-                disabled={!canScrollLeft}
-                whileHover={canScrollLeft ? { scale: 1.1 } : {}}
-                whileTap={canScrollLeft ? { scale: 0.9 } : {}}
-              >
-                <ChevronLeft className="w-5 h-5" />
-              </motion.button>
-              <motion.button
-                className={`p-2 rounded-full border ${
-                  canScrollRight
-                    ? "border-white/20 text-white hover:bg-white/10"
-                    : "border-white/10 text-white/30 cursor-not-allowed"
-                }`}
-                onClick={scrollRight}
-                disabled={!canScrollRight}
-                whileHover={canScrollRight ? { scale: 1.1 } : {}}
-                whileTap={canScrollRight ? { scale: 0.9 } : {}}
-              >
-                <ChevronRight className="w-5 h-5" />
-              </motion.button>
-            </div>
+            {!loading && performances.length > visibleCount && (
+              <div className="hidden md:flex items-center gap-2">
+                <motion.button
+                  className={`p-2 rounded-full border ${
+                    canScrollLeft
+                      ? "border-white/20 text-white hover:bg-white/10"
+                      : "border-white/10 text-white/30 cursor-not-allowed"
+                  }`}
+                  onClick={scrollLeft}
+                  disabled={!canScrollLeft}
+                  whileHover={canScrollLeft ? { scale: 1.1 } : {}}
+                  whileTap={canScrollLeft ? { scale: 0.9 } : {}}
+                >
+                  <ChevronLeft className="w-5 h-5" />
+                </motion.button>
+                <motion.button
+                  className={`p-2 rounded-full border ${
+                    canScrollRight
+                      ? "border-white/20 text-white hover:bg-white/10"
+                      : "border-white/10 text-white/30 cursor-not-allowed"
+                  }`}
+                  onClick={scrollRight}
+                  disabled={!canScrollRight}
+                  whileHover={canScrollRight ? { scale: 1.1 } : {}}
+                  whileTap={canScrollRight ? { scale: 0.9 } : {}}
+                >
+                  <ChevronRight className="w-5 h-5" />
+                </motion.button>
+              </div>
+            )}
           </motion.div>
 
-          <div className="md:hidden overflow-x-auto pb-4 -mx-4 px-4 snap-x snap-mandatory scrollbar-hide">
+          {/* Mobile: horizontal swipe carousel */}
+          <div className="lg:hidden overflow-x-auto pb-4 -mx-4 px-4 snap-x snap-mandatory scrollbar-hide">
             <div className="flex gap-4">
-              {MOCK_PERFORMANCES.map((performance, index) => (
-                <PerformanceCard
-                  key={performance.id}
-                  performance={performance}
-                  index={index}
-                />
-              ))}
+              {loading
+                ? Array.from({ length: 3 }).map((_, i) => (
+                    <SkeletonCard key={i} />
+                  ))
+                : performances.map((performance, index) => (
+                    <PerformanceCard
+                      key={performance.session_id}
+                      performance={performance}
+                      index={index}
+                    />
+                  ))}
             </div>
           </div>
 
-          <div className="hidden md:block overflow-hidden">
-            <motion.div
-              className="flex gap-6"
-              animate={{ x: -currentIndex * (320 + 24) }}
-              transition={{ type: "spring", stiffness: 300, damping: 30 }}
-            >
-              {MOCK_PERFORMANCES.map((performance, index) => (
-                <PerformanceCard
-                  key={performance.id}
-                  performance={performance}
-                  index={index}
-                />
-              ))}
-            </motion.div>
+          {/* Desktop: static 3-column grid */}
+          <div className="hidden lg:grid lg:grid-cols-3 gap-6">
+            {loading
+              ? Array.from({ length: 3 }).map((_, i) => (
+                  <SkeletonCard key={i} />
+                ))
+              : performances.map((performance, index) => (
+                  <PerformanceCard
+                    key={performance.session_id}
+                    performance={performance}
+                    index={index}
+                  />
+                ))}
           </div>
 
-          <div className="md:hidden flex items-center justify-center gap-2 mt-6">
-            {MOCK_PERFORMANCES.map((_, index) => (
-              <motion.div
-                key={index}
-                className={`w-2 h-2 rounded-full ${
-                  index === 0 ? "bg-white" : "bg-white/30"
-                }`}
-                animate={index === 0 ? { scale: [1, 1.2, 1] } : {}}
-                transition={{ duration: 2, repeat: Infinity }}
-              />
-            ))}
-          </div>
+          {!loading && performances.length > 0 && (
+            <div className="lg:hidden flex items-center justify-center gap-2 mt-6">
+              {performances.map((_, index) => (
+                <motion.div
+                  key={index}
+                  className={`w-2 h-2 rounded-full ${
+                    index === 0 ? "bg-white" : "bg-white/30"
+                  }`}
+                  animate={index === 0 ? { scale: [1, 1.2, 1] } : {}}
+                  transition={{ duration: 2, repeat: Infinity }}
+                />
+              ))}
+            </div>
+          )}
 
           <motion.div
             className="text-center mt-12"
@@ -347,7 +322,7 @@ export const RecentPerformancesSection = memo(
             </p>
             <Link href="/app">
               <motion.span
-                className="inline-block px-6 py-3 rounded-full bg-gradient-to-r from-purple-500 to-pink-500 text-white font-semibold shadow-lg shadow-purple-500/25 cursor-pointer"
+                className="inline-block px-6 py-3 rounded-full bg-linear-to-r from-purple-500 to-pink-500 text-white font-semibold shadow-lg shadow-purple-500/25 cursor-pointer"
                 whileHover={{
                   scale: 1.05,
                   boxShadow: "0 20px 40px -10px rgba(168, 85, 247, 0.4)",

@@ -109,6 +109,19 @@ export interface RecentTrack {
   timestamp: string;
 }
 
+export interface PerformanceHistoryItem {
+  session_id: string;
+  track_name: string;
+  artist_name: string;
+  album_image?: string | null;
+  total_score: number;
+  pitch_accuracy: number;
+  rhythm_accuracy: number;
+  lyrics_accuracy: number;
+  jury_comments: JuryComment[];
+  created_at: string;
+}
+
 export interface SyncedLyricLine {
   text: string;
   startTimeMs: number;
@@ -231,6 +244,12 @@ class ApiClient {
 
   async getRecentTracks(limit = 10): Promise<RecentTrack[]> {
     return this.request<RecentTrack[]>(`/api/search/recent?limit=${limit}`);
+  }
+
+  async getResultsHistory(limit = 6): Promise<PerformanceHistoryItem[]> {
+    return this.request<PerformanceHistoryItem[]>(
+      `/api/results/history?limit=${limit}`,
+    );
   }
 
   async startSession(
