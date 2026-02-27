@@ -79,19 +79,17 @@ services:
       start_period: 40s
 
   # ============================================
-  # Worker Heavy - GPU (Demucs, CREPE)
+  # Worker Heavy - Multi-GPU (Demucs + CREPE)
   # ============================================
-  # GPU 1 (RTX 3080, 10 Go, GPU-bdb1f5e4) — SHARED with Ollama Heavy via time-sharing
-  # Pipeline.py unloads qwen3:8b (keep_alive:0, poll /api/ps) before Demucs loads.
-  # LLM jury: LiteLLM proxy → jury-comment (Ollama Heavy + Light load-balanced)
-  #   → Ollama Heavy direct fallback (qwen3:8b, port 11434) → heuristic
-  # Whisper: shared-whisper HTTP (GPU 3) → Groq Whisper fallback (free)
-  # Memory budget GPU 1 (10 GB):
-  #   - Ollama Heavy unloaded before pipeline: 0 GB
-  #   - Demucs htdemucs: ~3.5 GB
-  #   - CREPE full: ~1 GB (sequential, after Demucs)
-  #   - De-bleeding STFT tensors: ~0.5 GB peak
-  #   - Total peak: ~5 GB → 5 GB headroom
+  # Dedicated GPUs — no Ollama sharing, no time-sharing, no OOM:
+  #   cuda:0 = GPU 1 (RTX 3080, 10 GB) → Demucs + de-bleeding
+  #   cuda:1 = GPU 2 (RTX 3070, 8 GB) → CREPE pitch extraction
+  # Whisper: shared-whisper HTTP (GPU 3, separate container)
+  # Jury LLM: 100% LiteLLM/Groq (no local GPU needed)
+  #
+  # Memory budget:
+  #   cuda:0 (GPU 1): Demucs ~5.5 GB peak + de-bleeding ~0.5 GB = ~6 GB / 10 GB
+  #   cuda:1 (GPU 2): CREPE full ~1 GB / 8 GB
   worker-heavy:
     build:
       context: ./worker
@@ -100,20 +98,17 @@ services:
     volumes:
       - model-cache:/root/.cache
     environment:
-      # Shared infrastructure — Coolify container names with UUID suffix
-      # DATABASE_URL and REDIS_URL must be set in Coolify env panel
       - REDIS_URL=${REDIS_URL}
       - DATABASE_URL=${DATABASE_URL}
-      # GPU 1: Ollama Heavy (qwen3:8b, port 11434) — unloaded before Demucs, fallback for jury Tier 2
-      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3:8b}
+      # Whisper: shared-whisper HTTP (GPU 3) → Groq cloud fallback
       - SHARED_WHISPER_URL=${SHARED_WHISPER_URL:-http://shared-whisper:9000}
       - WHISPER_MODEL=${WHISPER_MODEL:-turbo}
-      # Whisper: shared-whisper primary, Groq cloud fallback, local disabled
       - WHISPER_LOCAL_FALLBACK=false
       - GROQ_API_KEY=${GROQ_API_KEY:-}
-      - CUDA_VISIBLE_DEVICES=0
-      # Remote storage — storages.augmenter.pro (replaces local audio-data volume)
+      # Multi-GPU device assignment
+      - DEMUCS_DEVICE=cuda:0
+      - CREPE_DEVICE=cuda:1
+      # Remote storage — storages.augmenter.pro
       - STORAGE_URL=${STORAGE_URL:-https://storages.augmenter.pro}
       - STORAGE_API_KEY=${STORAGE_API_KEY:-}
       - STORAGE_BUCKET=${STORAGE_BUCKET:-kiaraoke}
@@ -123,10 +118,11 @@ services:
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
       - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
       - LANGFUSE_BASE_URL=${LANGFUSE_BASE_URL:-http://langfuse-wogs8c0wgg8o4gckkg4oc4o8:3000}
-      # LiteLLM proxy — jury-comment load-balanced: Ollama Heavy (GPU 1) + Light (GPU 0)
+      # LiteLLM proxy — jury 100% cloud (Groq qwen3-32b → qwen3-8b fallback)
       - LITELLM_HOST=${LITELLM_HOST:-http://host.docker.internal:4000}
       - LITELLM_API_KEY=${LITELLM_API_KEY:-}
       - LITELLM_JURY_MODEL=${LITELLM_JURY_MODEL:-jury-comment}
+      - LITELLM_JURY_FALLBACK_MODEL=${LITELLM_JURY_FALLBACK_MODEL:-jury-comment-fallback}
       # Sentry error tracking (optional)
       - SENTRY_DSN=${SENTRY_DSN:-}
       - SENTRY_ENVIRONMENT=${SENTRY_ENVIRONMENT:-production}
@@ -137,57 +133,10 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ['GPU-bdb1f5e4-d03c-b5c1-bb9c-59f3d08d161d']
+              device_ids: ['GPU-bdb1f5e4-d03c-b5c1-bb9c-59f3d08d161d', 'GPU-c99d136d-ff10-5223-3919-9a28e55ffc60']
               capabilities: [gpu]
         limits:
           memory: 8G
-    restart: unless-stopped
-    networks:
-      - voicejury-network
-      - coolify
-
-  # ============================================
-  # Worker Pool - GPU secondaire (optionnel)
-  # ============================================
-  # Second GPU worker for light tasks (CREPE pitch analysis)
-  # Activate with COMPOSE_PROFILES=multi-gpu
-  # For single GPU setup: don't set COMPOSE_PROFILES
-  worker-pool:
-    build:
-      context: ./worker
-      dockerfile: Dockerfile.optimized
-    command: ["celery", "-A", "tasks.celery_app", "worker", "--loglevel=info", "--pool=solo", "-Q", "gpu", "-n", "pool@%h"]
-    volumes:
-      - model-cache:/root/.cache
-    environment:
-      # DATABASE_URL and REDIS_URL must be set in Coolify env panel
-      - REDIS_URL=${REDIS_URL}
-      - DATABASE_URL=${DATABASE_URL}
-      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11435}
-      - SHARED_WHISPER_URL=${SHARED_WHISPER_URL:-http://shared-whisper:9000}
-      - WHISPER_MODEL=${WHISPER_MODEL:-turbo}
-      # Whisper: shared-whisper primary, Groq cloud fallback, local disabled
-      - WHISPER_LOCAL_FALLBACK=false
-      - GROQ_API_KEY=${GROQ_API_KEY:-}
-      # Remote storage
-      - STORAGE_URL=${STORAGE_URL:-https://storages.augmenter.pro}
-      - STORAGE_API_KEY=${STORAGE_API_KEY:-}
-      - STORAGE_BUCKET=${STORAGE_BUCKET:-kiaraoke}
-      - AUDIO_TEMP_DIR=/tmp/kiaraoke
-      - AUDIO_OUTPUT_DIR=/tmp/kiaraoke
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ['GPU-85c38fae-1bcf-d15b-4f36-e1f581acd76e']
-              capabilities: [gpu]
-        limits:
-          memory: 512M
-    profiles:
-      - multi-gpu
     restart: unless-stopped
     networks:
       - voicejury-network

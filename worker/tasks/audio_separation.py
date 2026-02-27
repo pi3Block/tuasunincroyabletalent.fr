@@ -14,17 +14,20 @@ logger = logging.getLogger(__name__)
 _demucs_model = None
 
 
-def get_demucs_model():
-    """Lazy load Demucs model."""
+def get_demucs_model(device: str = "cuda:0"):
+    """Lazy load Demucs model on the specified device."""
     global _demucs_model
-    if _demucs_model is None:
-        import torch
-        from demucs.pretrained import get_model
+    import torch
 
-        # Use htdemucs for best quality
+    if _demucs_model is None:
+        from demucs.pretrained import get_model
         _demucs_model = get_model("htdemucs")
-        if torch.cuda.is_available():
-            _demucs_model = _demucs_model.cuda()
+
+    # Ensure model is on the target device (may have been moved to CPU after de-bleeding)
+    target = torch.device(device if torch.cuda.is_available() else "cpu")
+    if next(_demucs_model.parameters()).device != target:
+        _demucs_model = _demucs_model.to(target)
+
     return _demucs_model
 
 
@@ -109,13 +112,14 @@ def apply_debleeding(
     return debleeded_vocals, debleeded_instru
 
 
-def do_separate_audio(audio_path: str, session_id: str) -> dict:
+def do_separate_audio(audio_path: str, session_id: str, device: str = "cuda:0") -> dict:
     """
     Core logic: Separate audio into vocals and instrumentals using Demucs.
 
     Args:
         audio_path: Path to input audio file
         session_id: Session identifier
+        device: CUDA device for Demucs (default "cuda:0" = GPU 1 RTX 3080)
 
     Returns:
         dict with paths to separated stems
@@ -149,31 +153,43 @@ def do_separate_audio(audio_path: str, session_id: str) -> dict:
     # Add batch dimension
     waveform = waveform.unsqueeze(0)
 
-    if torch.cuda.is_available():
-        waveform = waveform.cuda()
+    target_device = torch.device(device if torch.cuda.is_available() else "cpu")
+    waveform = waveform.to(target_device)
 
-    logger.info("Separating audio...")
+    logger.info("Separating audio on %s...", target_device)
 
     # Apply Demucs model
-    model = get_demucs_model()
+    model = get_demucs_model(device)
     with torch.no_grad():
-        sources = apply_model(model, waveform, device=waveform.device)
+        sources = apply_model(model, waveform, device=target_device)
 
     # Demucs outputs: drums, bass, other, vocals (index 3)
     vocals = sources[0, 3]  # Shape: (2, samples)
     instrumentals = sources[0, :3].sum(dim=0)  # Mix drums + bass + other
+
+    # Free Demucs model from GPU BEFORE de-bleeding to reclaim ~3-4 GB VRAM.
+    # Model stays on CPU (warm) — moved back to GPU on next call via get_demucs_model().
+    global _demucs_model
+    del sources
+    if _demucs_model is not None:
+        _demucs_model = _demucs_model.cpu()
+    torch.cuda.empty_cache()
 
     # De-bleeding: reduce cross-talk via spectral soft masking
     debleed_enabled = os.getenv("DEBLEED_ENABLED", "true").lower() in ("true", "1", "yes")
     if debleed_enabled:
         try:
             logger.info("Applying spectral de-bleeding...")
-            # Free cached GPU allocations before STFT (intermediate Demucs buffers)
-            import torch as _torch
-            if _torch.cuda.is_available():
-                _torch.cuda.empty_cache()
             vocals, instrumentals = apply_debleeding(vocals, instrumentals)
             logger.info("De-bleeding complete")
+        except RuntimeError as e:
+            if "CUDA out of memory" in str(e):
+                logger.warning("De-bleeding OOM on GPU, retrying on CPU...")
+                torch.cuda.empty_cache()
+                vocals, instrumentals = apply_debleeding(vocals.cpu(), instrumentals.cpu())
+                logger.info("De-bleeding complete (CPU fallback)")
+            else:
+                logger.warning("De-bleeding failed (using raw stems): %s", e)
         except Exception as e:
             logger.warning("De-bleeding failed (using raw stems): %s", e)
 

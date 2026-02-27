@@ -2,15 +2,17 @@
 Audio analysis pipeline - orchestrates all analysis tasks.
 Runs all processing directly (not as sub-tasks) to avoid Celery .get() issues.
 
-Storage migration (2026-02-27):
-- Audio files live on storages.augmenter.pro (bucket: kiaraoke)
-- GPU tasks use local temp /tmp/kiaraoke/ for processing
-- Pattern: download from storage -> GPU process -> upload to storage -> delete temp
+Multi-GPU architecture (2026-02-27):
+- GPU 1 (RTX 3080 10GB, cuda:0): Demucs + de-bleeding (dedicated, no Ollama)
+- GPU 4 (RTX 3060 Ti 8GB, cuda:1): CREPE pitch extraction (dedicated)
+- GPU 3 (RTX 3070 8GB): shared-whisper HTTP (separate container)
+- Jury LLM: 100% LiteLLM/Groq (no local GPU needed)
 
-Storage paths:
+Storage (storages.augmenter.pro, bucket: kiaraoke):
   cache/{youtube_id}/reference.wav         <- YouTube original (permanent)
   cache/{youtube_id}/vocals.wav            <- Demucs ref cache (90 days)
   cache/{youtube_id}/instrumentals.wav
+  cache/{youtube_id}/pitch_data.npz        <- CREPE ref cache
   sessions/{session_id}_ref/vocals.wav     <- StudioMode ref tracks
   sessions/{session_id}_ref/instrumentals.wav
   sessions/{session_id}_user/vocals.wav    <- User separated tracks
@@ -30,39 +32,11 @@ from .storage_client import get_storage
 
 logger = logging.getLogger(__name__)
 
-# Redis URL for cross-project GPU coordination (shared-redis)
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-GPU_PIPELINE_KEY = "gpu:heavy:pipeline_active"
-GPU_PIPELINE_TTL = 300  # 5 minutes — self-healing if worker crashes
 
-
-def _acquire_gpu_lock():
-    """
-    Set a Redis key to signal augmenter's GpuHealthService that GPU 1
-    is in use by kiaraoke's pipeline. Prevents the health service from
-    reloading Ollama Heavy mid-Demucs.
-
-    Self-healing: 5-min TTL ensures the key expires even if worker crashes.
-    Graceful: if Redis is unavailable, pipeline continues without lock.
-    """
-    try:
-        import redis
-        client = redis.from_url(REDIS_URL, socket_timeout=2)
-        client.setex(GPU_PIPELINE_KEY, GPU_PIPELINE_TTL, "kiaraoke")
-        logger.info("GPU pipeline lock acquired (%s, TTL %ds)", GPU_PIPELINE_KEY, GPU_PIPELINE_TTL)
-    except Exception as e:
-        logger.debug("GPU pipeline lock skipped (Redis unavailable): %s", e)
-
-
-def _release_gpu_lock():
-    """Release the GPU pipeline lock. Safe to call even if lock was never acquired."""
-    try:
-        import redis
-        client = redis.from_url(REDIS_URL, socket_timeout=2)
-        client.delete(GPU_PIPELINE_KEY)
-        logger.info("GPU pipeline lock released")
-    except Exception:
-        pass  # TTL will auto-expire
+# Dedicated GPU devices — no Ollama sharing, no locks needed
+DEMUCS_DEVICE = os.getenv("DEMUCS_DEVICE", "cuda:0")  # GPU 1 RTX 3080 10GB
+CREPE_DEVICE = os.getenv("CREPE_DEVICE", "cuda:1")     # GPU 4 RTX 3060 Ti 8GB
 
 
 def _notify_tracks_ready(session_id: str):
@@ -88,6 +62,20 @@ def _notify_tracks_ready(session_id: str):
 
 def _is_storage_url(path: str) -> bool:
     return path.startswith("http://") or path.startswith("https://")
+
+
+def _safe_upload(storage, local_path: Path, relative_path: str, content_type: str = "audio/wav") -> str | None:
+    """
+    Upload a file to storage, returning public URL on success or None on failure.
+
+    Used for non-critical uploads (cache, session tracks) where failure should
+    degrade gracefully instead of crashing the pipeline.
+    """
+    try:
+        return storage.upload_from_file(local_path, relative_path, content_type)
+    except Exception as e:
+        logger.warning("Upload failed (non-fatal) %s: %s", relative_path, e)
+        return None
 
 
 def _temp_dir(name: str) -> Path:
@@ -175,67 +163,18 @@ def is_ref_separation_in_storage(youtube_id: str) -> bool:
 
 
 def log_gpu_status():
-    """Log GPU availability and memory usage."""
+    """Log GPU availability and memory usage for all visible devices."""
     import torch
     if torch.cuda.is_available():
-        device_name = torch.cuda.get_device_name(0)
-        mem_allocated = torch.cuda.memory_allocated(0) / 1024**3
-        mem_total = torch.cuda.get_device_properties(0).total_memory / 1024**3
-        logger.info("GPU: %s (%.1fGB / %.1fGB)", device_name, mem_allocated, mem_total)
+        for i in range(torch.cuda.device_count()):
+            name = torch.cuda.get_device_name(i)
+            used = torch.cuda.memory_allocated(i) / 1024**3
+            total = torch.cuda.get_device_properties(i).total_memory / 1024**3
+            logger.info("GPU cuda:%d: %s (%.1fGB / %.1fGB)", i, name, used, total)
         return True
     else:
         logger.warning("CUDA NOT available - running on CPU (SLOW!)")
         return False
-
-
-def _unload_ollama_model_for_gpu():
-    """
-    Unload Ollama Heavy model from GPU 1 to free VRAM for Demucs/CREPE.
-
-    GPU 1 (RTX 3080, 10 GB) is shared between Ollama Heavy (qwen3:8b, ~6 GB)
-    and the voicejury worker (Demucs ~3.5 GB + CREPE ~1 GB). Peak usage ~5 GB,
-    but with Ollama loaded concurrently the total would exceed 10 GB.
-
-    Sends keep_alive=0 to force immediate unload, then polls /api/ps until the
-    model is confirmed gone from VRAM (max 20s). The model auto-reloads
-    on next Ollama Heavy request (~2-3s cold start, jury runs after GPU tasks).
-    """
-    import time
-    import httpx
-
-    ollama_host = os.getenv("OLLAMA_HOST", "http://host.docker.internal:11434")
-    ollama_model = os.getenv("OLLAMA_MODEL", "qwen3:8b")
-
-    # Step 1: Request unload (keep_alive=0 overrides OLLAMA_KEEP_ALIVE=-1 for this call)
-    try:
-        response = httpx.post(
-            f"{ollama_host}/api/generate",
-            json={"model": ollama_model, "keep_alive": 0},
-            timeout=10.0,
-        )
-        if response.status_code == 200:
-            logger.info("Sent unload request for Ollama %s -- waiting for VRAM release...", ollama_model)
-        else:
-            logger.warning("Ollama unload request returned status %d", response.status_code)
-    except Exception as e:
-        logger.warning("Failed to send Ollama unload request (GPU may already be free): %s", e)
-        return
-
-    # Step 2: Poll /api/ps until model is confirmed unloaded (max 20s)
-    deadline = time.time() + 20.0
-    while time.time() < deadline:
-        time.sleep(0.5)
-        try:
-            ps_resp = httpx.get(f"{ollama_host}/api/ps", timeout=3.0)
-            if ps_resp.status_code == 200:
-                loaded_models = ps_resp.json().get("models", [])
-                if not loaded_models:
-                    logger.info("Ollama VRAM confirmed free -- proceeding with Demucs/CREPE")
-                    return
-        except Exception:
-            pass  # Transient error, keep polling
-
-    logger.warning("Ollama model may still be in VRAM after 20s -- proceeding anyway")
 
 
 @shared_task(bind=True, name="tasks.pipeline.analyze_performance")
@@ -251,27 +190,16 @@ def analyze_performance(
     """
     Full analysis pipeline for a vocal performance.
 
-    Steps:
-    1. Unload Ollama to free GPU VRAM
-    2. Download user audio from storage -> /tmp/kiaraoke/
-    3. Separate user audio (Demucs) -> upload user_vocals/instrumentals to storage
-    4. Check ref separation in storage cache:
-       - Cache HIT:  download ref vocals/instrumentals from storage
-       - Cache MISS: download reference audio, separate, upload to storage cache
-    5. Cross-correlation sync (auto offset detection)
-    6. Extract pitch (CREPE)
-    7. Transcribe user vocals (Whisper)
-    8. Fetch reference lyrics (Genius)
-    9. Score + Jury feedback (LLM, parallel x3 personas)
-    10. Cleanup /tmp/kiaraoke/
+    Multi-GPU: Demucs on cuda:0 (GPU 1), CREPE on cuda:1 (GPU 4), Whisper via HTTP (GPU 3).
 
-    Args:
-        session_id: Session identifier
-        user_audio_path: Storage URL or legacy local path for user recording
-        reference_audio_path: Storage URL or legacy local path for reference audio
-        song_title: Name of the song
-        artist_name: Artist name
-        youtube_id: YouTube video ID for reference separation cache lookup
+    Steps:
+    1. Download user audio from storage -> /tmp/kiaraoke/
+    2. Separate user audio (Demucs, cuda:0)
+    3. Check ref separation in storage cache (Demucs if MISS)
+    4. Cross-correlation sync (CPU)
+    5. CREPE pitch (cuda:1) || Whisper+Lyrics (HTTP) — parallel
+    6. Score + Jury feedback (LiteLLM, no GPU)
+    7. Cleanup /tmp/kiaraoke/
     """
     from tasks.audio_separation import do_separate_audio
     from tasks.pitch_analysis import do_extract_pitch
@@ -288,18 +216,9 @@ def analyze_performance(
 
     try:
         # ============================================================
-        # GPU STATUS CHECK + PIPELINE LOCK
-        # Acquire Redis lock to prevent augmenter's GpuHealthService
-        # from reloading Ollama Heavy while we use GPU 1.
+        # GPU STATUS CHECK (dedicated GPUs, no locks needed)
         # ============================================================
         has_gpu = log_gpu_status()
-        _acquire_gpu_lock()
-
-        # ============================================================
-        # GPU TIME-SHARING: Unload Ollama Heavy from GPU 1
-        # ============================================================
-        if has_gpu:
-            _unload_ollama_model_for_gpu()
 
         # ============================================================
         # LANGFUSE PIPELINE TRACE
@@ -343,23 +262,20 @@ def analyze_performance(
                 pass
 
             # Upload user vocals/instrumentals to storage — parallel (StudioMode access)
+            # Non-fatal: pipeline continues even if storage is unavailable (tracks won't be in StudioMode)
             user_vocals_local = Path(user_separation["vocals_path"])
             user_instru_local = Path(user_separation["instrumentals_path"])
             with ThreadPoolExecutor(max_workers=2) as pool:
-                futures = [
-                    pool.submit(
-                        storage.upload_from_file,
-                        user_vocals_local,
-                        f"sessions/{session_id}_user/vocals.wav",
-                    ),
-                    pool.submit(
-                        storage.upload_from_file,
-                        user_instru_local,
-                        f"sessions/{session_id}_user/instrumentals.wav",
-                    ),
-                ]
-                for f in futures:
-                    f.result()  # propagate upload errors
+                pool.submit(
+                    _safe_upload, storage,
+                    user_vocals_local,
+                    f"sessions/{session_id}_user/vocals.wav",
+                )
+                pool.submit(
+                    _safe_upload, storage,
+                    user_instru_local,
+                    f"sessions/{session_id}_user/instrumentals.wav",
+                )
 
             update_progress(self, "separating_user_done", 20, "Voix isolee !")
 
@@ -384,30 +300,29 @@ def analyze_performance(
                 ref_vocals_path = str(ref_vocals_local)
                 ref_instrumentals_path = str(ref_instru_local)
                 # Ensure session_ref tracks exist in storage for StudioMode — parallel
+                # Non-fatal: StudioMode degrades but analysis completes
                 if not storage.exists(f"sessions/{session_id}_ref/vocals.wav"):
                     with ThreadPoolExecutor(max_workers=2) as pool:
-                        ref_futures = [
-                            pool.submit(
-                                storage.upload_from_file,
-                                ref_vocals_local,
-                                f"sessions/{session_id}_ref/vocals.wav",
-                            ),
-                            pool.submit(
-                                storage.upload_from_file,
-                                ref_instru_local,
-                                f"sessions/{session_id}_ref/instrumentals.wav",
-                            ),
-                        ]
-                        for f in ref_futures:
-                            f.result()  # propagate upload errors
+                        pool.submit(
+                            _safe_upload, storage,
+                            ref_vocals_local,
+                            f"sessions/{session_id}_ref/vocals.wav",
+                        )
+                        pool.submit(
+                            _safe_upload, storage,
+                            ref_instru_local,
+                            f"sessions/{session_id}_ref/instrumentals.wav",
+                        )
             else:
                 # CACHE MISS: download reference audio, separate, upload to cache + session_ref
                 logger.info("No storage cache for %s, separating reference...", youtube_id)
                 update_progress(self, "separating_reference", 25, "Preparation de la reference...")
 
+                # Preserve extension from URL (.flac or .wav)
+                ref_ext = ".flac" if reference_audio_path.endswith(".flac") else ".wav"
                 local_ref = _resolve_audio(
                     reference_audio_path,
-                    ref_temp / "reference.wav",
+                    ref_temp / f"reference{ref_ext}",
                 )
                 ref_separation = do_separate_audio(local_ref, f"{session_id}_ref")
 
@@ -425,36 +340,29 @@ def analyze_performance(
                 ref_instru_local = Path(ref_instrumentals_path)
 
                 # Upload to permanent cache + session_ref — all in parallel
+                # Non-fatal: analysis uses local files, uploads are for StudioMode + future cache
                 with ThreadPoolExecutor(max_workers=4) as pool:
-                    futures = [
-                        pool.submit(
-                            storage.upload_from_file,
-                            ref_vocals_local,
-                            f"sessions/{session_id}_ref/vocals.wav",
-                        ),
-                        pool.submit(
-                            storage.upload_from_file,
-                            ref_instru_local,
-                            f"sessions/{session_id}_ref/instrumentals.wav",
-                        ),
-                    ]
+                    pool.submit(
+                        _safe_upload, storage,
+                        ref_vocals_local,
+                        f"sessions/{session_id}_ref/vocals.wav",
+                    )
+                    pool.submit(
+                        _safe_upload, storage,
+                        ref_instru_local,
+                        f"sessions/{session_id}_ref/instrumentals.wav",
+                    )
                     if youtube_id:
-                        futures += [
-                            pool.submit(
-                                storage.upload_from_file,
-                                ref_vocals_local,
-                                f"cache/{youtube_id}/vocals.wav",
-                            ),
-                            pool.submit(
-                                storage.upload_from_file,
-                                ref_instru_local,
-                                f"cache/{youtube_id}/instrumentals.wav",
-                            ),
-                        ]
-                    for f in futures:
-                        f.result()  # propagate upload errors
-                if youtube_id:
-                    logger.info("Saved ref separation to storage cache: %s", youtube_id)
+                        pool.submit(
+                            _safe_upload, storage,
+                            ref_vocals_local,
+                            f"cache/{youtube_id}/vocals.wav",
+                        )
+                        pool.submit(
+                            _safe_upload, storage,
+                            ref_instru_local,
+                            f"cache/{youtube_id}/instrumentals.wav",
+                        )
 
                 update_progress(self, "separating_reference_done", 35, "Reference prete !")
 
@@ -481,16 +389,16 @@ def analyze_performance(
                 sync_result = {"offset_seconds": 0.0, "confidence": 0.0, "method": "fallback"}
 
             # ========================================================
-            # STEPS 4-6: PARALLEL — CREPE (GPU 1) || Whisper+Lyrics (GPU 3/HTTP)
-            # CREPE and Whisper use different GPUs, so they run concurrently.
-            # Saves ~5-6s per session vs sequential execution.
+            # STEPS 4-6: PARALLEL — CREPE (cuda:1 GPU 4) || Whisper+Lyrics (GPU 3 HTTP)
+            # Dedicated GPUs: no contention, no locks.
             # ========================================================
             update_progress(self, "analyzing_parallel", 40, "Analyse en cours...")
 
             def _do_crepe():
-                """Thread A: CREPE pitch extraction on GPU 1."""
+                """Thread A: CREPE pitch extraction on cuda:1 (GPU 4)."""
                 up = do_extract_pitch(
-                    user_separation["vocals_path"], f"{session_id}_user", fast_mode=False,
+                    user_separation["vocals_path"], f"{session_id}_user",
+                    fast_mode=False, device=CREPE_DEVICE,
                 )
                 # Reference pitch: check cache first
                 ref_pitch_cache_key = (
@@ -503,15 +411,16 @@ def analyze_performance(
                     rp = {"pitch_path": str(cached_npz), "stats": {}, "status": "cached"}
                 else:
                     rp = do_extract_pitch(
-                        str(ref_vocals_path), f"{session_id}_ref", fast_mode=True,
+                        str(ref_vocals_path), f"{session_id}_ref",
+                        fast_mode=True, device=CREPE_DEVICE,
                     )
                     if ref_pitch_cache_key and rp.get("pitch_path"):
-                        storage.upload_from_file(
+                        _safe_upload(
+                            storage,
                             Path(rp["pitch_path"]),
                             ref_pitch_cache_key,
                             content_type="application/octet-stream",
                         )
-                        logger.info("Cached reference pitch to storage: %s", youtube_id)
                 return up, rp
 
             def _do_whisper_lyrics():
@@ -562,10 +471,6 @@ def analyze_performance(
             flush_traces()
 
     finally:
-        # ============================================================
-        # CLEANUP: Release GPU lock + delete all temp dirs
-        # ============================================================
-        _release_gpu_lock()
         for temp_path in [session_temp, user_temp, ref_temp]:
             shutil.rmtree(temp_path, ignore_errors=True)
         logger.info("Cleaned up temp dirs for session %s", session_id)
@@ -607,16 +512,7 @@ def prepare_reference(
     ref_temp = _temp_dir(f"{session_id}_ref")
 
     try:
-        # ================================================================
-        # GPU TIME-SHARING: Lock + Unload Ollama Heavy from GPU 1
-        # Same pattern as analyze_performance — prevents OOM when
-        # Demucs (3.5 GB) runs while Ollama Heavy (5.2 GB) is resident.
-        # ================================================================
         has_gpu = log_gpu_status()
-        _acquire_gpu_lock()
-        if has_gpu:
-            _unload_ollama_model_for_gpu()
-
         vocals_local = None
         instrumentals_local = None
 
@@ -659,10 +555,14 @@ def prepare_reference(
                 local_ref_path = ref_temp / "reference.flac"
                 _download_youtube_audio(youtube_url, local_ref_path)
                 local_ref = str(local_ref_path)
-                # reference.flac is NOT uploaded to storage (not needed for normal flow):
-                # - This task populates Demucs cache (vocals.wav/instrumentals.wav) below
-                # - analyze_performance always runs AFTER this task (Celery solo pool)
-                # - analyze_performance checks Demucs cache first and never needs reference file
+                # Upload reference to storage for word_timestamps task (needs it if Demucs cache misses)
+                if youtube_id:
+                    _safe_upload(
+                        storage,
+                        local_ref_path,
+                        f"cache/{youtube_id}/reference.flac",
+                        content_type="audio/flac",
+                    )
             else:
                 local_ref = _resolve_audio(
                     reference_audio_path,
@@ -685,41 +585,39 @@ def prepare_reference(
             vocals_local = Path(result["vocals_path"])
             instrumentals_local = Path(result["instrumentals_path"])
 
-            # Persist to permanent cache (parallel, non-blocking for session upload)
+            # Persist to permanent cache — non-fatal (future sessions benefit from cache)
             if youtube_id:
                 with ThreadPoolExecutor(max_workers=2) as pool:
-                    pool.submit(
-                        storage.upload_from_file,
+                    f_cv = pool.submit(
+                        _safe_upload, storage,
                         vocals_local,
                         f"cache/{youtube_id}/vocals.wav",
                     )
-                    pool.submit(
-                        storage.upload_from_file,
+                    f_ci = pool.submit(
+                        _safe_upload, storage,
                         instrumentals_local,
                         f"cache/{youtube_id}/instrumentals.wav",
                     )
-                logger.info("Saved Demucs output to storage cache: %s", youtube_id)
+                if f_cv.result() and f_ci.result():
+                    logger.info("Saved Demucs output to storage cache: %s", youtube_id)
+                else:
+                    logger.warning("Demucs cache upload failed for %s (non-fatal)", youtube_id)
 
         # ================================================================
         # UPLOAD SESSION COPIES — parallel (StudioMode access via audio.py)
+        # Non-fatal: use expected URL as fallback if upload fails
         # ================================================================
         self.update_state(
             state="PROGRESS",
             meta={"step": "uploading_session", "progress": 55},
         )
+        vocals_rel = f"sessions/{session_id}_ref/vocals.wav"
+        instru_rel = f"sessions/{session_id}_ref/instrumentals.wav"
         with ThreadPoolExecutor(max_workers=2) as pool:
-            f_v = pool.submit(
-                storage.upload_from_file,
-                vocals_local,
-                f"sessions/{session_id}_ref/vocals.wav",
-            )
-            f_i = pool.submit(
-                storage.upload_from_file,
-                instrumentals_local,
-                f"sessions/{session_id}_ref/instrumentals.wav",
-            )
-            vocals_url = f_v.result()
-            instru_url = f_i.result()
+            f_v = pool.submit(_safe_upload, storage, vocals_local, vocals_rel)
+            f_i = pool.submit(_safe_upload, storage, instrumentals_local, instru_rel)
+        vocals_url = f_v.result() or storage.public_url(vocals_rel)
+        instru_url = f_i.result() or storage.public_url(instru_rel)
 
         # Notify frontend that ref tracks are available for multi-track playback
         _notify_tracks_ready(session_id)
@@ -741,9 +639,9 @@ def prepare_reference(
             storage.download_to_file(pitch_cache_key, cached_npz)
             pitch_path = str(cached_npz)
         else:
-            # Fix #1: use tiny model for reference (3x faster than full)
             pitch_result = do_extract_pitch(
-                str(vocals_local), f"{session_id}_ref", fast_mode=True
+                str(vocals_local), f"{session_id}_ref",
+                fast_mode=True, device=CREPE_DEVICE,
             )
 
             # Free GPU cache after CREPE
@@ -755,14 +653,14 @@ def prepare_reference(
                 pass
 
             pitch_path = pitch_result.get("pitch_path", "")
-            # Cache pitch for future sessions with same video
+            # Cache pitch for future sessions with same video — non-fatal
             if pitch_cache_key and pitch_path:
-                storage.upload_from_file(
+                _safe_upload(
+                    storage,
                     Path(pitch_path),
                     pitch_cache_key,
                     content_type="application/octet-stream",
                 )
-                logger.info("Saved pitch data to storage cache: %s", youtube_id)
 
         return {
             "session_id": session_id,
@@ -773,6 +671,5 @@ def prepare_reference(
         }
 
     finally:
-        _release_gpu_lock()
         shutil.rmtree(ref_temp, ignore_errors=True)
         logger.info("Cleaned up temp dir for prepare_reference session %s", session_id)

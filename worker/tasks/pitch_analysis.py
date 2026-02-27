@@ -2,6 +2,7 @@
 Pitch analysis using torchcrepe (PyTorch-based CREPE).
 Extracts fundamental frequency (F0) from vocals.
 """
+import os
 import logging
 from pathlib import Path
 from celery import shared_task
@@ -10,7 +11,9 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
-def do_extract_pitch(vocals_path: str, session_id: str, fast_mode: bool = False) -> dict:
+def do_extract_pitch(
+    vocals_path: str, session_id: str, fast_mode: bool = False, device: str = None,
+) -> dict:
     """
     Core logic: Extract pitch information from vocals using torchcrepe.
 
@@ -18,6 +21,7 @@ def do_extract_pitch(vocals_path: str, session_id: str, fast_mode: bool = False)
         vocals_path: Path to vocals audio file
         session_id: Session identifier
         fast_mode: If True, use 'tiny' model for speed (good for reference analysis)
+        device: CUDA device (e.g. "cuda:1" for dedicated CREPE GPU). Defaults to CREPE_DEVICE env or "cuda:0".
 
     Returns:
         dict with pitch data
@@ -41,8 +45,11 @@ def do_extract_pitch(vocals_path: str, session_id: str, fast_mode: bool = False)
         audio = resampler(audio)
         sample_rate = 16000
 
-    # Select device and log GPU status
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # Select device — dedicated CREPE GPU (cuda:1 = GPU 4 RTX 3060 Ti)
+    if device is None:
+        device = os.getenv("CREPE_DEVICE", "cuda:0")
+    if not torch.cuda.is_available():
+        device = "cpu"
     model_name = "tiny" if fast_mode else "full"
     logger.info("Extracting pitch (model=%s, device=%s)...", model_name, device)
 

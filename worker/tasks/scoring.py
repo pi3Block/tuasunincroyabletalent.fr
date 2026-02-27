@@ -34,19 +34,10 @@ from .tracing import trace_jury_comment, TracingSpan
 
 logger = logging.getLogger(__name__)
 
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11435")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:4b")
 LITELLM_HOST = os.getenv("LITELLM_HOST", "http://host.docker.internal:4000")
 LITELLM_API_KEY = os.getenv("LITELLM_API_KEY", "")
 LITELLM_JURY_MODEL = os.getenv("LITELLM_JURY_MODEL", "jury-comment")
-USE_FINETUNED_JURY = os.getenv("USE_FINETUNED_JURY", "false").lower() in ("true", "1", "yes")
-
-# Fine-tuned persona models (created by fine-tuning/deploy.sh)
-PERSONA_FINETUNED_MODELS = {
-    "Le Cassant": "kiaraoke-jury-cassant",
-    "L'Encourageant": "kiaraoke-jury-encourageant",
-    "Le Technique": "kiaraoke-jury-technique",
-}
+LITELLM_JURY_FALLBACK_MODEL = os.getenv("LITELLM_JURY_FALLBACK_MODEL", "jury-comment-fallback")
 
 
 def do_generate_feedback(
@@ -565,6 +556,55 @@ def _heuristic_comment(persona_name: str, overall_score: int) -> str:
         return "Quelques points techniques à revoir : la justesse et le rythme nécessitent plus de travail."
 
 
+async def _litellm_call(
+    client: httpx.AsyncClient,
+    model: str,
+    prompt: str,
+    max_retries: int = 2,
+) -> tuple[str, str]:
+    """
+    Call LiteLLM proxy with retries. Returns (comment, model_used) or ("", "") on failure.
+    """
+    if not LITELLM_API_KEY:
+        return "", ""
+
+    headers = {
+        "Authorization": f"Bearer {LITELLM_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    for attempt in range(max_retries + 1):
+        try:
+            response = await client.post(
+                f"{LITELLM_HOST}/chat/completions",
+                headers=headers,
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 300,
+                    "temperature": 0.8,
+                },
+                timeout=15.0,
+            )
+            response.raise_for_status()
+            data = response.json()
+            comment = data["choices"][0]["message"]["content"].strip()
+            actual_model = data.get("model", model)
+            if not comment:
+                raise ValueError("Empty response from LiteLLM")
+            return comment, f"litellm/{actual_model}"
+        except Exception as e:
+            if attempt < max_retries:
+                wait = 1.0 * (2 ** attempt)
+                logger.info(
+                    "LiteLLM %s attempt %d/%d failed: %s — retrying in %.0fs",
+                    model, attempt + 1, max_retries + 1, e, wait,
+                )
+                await asyncio.sleep(wait)
+            else:
+                logger.warning("LiteLLM %s failed after %d attempts: %s", model, max_retries + 1, e)
+    return "", ""
+
+
 async def _generate_comment_async(
     client: httpx.AsyncClient,
     persona: dict,
@@ -573,9 +613,9 @@ async def _generate_comment_async(
     pipeline_span: TracingSpan = None,
 ) -> dict:
     """
-    Generate a single jury comment with 3-tier fallback (zero cost):
-      Tier 1: LiteLLM proxy → Groq qwen3-32b (free, 32B, best French)
-      Tier 2: Ollama direct qwen3:4b (local GPU, always available)
+    Generate a single jury comment with 3-tier fallback (all via LiteLLM, zero local GPU):
+      Tier 1: LiteLLM → Groq qwen3-32b (free, 32B, best French)
+      Tier 2: LiteLLM → qwen3-8b fallback (configurable via LITELLM_JURY_FALLBACK_MODEL)
       Tier 3: Heuristic (hardcoded persona-based comments)
     """
     start = time.time()
@@ -588,111 +628,13 @@ async def _generate_comment_async(
         model=LITELLM_JURY_MODEL,
         prompt=prompt,
     ) as gen:
-        # ── Tier 1: LiteLLM proxy → Groq qwen3-32b (free, async, with retries) ──
-        if LITELLM_API_KEY:
-            max_retries = 2
-            headers = {
-                "Authorization": f"Bearer {LITELLM_API_KEY}",
-                "Content-Type": "application/json",
-            }
-            for attempt in range(max_retries + 1):
-                try:
-                    response = await client.post(
-                        f"{LITELLM_HOST}/chat/completions",
-                        headers=headers,
-                        json={
-                            "model": LITELLM_JURY_MODEL,
-                            "messages": [{"role": "user", "content": prompt}],
-                            "max_tokens": 300,
-                            "temperature": 0.8,
-                        },
-                        timeout=15.0,
-                    )
-                    response.raise_for_status()
-                    data = response.json()
-                    comment = data["choices"][0]["message"]["content"].strip()
-                    actual_model = data.get("model", LITELLM_JURY_MODEL)
-                    model_used = f"litellm/{actual_model}"
-                    if not comment:
-                        raise ValueError("Empty response from LiteLLM")
-                    break  # Success
-                except Exception as litellm_err:
-                    if attempt < max_retries:
-                        wait = 1.0 * (2 ** attempt)  # 1s, 2s
-                        logger.info(
-                            "LiteLLM attempt %d/%d failed for %s: %s — retrying in %.0fs",
-                            attempt + 1, max_retries + 1, persona["name"], litellm_err, wait,
-                        )
-                        await asyncio.sleep(wait)
-                        continue
-                    logger.warning(
-                        "LiteLLM failed for %s after %d attempts: %s — trying Ollama fallback",
-                        persona["name"], max_retries + 1, litellm_err,
-                    )
-                    comment = ""
-        else:
-            logger.debug("LITELLM_API_KEY not set, skipping LiteLLM tier")
+        # ── Tier 1: LiteLLM → Groq qwen3-32b ──
+        comment, model_used = await _litellm_call(client, LITELLM_JURY_MODEL, prompt)
 
-        # ── Tier 2: Ollama — prefer fine-tuned persona model if enabled ──
-        if not comment:
-            ollama_model = OLLAMA_MODEL
-            if USE_FINETUNED_JURY:
-                ollama_model = PERSONA_FINETUNED_MODELS.get(
-                    persona["name"], OLLAMA_MODEL,
-                )
-
-            try:
-                response = await client.post(
-                    f"{OLLAMA_HOST}/api/generate",
-                    json={
-                        "model": ollama_model,
-                        "prompt": prompt,
-                        "stream": False,
-                        "options": {
-                            "temperature": 0.8,
-                            "top_p": 0.9,
-                            "num_predict": 300,
-                        },
-                    },
-                    timeout=20.0,
-                )
-                response.raise_for_status()
-                comment = response.json().get("response", "").strip()
-                model_used = f"ollama/{ollama_model}"
-                if not comment:
-                    raise ValueError("Empty response from Ollama")
-            except Exception as ollama_err:
-                # If fine-tuned model failed, try base model before heuristic
-                if ollama_model != OLLAMA_MODEL and USE_FINETUNED_JURY:
-                    try:
-                        response = await client.post(
-                            f"{OLLAMA_HOST}/api/generate",
-                            json={
-                                "model": OLLAMA_MODEL,
-                                "prompt": prompt,
-                                "stream": False,
-                                "options": {
-                                    "temperature": 0.8,
-                                    "top_p": 0.9,
-                                    "num_predict": 300,
-                                },
-                            },
-                            timeout=20.0,
-                        )
-                        response.raise_for_status()
-                        comment = response.json().get("response", "").strip()
-                        model_used = f"ollama/{OLLAMA_MODEL}"
-                    except Exception as base_err:
-                        logger.warning(
-                            "Ollama base model also failed for %s: %s",
-                            persona["name"], base_err,
-                        )
-
-                if not comment:
-                    logger.warning(
-                        "Ollama failed for %s: %s, using heuristic",
-                        persona["name"], ollama_err,
-                    )
+        # ── Tier 2: LiteLLM → fallback model (qwen3-8b or configured) ──
+        if not comment and LITELLM_JURY_FALLBACK_MODEL != LITELLM_JURY_MODEL:
+            logger.info("Tier 1 failed for %s, trying fallback model %s", persona["name"], LITELLM_JURY_FALLBACK_MODEL)
+            comment, model_used = await _litellm_call(client, LITELLM_JURY_FALLBACK_MODEL, prompt, max_retries=1)
 
         # ── Tier 3: Heuristic (no API, always works) ──
         if not comment:
@@ -764,10 +706,10 @@ def generate_jury_comments(
     pipeline_span: TracingSpan = None,
 ) -> list[dict]:
     """
-    Generate jury AI comments (parallel, 3-tier zero-cost fallback).
+    Generate jury AI comments (parallel, 3-tier zero-cost fallback, no local GPU).
 
     Runs 3 persona LLM calls concurrently via asyncio.gather.
-    Each call: LiteLLM/Groq qwen3-32b → Ollama qwen3:4b → heuristic.
+    Each call: LiteLLM/Groq qwen3-32b → LiteLLM/qwen3-8b → heuristic.
     """
     start = time.time()
 
