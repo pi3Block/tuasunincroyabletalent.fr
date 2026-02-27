@@ -77,10 +77,17 @@ services:
   # ============================================
   # Worker Heavy - GPU (Demucs, CREPE)
   # ============================================
-  # GPU 0 (RTX 3070, 8 Go, GPU-85c38fae) — SHARED with Ollama Light via time-sharing
-  # Pipeline.py unloads Ollama model (keep_alive:0) before Demucs loads.
-  # LLM jury: LiteLLM proxy → Groq qwen3-32b (free) → Ollama fallback
-  # Whisper: shared-whisper HTTP → Groq Whisper fallback (free)
+  # GPU 1 (RTX 3080, 10 Go, GPU-bdb1f5e4) — SHARED with Ollama Heavy via time-sharing
+  # Pipeline.py unloads qwen3:8b (keep_alive:0, poll /api/ps) before Demucs loads.
+  # LLM jury: LiteLLM proxy → jury-comment (Ollama Heavy + Light load-balanced)
+  #   → Ollama Heavy direct fallback (qwen3:8b, port 11434) → heuristic
+  # Whisper: shared-whisper HTTP (GPU 3) → Groq Whisper fallback (free)
+  # Memory budget GPU 1 (10 GB):
+  #   - Ollama Heavy unloaded before pipeline: 0 GB
+  #   - Demucs htdemucs: ~3.5 GB
+  #   - CREPE full: ~1 GB (sequential, after Demucs)
+  #   - De-bleeding STFT tensors: ~0.5 GB peak
+  #   - Total peak: ~5 GB → 5 GB headroom
   worker-heavy:
     build:
       context: ./worker
@@ -94,7 +101,9 @@ services:
       # DATABASE_URL and REDIS_URL must be set in Coolify env panel
       - REDIS_URL=${REDIS_URL}
       - DATABASE_URL=${DATABASE_URL}
-      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11435}
+      # GPU 1: Ollama Heavy (qwen3:8b, port 11434) — unloaded before Demucs, fallback for jury Tier 2
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3:8b}
       - SHARED_WHISPER_URL=${SHARED_WHISPER_URL:-http://shared-whisper:9000}
       - WHISPER_MODEL=${WHISPER_MODEL:-turbo}
       # Whisper: shared-whisper primary, Groq cloud fallback, local disabled
@@ -105,7 +114,7 @@ services:
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
       - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
       - LANGFUSE_BASE_URL=${LANGFUSE_BASE_URL:-http://langfuse-wogs8c0wgg8o4gckkg4oc4o8:3000}
-      # LiteLLM proxy — jury generation via Groq qwen3-32b (free)
+      # LiteLLM proxy — jury-comment load-balanced: Ollama Heavy (GPU 1) + Light (GPU 0)
       - LITELLM_HOST=${LITELLM_HOST:-http://host.docker.internal:4000}
       - LITELLM_API_KEY=${LITELLM_API_KEY:-}
       - LITELLM_JURY_MODEL=${LITELLM_JURY_MODEL:-jury-comment}
@@ -119,10 +128,10 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ['GPU-85c38fae-1bcf-d15b-4f36-e1f581acd76e']
+              device_ids: ['GPU-bdb1f5e4-d03c-b5c1-bb9c-59f3d08d161d']
               capabilities: [gpu]
         limits:
-          memory: 6G
+          memory: 8G
     restart: unless-stopped
     networks:
       - voicejury-network

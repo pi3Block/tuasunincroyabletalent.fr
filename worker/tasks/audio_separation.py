@@ -168,6 +168,10 @@ def do_separate_audio(audio_path: str, session_id: str) -> dict:
     if debleed_enabled:
         try:
             logger.info("Applying spectral de-bleeding...")
+            # Free cached GPU allocations before STFT (intermediate Demucs buffers)
+            import torch as _torch
+            if _torch.cuda.is_available():
+                _torch.cuda.empty_cache()
             vocals, instrumentals = apply_debleeding(vocals, instrumentals)
             logger.info("De-bleeding complete")
         except Exception as e:

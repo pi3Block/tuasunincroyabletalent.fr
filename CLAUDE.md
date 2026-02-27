@@ -46,16 +46,18 @@ docker-compose -f docker-compose.dev.yml build --no-cache <service>
 - **Frontend**: Next.js 15 (App Router, Turbopack) + React 19 + TypeScript 5.7 + Zustand 5 + Tailwind 4 + Framer Motion 12 + Radix UI (shadcn)
 - **Backend API**: Python 3.11 + FastAPI + Uvicorn + Pydantic 2 + SQLAlchemy 2 (async) + asyncpg
 - **Backend Worker**: Python 3.11 + Celery 5 + Redis (GPU tasks) + Langfuse (tracing)
-- **LLM**: LiteLLM Proxy -> Groq qwen3-32b (gratuit) + Ollama qwen3:4b (local GPU 0) + heuristique fallback
+- **LLM**: LiteLLM Proxy -> Groq qwen3-32b (gratuit) + Ollama qwen3:4b / LoRA fine-tuned (local GPU 0) + heuristique fallback
 - **Storage**: PostgreSQL 16 (shared), Redis 7 DB2 (shared), Filesystem (audio temp)
 - **Audio Processing**:
-  - Demucs htdemucs - Source separation (vocals/instrumentals)
+  - Demucs htdemucs - Source separation (vocals/instrumentals) + spectral de-bleeding (Wiener masks)
   - torchcrepe - Pitch detection (full/tiny models)
+  - scipy.signal.correlate - Cross-correlation sync (auto offset detection)
   - shared-whisper HTTP (Faster Whisper large-v3-turbo, GPU 3 RTX 3070) + Groq Whisper API fallback
   - whisper-timestamped - Word-level alignment (forced alignment + DTW)
   - Librosa - Onset detection (rhythm)
   - fastdtw - Pitch comparison (Dynamic Time Warping)
   - jiwer - Word Error Rate (lyrics accuracy)
+  - Unsloth + QLoRA - Fine-tuning Qwen3:4b for jury personas
 
 ## Architecture
 
@@ -91,7 +93,8 @@ tuasunincroyabletalent.fr/
 │       │   └── ui/                # shadcn (button, card, slider, badge, progress...)
 │       ├── hooks/                 # useAudioRecorder, usePitchDetection,
 │       │                          # useWordTimestamps, useYouTubePlayer,
-│       │                          # useLyricsSync, useLyricsScroll, useOrientation
+│       │                          # useLyricsSync, useLyricsScroll, useOrientation,
+│       │                          # useSSE (Server-Sent Events + polling fallback)
 │       ├── audio/                 # Multi-track player (AudioContext, TrackProcessor,
 │       │                          # StudioMode, TrackMixer, TransportBar)
 │       ├── api/                   # API client (fetch wrapper)
@@ -108,7 +111,8 @@ tuasunincroyabletalent.fr/
 │       │   ├── search.py          # /api/search/* (Spotify search, recent)
 │       │   ├── audio.py           # /api/audio/* (track streaming, HTTP Range)
 │       │   ├── lyrics.py          # /api/lyrics/* (lyrics, word-timestamps, generate)
-│       │   └── results.py         # /api/results/* (history)
+│       │   ├── results.py         # /api/results/* (history)
+│       │   └── sse.py             # /api/session/{id}/stream (SSE real-time updates)
 │       ├── services/
 │       │   ├── database.py        # SQLAlchemy async engine + session
 │       │   ├── redis_client.py    # Redis async (sessions TTL 1h)
@@ -132,15 +136,26 @@ tuasunincroyabletalent.fr/
 │   └── tasks/
 │       ├── celery_app.py          # Config + 3 queues (gpu-heavy, gpu, default)
 │       ├── pipeline.py            # Orchestrateur (analyze_performance, prepare_reference)
-│       ├── audio_separation.py    # Demucs htdemucs (lazy loaded, GPU)
+│       ├── audio_separation.py    # Demucs htdemucs (lazy loaded, GPU) + de-bleeding
+│       ├── sync.py                # Cross-correlation sync (auto offset detection)
 │       ├── pitch_analysis.py      # torchcrepe (full/tiny, GPU)
 │       ├── transcription.py       # 3-tier: shared-whisper -> Groq -> local
-│       ├── scoring.py             # DTW + WER + jury parallele (3 personas, 3 tiers)
+│       ├── scoring.py             # DTW + WER + jury parallele (3 personas, 3 tiers + LoRA)
 │       ├── lyrics.py              # Genius API scraper
 │       ├── word_timestamps.py     # whisper-timestamped (forced alignment)
 │       ├── word_timestamps_db.py  # PostgreSQL direct (psycopg2)
 │       ├── cleanup.py             # Celery beat: delete old session audio files (>2h)
 │       └── tracing.py             # Langfuse integration (singleton + context managers)
+│
+├── fine-tuning/                   # LoRA fine-tuning infrastructure (Jury personas)
+│   ├── requirements.txt           # unsloth, transformers, datasets, trl, peft, bitsandbytes
+│   ├── export_dataset.py          # Langfuse API → JSONL per persona
+│   ├── train.py                   # Unsloth QLoRA (Qwen3-4B, r=16, alpha=32, 4-bit)
+│   ├── convert_to_gguf.py         # Merge LoRA → GGUF Q4_K_M via Unsloth
+│   ├── Modelfile.le-cassant       # Ollama Modelfile (Le Cassant persona)
+│   ├── Modelfile.l-encourageant   # Ollama Modelfile (L'Encourageant persona)
+│   ├── Modelfile.le-technique     # Ollama Modelfile (Le Technique persona)
+│   └── deploy.sh                  # ollama create × 3 + smoke test
 │
 ├── docker-compose.coolify.yml     # PRODUCTION (Coolify) — 3 services + shared infra
 ├── docker-compose.dev.yml         # Developpement local (standalone)
@@ -150,7 +165,7 @@ tuasunincroyabletalent.fr/
     └── UNIFIED_ARCHITECTURE.md    # Architecture multi-projets unifiee
 ```
 
-### Pipeline Audio (7 etapes)
+### Pipeline Audio (9 etapes)
 
 ```
 analyze_performance (Celery task, gpu-heavy queue)
@@ -158,10 +173,17 @@ analyze_performance (Celery task, gpu-heavy queue)
 ├─ Step 1: Unload Ollama Light (GPU 0, keep_alive:0, libere ~4 Go VRAM)
 │
 ├─ Step 2: Demucs — Separation user audio → vocals.wav + instrumentals.wav
+│           + De-bleeding spectral (Wiener-like soft masking, env DEBLEED_ENABLED)
 │           [GPU, ~25s pour 3min]
 │
 ├─ Step 3: Demucs — Separation reference (CACHE par YouTube ID)
+│           + De-bleeding spectral
 │           [0s si cache, ~25s sinon]
+│
+├─ Step 3.5: Cross-correlation sync — Auto offset detection
+│             Downsample 8kHz → amplitude envelopes → scipy.signal.correlate
+│             Applique offset au scoring si confidence > 0.3
+│             [CPU, ~1s]
 │
 ├─ Step 4: torchcrepe — Pitch extraction
 │           User: full model (precision)
@@ -178,16 +200,16 @@ analyze_performance (Celery task, gpu-heavy queue)
 │           [~1s]
 │
 └─ Step 7: Scoring + Jury LLM (parallele x3 personas)
-           Pitch: DTW cents distance (40% du score)
-           Rhythm: Voice onset detection (30%)
+           Pitch: DTW cents distance (40% du score), offset-aware
+           Rhythm: Voice onset detection (30%), offset-aware
            Lyrics: WER jiwer (30%)
            Jury: asyncio.gather() 3 personas
              Tier 1: LiteLLM -> Groq qwen3-32b
-             Tier 2: Ollama qwen3:4b (GPU 0)
+             Tier 2: Ollama fine-tuned LoRA (env USE_FINETUNED_JURY) → fallback qwen3:4b
              Tier 3: Heuristique
            [~1-5s]
 
-Total: ~40-65s (premiere analyse) ou ~15-25s (reference en cache)
+Total: ~42-67s (premiere analyse) ou ~17-27s (reference en cache)
 ```
 
 ## API Endpoints
@@ -201,7 +223,8 @@ Total: ~40-65s (premiere analyse) ou ~15-25s (reference en cache)
 | `/api/session/{id}/status` | GET | Statut session + reference |
 | `/api/session/{id}/upload-recording` | POST | Upload audio utilisateur (WAV/WebM) |
 | `/api/session/{id}/analyze` | POST | Lance pipeline analyse (Celery) |
-| `/api/session/{id}/analysis-status` | GET | Statut task Celery (poll) |
+| `/api/session/{id}/analysis-status` | GET | Statut task Celery (poll, fallback si SSE indispo) |
+| `/api/session/{id}/stream` | GET | SSE real-time updates (session_status, analysis_progress, analysis_complete) |
 | `/api/session/{id}/results` | GET | Resultats finaux |
 | `/api/session/{id}/lyrics` | GET | Paroles (LRCLib/Genius) |
 | `/api/session/{id}/lyrics-offset` | GET/POST | Offset lyrics user-adjustable |
@@ -286,7 +309,7 @@ async def get(spotify_track_id: str) -> dict | None:
     return None
 ```
 
-### 3-Tier LLM Fallback (Jury)
+### 3-Tier LLM Fallback (Jury) + LoRA Fine-tuning
 ```python
 async def generate_comment(persona, prompt):
     # Tier 1: LiteLLM Proxy -> Groq qwen3-32b (gratuit, meilleur francais)
@@ -299,11 +322,16 @@ async def generate_comment(persona, prompt):
         return response.json()["choices"][0]["message"]["content"]
     except:
         pass
-    # Tier 2: Ollama qwen3:4b (local GPU 0)
+    # Tier 2: Ollama — fine-tuned LoRA per persona (if USE_FINETUNED_JURY=true)
+    #   "Le Cassant" → "kiaraoke-jury-cassant"
+    #   "L'Encourageant" → "kiaraoke-jury-encourageant"
+    #   "Le Technique" → "kiaraoke-jury-technique"
+    #   Falls back to base qwen3:4b if fine-tuned model fails
     try:
+        model = PERSONA_FINETUNED_MODELS.get(persona, "qwen3:4b") if USE_FINETUNED_JURY else "qwen3:4b"
         response = await httpx_client.post(
             f"{OLLAMA_HOST}/api/generate",
-            json={"model": "qwen3:4b", "prompt": prompt, "stream": False},
+            json={"model": model, "prompt": prompt, "stream": False},
         )
         return response.json()["response"]
     except:
@@ -414,6 +442,12 @@ DEBUG=false
 AUDIO_OUTPUT_DIR=/app/audio_files
 CUDA_VISIBLE_DEVICES=0
 
+# Audio processing (optionnel)
+DEBLEED_ENABLED=true             # Spectral de-bleeding post-Demucs (Wiener masks)
+
+# Fine-tuning (optionnel)
+USE_FINETUNED_JURY=false         # Use LoRA fine-tuned models for jury personas in Tier 2
+
 # Sentry (optionnel)
 SENTRY_DSN=https://xxx@sentry.io/xxx
 
@@ -448,12 +482,14 @@ Tables creees via Alembic migrations (`alembic upgrade head`), fallback `create_
 | Metric | Target |
 |--------|--------|
 | API Response | <200ms |
-| Demucs Separation | <30s for 3min song (GPU) |
+| Demucs Separation + De-bleeding | <30s for 3min song (GPU) |
+| Cross-correlation Sync | <1s (CPU, 8kHz downsampled envelopes) |
 | Whisper Transcription (shared-whisper) | <3s for 3min (VAD, GPU 3 RTX 3070) |
 | CREPE Pitch (full) | <5s for 3min (GPU) |
 | Jury Generation (3 personas parallel) | <5s |
-| Total Analysis (first time) | <65s |
-| Total Analysis (cached reference) | <25s |
+| SSE Event Latency | <500ms (internal Redis poll interval) |
+| Total Analysis (first time) | <67s |
+| Total Analysis (cached reference) | <27s |
 
 ## SEO & Web Standards
 

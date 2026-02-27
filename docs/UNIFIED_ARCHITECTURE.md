@@ -936,21 +936,28 @@ Monitoring proactif : `INFO memory` toutes les 5 min, alerte si > 80% (deploye 2
 
 **Statut :** Code et docker-compose.coolify.yml prets a deployer. Le deploiement necessite un nettoyage disque prealable (etape 0 du guide Last Idea.md) car le serveur est a 95% d'utilisation disque.
 
-### 7.2 Pipeline 6 Etapes
+### 7.2 Pipeline 9 Etapes
 
 ```
 analyze_performance (shared_task, gpu-heavy queue)
 |
-|-- Step 0: Unload Ollama Light (keep_alive:0, libere ~4 Go VRAM GPU 0)
-|-- Step 1: Demucs -- Separation voix utilisateur          [GPU, ~25s]
-|-- Step 2: Demucs -- Separation voix reference (cache)    [GPU, ~25s ou 0s si cache]
-|-- Step 3: CREPE -- Pitch user (full) + ref (tiny)        [GPU, ~4s + ~1.5s]
-|-- Step 4: Whisper -- Transcription utilisateur           [HTTP shared-whisper, ~2-3s avec VAD]
-|-- Step 5: Genius -- Paroles originales                   [HTTP API, ~1s]
-+-- Step 6: Scoring + Jury LLM (parallele x3)             [HTTP LiteLLM/Ollama, ~3s]
+|-- Step 0:   Unload Ollama Light (keep_alive:0, libere ~4 Go VRAM GPU 0)
+|-- Step 1:   Demucs -- Separation voix utilisateur + de-bleeding spectral  [GPU, ~25s]
+|-- Step 2:   Demucs -- Separation voix reference (cache) + de-bleeding     [GPU, ~25s ou 0s si cache]
+|-- Step 2.5: Cross-correlation sync -- Auto offset detection               [CPU, ~1s]
+|-- Step 3:   CREPE -- Pitch user (full) + ref (tiny)                       [GPU, ~4s + ~1.5s]
+|-- Step 4:   Whisper -- Transcription utilisateur                          [HTTP shared-whisper, ~2-3s avec VAD]
+|-- Step 5:   Genius -- Paroles originales                                  [HTTP API, ~1s]
++-- Step 6:   Scoring + Jury LLM (parallele x3, offset-aware)              [HTTP LiteLLM/Ollama, ~3s]
 ```
 
-**Total** : ~40-65s (premiere analyse) ou ~15-25s (reference en cache).
+**Total** : ~42-67s (premiere analyse) ou ~17-27s (reference en cache).
+
+**Nouveautes pipeline :**
+- **De-bleeding** : Wiener-like spectral soft masking post-Demucs (env `DEBLEED_ENABLED`, defaut `true`)
+- **Cross-correlation** : Auto offset user/ref via `scipy.signal.correlate` a 8kHz (env confidence > 0.3)
+- **Scoring offset-aware** : DTW pitch + onset rhythm appliquent l'offset detecte
+- **Jury LoRA** : Tier 2 Ollama utilise modeles fine-tuned par persona si `USE_FINETUNED_JURY=true`
 
 ### 7.3 Worker Files
 
@@ -959,17 +966,18 @@ worker/tasks/
 |-- __init__.py
 |-- celery_app.py              # App Celery + logging config + shutdown cleanup
 |-- pipeline.py                # Orchestrateur (analyze_performance task)
-|-- audio_separation.py        # Demucs htdemucs (lazy-loaded)
+|-- audio_separation.py        # Demucs htdemucs (lazy-loaded) + apply_debleeding()
+|-- sync.py                    # Cross-correlation sync (auto offset detection)
 |-- pitch_analysis.py          # torchcrepe (full/tiny)
 |-- transcription.py           # Whisper via shared-whisper HTTP + fallback Groq + fallback local
-|-- scoring.py                 # DTW scoring + jury parallele async + fallback LLM
+|-- scoring.py                 # DTW scoring + jury parallele async + fallback LLM + LoRA routing
 |-- lyrics.py                  # Genius API scraper
 |-- word_timestamps.py         # Whisper-timestamped (forced alignment)
 |-- word_timestamps_db.py      # PostgreSQL cache word timestamps
 +-- tracing.py                 # Langfuse integration (singleton + context managers)
 ```
 
-### 7.4 LLM Jury Generation — Fallback Chain (UPDATED 2026-02-25)
+### 7.4 LLM Jury Generation — Fallback Chain (UPDATED 2026-02-26)
 
 Le jury genere 3 commentaires IA (Le Cassant, L'Encourageant, Le Technique) avec un pipeline 3-tier :
 
@@ -986,10 +994,19 @@ Le jury genere 3 commentaires IA (Le Cassant, L'Encourageant, Le Technique) avec
               |         Per-persona fallback:            |
               |  Tier 1: LiteLLM -> Groq qwen3-32b      |
               |          (free, 32B, best French)        |
-              |  Tier 2: Ollama qwen3:4b (GPU 0, local)  |
+              |  Tier 2: Ollama fine-tuned LoRA per      |
+              |          persona (USE_FINETUNED_JURY)    |
+              |          -> fallback base qwen3:4b       |
               |  Tier 3: Heuristic (commentaire generic) |
               +--------------------------------------------+
 ```
+
+**Fine-tuned models (env `USE_FINETUNED_JURY=true`) :**
+- `kiaraoke-jury-cassant` — Le Cassant persona
+- `kiaraoke-jury-encourageant` — L'Encourageant persona
+- `kiaraoke-jury-technique` — Le Technique persona
+
+Infrastructure fine-tuning dans `fine-tuning/` : export Langfuse → QLoRA Qwen3-4B (Unsloth, r=16, alpha=32) → GGUF Q4_K_M → Ollama create.
 
 **Tier 1 — LiteLLM Proxy -> Groq qwen3-32b (NOUVEAU 2026-02-25)**
 
@@ -1014,13 +1031,21 @@ response = await client.post(
 
 > **Note :** Le SDK `litellm` Python a ete supprime (lourd ~200 Mo, synchrone). Les appels passent par `httpx.AsyncClient` en HTTP direct vers le proxy LiteLLM (format OpenAI `/chat/completions`).
 
-**Tier 2 — Ollama Light (GPU 0)**
+**Tier 2 — Ollama Light (GPU 0) + Fine-tuned LoRA**
 
 ```python
-# Tier 2: Ollama qwen3:4b sur GPU 0 (RTX 3070)
+# Tier 2: Ollama per-persona fine-tuned model (si USE_FINETUNED_JURY=true)
+# Fallback: base qwen3:4b si le modele fine-tuned echoue
+PERSONA_FINETUNED_MODELS = {
+    "Le Cassant": "kiaraoke-jury-cassant",
+    "L'Encourageant": "kiaraoke-jury-encourageant",
+    "Le Technique": "kiaraoke-jury-technique",
+}
+model = PERSONA_FINETUNED_MODELS.get(persona) if USE_FINETUNED_JURY else "qwen3:4b"
+
 POST http://host.docker.internal:11435/api/generate
 {
-    "model": "qwen3:4b",
+    "model": model,  # fine-tuned or base
     "prompt": "...",
     "stream": false,
     "options": {"temperature": 0.8, "top_p": 0.9, "num_predict": 300}
@@ -1176,6 +1201,12 @@ GENIUS_API_TOKEN=${GENIUS_API_TOKEN}
 WHISPER_MODEL=turbo
 AUDIO_OUTPUT_DIR=/app/audio_files
 WHISPER_LOCAL_FALLBACK=false
+
+# Audio processing (optionnel)
+DEBLEED_ENABLED=true              # Spectral de-bleeding post-Demucs (Wiener masks)
+
+# Fine-tuning (optionnel)
+USE_FINETUNED_JURY=false          # Use LoRA fine-tuned models for jury personas in Tier 2
 ```
 
 ### 7.8 Reseau Docker

@@ -91,35 +91,53 @@ def log_gpu_status():
 
 def _unload_ollama_model_for_gpu():
     """
-    Unload Ollama Light model from GPU 0 to free VRAM for Demucs/CREPE.
+    Unload Ollama Heavy model from GPU 1 to free VRAM for Demucs/CREPE.
 
-    GPU 0 (RTX 3070, 8 GB) is shared between Ollama Light (qwen3:4b, ~4.1 GB)
-    and the voicejury worker (Demucs ~4 GB + CREPE ~1 GB). They cannot coexist.
+    GPU 1 (RTX 3080, 10 GB) is shared between Ollama Heavy (qwen3:8b, ~6 GB)
+    and the voicejury worker (Demucs ~3.5 GB + CREPE ~1 GB). Peak usage ~5 GB,
+    but with Ollama loaded concurrently the total would exceed 10 GB.
 
-    Sends keep_alive=0 to force immediate unload. The model auto-reloads
-    on next Ollama Light request (~2-3s cold start).
+    Sends keep_alive=0 to force immediate unload, then polls /api/ps until the
+    model is confirmed gone from VRAM (max 20s). The model auto-reloads
+    on next Ollama Heavy request (~2-3s cold start, jury runs after GPU tasks).
     """
+    import time
     import httpx
 
-    ollama_host = os.getenv("OLLAMA_HOST", "http://host.docker.internal:11435")
-    ollama_model = os.getenv("OLLAMA_MODEL", "qwen3:4b")
+    ollama_host = os.getenv("OLLAMA_HOST", "http://host.docker.internal:11434")
+    ollama_model = os.getenv("OLLAMA_MODEL", "qwen3:8b")
 
+    # Step 1: Request unload (keep_alive=0 overrides OLLAMA_KEEP_ALIVE=-1 for this call)
     try:
         response = httpx.post(
             f"{ollama_host}/api/generate",
             json={"model": ollama_model, "keep_alive": 0},
-            timeout=5.0,
+            timeout=10.0,
         )
         if response.status_code == 200:
-            logger.info(
-                "Unloaded Ollama %s from GPU 0 — VRAM freed for Demucs/CREPE",
-                ollama_model,
-            )
+            logger.info("Sent unload request for Ollama %s — waiting for VRAM release...", ollama_model)
         else:
-            logger.warning("Ollama unload returned status %d", response.status_code)
+            logger.warning("Ollama unload request returned status %d", response.status_code)
     except Exception as e:
         # Non-fatal: GPU may already be free, or Ollama may not be running
-        logger.warning("Failed to unload Ollama model (GPU may be free): %s", e)
+        logger.warning("Failed to send Ollama unload request (GPU may already be free): %s", e)
+        return
+
+    # Step 2: Poll /api/ps until model is confirmed unloaded (max 20s)
+    deadline = time.time() + 20.0
+    while time.time() < deadline:
+        time.sleep(0.5)
+        try:
+            ps_resp = httpx.get(f"{ollama_host}/api/ps", timeout=3.0)
+            if ps_resp.status_code == 200:
+                loaded_models = ps_resp.json().get("models", [])
+                if not loaded_models:
+                    logger.info("Ollama VRAM confirmed free — proceeding with Demucs/CREPE")
+                    return
+        except Exception:
+            pass  # Transient error, keep polling
+
+    logger.warning("Ollama model may still be in VRAM after 20s — proceeding anyway")
 
 
 @shared_task(bind=True, name="tasks.pipeline.analyze_performance")
@@ -195,6 +213,13 @@ def analyze_performance(
 
         update_progress(self, "separating_user", 10, "Isolation de ta voix...")
         user_separation = do_separate_audio(user_audio_path, f"{session_id}_user")
+        # Free GPU cache after Demucs (STFT tensors, intermediate buffers)
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
         update_progress(self, "separating_user_done", 20, "Voix isolee !")
 
         # ============================================
@@ -217,6 +242,13 @@ def analyze_performance(
             ref_separation = do_separate_audio(reference_audio_path, f"{session_id}_ref")
             ref_vocals_path = ref_separation["vocals_path"]
             ref_instrumentals_path = ref_separation["instrumentals_path"]
+            # Free GPU cache after 2nd Demucs pass
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
 
             # Save to cache for future sessions
             if youtube_id:
