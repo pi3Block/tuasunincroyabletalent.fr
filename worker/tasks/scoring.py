@@ -77,7 +77,10 @@ def do_generate_feedback(
     """
     logger.info("Calculating scores for session %s (offset=%.3fs)", session_id, offset_seconds)
 
-    # Load pitch data
+    # Load pitch data with validation
+    for path in [user_pitch_path, reference_pitch_path]:
+        if not Path(path).exists():
+            raise FileNotFoundError(f"Pitch data not found: {path}")
     user_pitch = np.load(user_pitch_path)
     reference_pitch = np.load(reference_pitch_path)
 

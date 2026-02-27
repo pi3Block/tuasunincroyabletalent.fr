@@ -53,6 +53,11 @@ declare namespace YT {
     getCurrentTime(): number
     getDuration(): number
     getPlayerState(): PlayerState
+    mute(): void
+    unMute(): void
+    setVolume(volume: number): void
+    getVolume(): number
+    isMuted(): boolean
     destroy(): void
   }
 }

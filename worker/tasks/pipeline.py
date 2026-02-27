@@ -65,6 +65,27 @@ def _release_gpu_lock():
         pass  # TTL will auto-expire
 
 
+def _notify_tracks_ready(session_id: str):
+    """
+    Set tracks_ready_at timestamp in the session Redis hash.
+    The SSE router polls this field and emits a 'tracks_ready' event to the frontend.
+    """
+    try:
+        import redis
+        import time
+        client = redis.from_url(REDIS_URL, socket_timeout=2)
+        session_key = f"session:{session_id}"
+        # Update the session hash with a timestamp
+        session_data = client.get(session_key)
+        if session_data:
+            data = json.loads(session_data)
+            data["tracks_ready_at"] = str(time.time())
+            client.set(session_key, json.dumps(data))
+            logger.info("Notified tracks_ready for session %s", session_id)
+    except Exception as e:
+        logger.warning("Failed to notify tracks_ready: %s", e)
+
+
 def _is_storage_url(path: str) -> bool:
     return path.startswith("http://") or path.startswith("https://")
 
@@ -699,6 +720,9 @@ def prepare_reference(
             )
             vocals_url = f_v.result()
             instru_url = f_i.result()
+
+        # Notify frontend that ref tracks are available for multi-track playback
+        _notify_tracks_ready(session_id)
 
         # ================================================================
         # PITCH CACHE CHECK — skip CREPE if already done for this video

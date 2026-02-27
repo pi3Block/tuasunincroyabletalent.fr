@@ -2,7 +2,7 @@
 
 /**
  * Interactive app page — 100% Client-Side Rendering
- * Unified layout: sidebar (Mixer) + split center (Video | Lyrics) + sticky bottom bar.
+ * Unified layout: split center (Video | Lyrics) + sticky bottom bar with expandable mixer.
  * Mobile portrait: vertical stack layout preserved.
  * Mobile landscape: LandscapeRecordingLayout fixed overlay preserved.
  */
@@ -14,7 +14,6 @@ import { YouTubePlayer, type YouTubePlayerControls } from "@/components/app/YouT
 import { PitchIndicator } from "@/components/app/PitchIndicator";
 import { LyricsDisplayPro } from "@/components/lyrics/LyricsDisplayPro";
 import { LandscapeRecordingLayout } from "@/components/app/LandscapeRecordingLayout";
-import { AppSidebar } from "@/components/app/AppSidebar";
 import { AppBottomBar } from "@/components/app/AppBottomBar";
 import { api, type Track } from "@/api/client";
 import { useAudioRecorder } from "@/hooks/useAudioRecorder";
@@ -187,12 +186,14 @@ export default function AppPage() {
   const [submittingFallback, setSubmittingFallback] = useState(false);
   const [studioControls, setStudioControls] =
     useState<StudioTransportControls | null>(null);
+  const [multiTrackReady, setMultiTrackReady] = useState(false);
   const [karaokeMode, setKaraokeMode] = useState(true);
   const [usePollingFallback, setUsePollingFallback] = useState(false);
+  const [mixerOpen, setMixerOpen] = useState(false);
 
   const { useLandscapeMobileLayout } = useOrientation();
 
-  // Derived studio context for AppSidebar
+  // Derived studio context for mixer
   const studioContext: StudioContext =
     status === "results"
       ? "results"
@@ -249,6 +250,20 @@ export default function AppPage() {
   // YouTube duration tracked locally — NOT synced to audioStore to avoid useMultiTrack conflicts
   const [youtubeDuration, setYoutubeDuration] = useState(0);
 
+  // Callback wrapping setStudioControls + multiTrackReady flag
+  const handleStudioTransportReady = useCallback(
+    (controls: StudioTransportControls) => {
+      setStudioControls(controls);
+      setMultiTrackReady(true);
+    },
+    [],
+  );
+
+  // Is multi-track audio the active source? (ref stems loaded during pre-recording phases)
+  const useMultiTrackAudio =
+    multiTrackReady &&
+    ["preparing", "downloading", "ready", "recording"].includes(status);
+
   // Is YouTube the active video source? (visible across all pre-results states)
   const youtubeActive =
     ["preparing", "downloading", "ready", "recording", "uploading", "analyzing"].includes(status) &&
@@ -257,7 +272,14 @@ export default function AppPage() {
   useKeyboardShortcuts({
     enabled: status === "ready" || status === "results",
     onPlayPause: () => {
-      if (youtubeActive) {
+      if (effectiveStudioControls) {
+        // Use effective controls (handles multi-track + YouTube sync)
+        if (useMultiTrackAudio ? transport.playing : isVideoPlaying) {
+          effectiveStudioControls.pause();
+        } else {
+          effectiveStudioControls.play();
+        }
+      } else if (youtubeActive) {
         if (isVideoPlaying) youtubeControls!.pause();
         else youtubeControls!.play();
       } else {
@@ -266,16 +288,18 @@ export default function AppPage() {
       }
     },
     onSeekBack: () => {
-      const cur = youtubeActive ? playbackTime : transport.currentTime;
+      const cur = useMultiTrackAudio ? transport.currentTime : youtubeActive ? playbackTime : transport.currentTime;
       const t = Math.max(0, cur - 10);
-      if (youtubeActive) youtubeControls!.seekTo(t);
+      if (effectiveStudioControls) effectiveStudioControls.seek(t);
+      else if (youtubeActive) youtubeControls!.seekTo(t);
       else seek(t);
     },
     onSeekForward: () => {
-      const d = youtubeActive ? youtubeDuration : transport.duration;
-      const cur = youtubeActive ? playbackTime : transport.currentTime;
+      const d = useMultiTrackAudio ? transport.duration : youtubeActive ? youtubeDuration : transport.duration;
+      const cur = useMultiTrackAudio ? transport.currentTime : youtubeActive ? playbackTime : transport.currentTime;
       const t = Math.min(d, cur + 10);
-      if (youtubeActive) youtubeControls!.seekTo(t);
+      if (effectiveStudioControls) effectiveStudioControls.seek(t);
+      else if (youtubeActive) youtubeControls!.seekTo(t);
       else seek(t);
     },
     onVolumeUp: () => setMasterVolume(Math.min(1, masterVolume + 0.05)),
@@ -298,10 +322,15 @@ export default function AppPage() {
   const handleYoutubeStateChange = useCallback(
     (isPlaying: boolean) => {
       setIsVideoPlaying(isPlaying);
-      // NOT calling audioStore.play()/pause() — that would make useMultiTrack
-      // play its tracks and fight with YouTube audio.
+      // When multi-track is active, forward YouTube user interactions to multi-track
+      if (useMultiTrackAudio && studioControls) {
+        if (isPlaying) studioControls.play();
+        else studioControls.pause();
+      }
+      // When NOT using multi-track, do NOT call audioStore.play()/pause()
+      // — that would make useMultiTrack play its tracks and fight with YouTube audio.
     },
-    [setIsVideoPlaying],
+    [setIsVideoPlaying, useMultiTrackAudio, studioControls],
   );
 
   const handleYoutubeDurationChange = useCallback(
@@ -321,24 +350,119 @@ export default function AppPage() {
     [],
   );
 
-  // Effective transport controls: YouTube when video is visible, else multi-track
-  const effectiveStudioControls: StudioTransportControls | null = youtubeActive
-    ? {
-        play: async () => {
-          youtubeControls!.play();
-        },
-        pause: () => {
-          youtubeControls!.pause();
-        },
-        stop: () => {
-          youtubeControls!.seekTo(0);
-          youtubeControls!.pause();
-        },
-        seek: (time: number) => {
-          youtubeControls!.seekTo(time);
-        },
+  // ── 6c. Crossfade YouTube → Multi-Track when ref stems load ──
+  useEffect(() => {
+    if (!youtubeControls) return;
+
+    if (useMultiTrackAudio) {
+      // Fade out YouTube audio over 500ms (10 steps of 50ms)
+      const startVolume = youtubeControls.getVolume();
+      const steps = 10;
+      const stepMs = 500 / steps;
+      let step = 0;
+      const fadeOut = setInterval(() => {
+        step++;
+        const volume = Math.round(startVolume * (1 - step / steps));
+        youtubeControls.setVolume(Math.max(0, volume));
+        if (step >= steps) {
+          clearInterval(fadeOut);
+          youtubeControls.mute();
+        }
+      }, stepMs);
+      return () => clearInterval(fadeOut);
+    } else {
+      youtubeControls.unMute();
+      youtubeControls.setVolume(100);
+    }
+  }, [useMultiTrackAudio, youtubeControls]);
+
+  // ── 6d. Sync multi-track to YouTube position on first load ──
+  const prevMultiTrackReady = useRef(false);
+  useEffect(() => {
+    if (multiTrackReady && !prevMultiTrackReady.current && studioControls) {
+      // Rising edge: multi-track just became ready
+      studioControls.seek(playbackTime);
+      if (isVideoPlaying) {
+        studioControls.play();
       }
-    : studioControls;
+    }
+    prevMultiTrackReady.current = multiTrackReady;
+  }, [multiTrackReady, studioControls, playbackTime, isVideoPlaying]);
+
+  // ── 6e. Effective transport controls (3 modes) ──
+  const effectiveStudioControls: StudioTransportControls | null =
+    useMultiTrackAudio && studioControls
+      ? {
+          // Multi-track is audio source — YouTube video follows (muted)
+          play: async () => {
+            await studioControls.play();
+            youtubeControls?.play();
+          },
+          pause: () => {
+            studioControls.pause();
+            youtubeControls?.pause();
+          },
+          stop: () => {
+            studioControls.stop();
+            youtubeControls?.seekTo(0);
+            youtubeControls?.pause();
+          },
+          seek: (time: number) => {
+            studioControls.seek(time);
+            youtubeControls?.seekTo(time);
+          },
+        }
+      : youtubeActive
+        ? {
+            play: async () => {
+              youtubeControls!.play();
+            },
+            pause: () => {
+              youtubeControls!.pause();
+            },
+            stop: () => {
+              youtubeControls!.seekTo(0);
+              youtubeControls!.pause();
+            },
+            seek: (time: number) => {
+              youtubeControls!.seekTo(time);
+            },
+          }
+        : studioControls;
+
+  // ── 6f. Forward YouTube user interactions to multi-track ──
+  // (already handled via handleYoutubeStateChange — enhanced below)
+
+  // ── 6g. Bridge multi-track time → sessionStore (for lyrics sync) + YouTube seek detection ──
+  useEffect(() => {
+    if (!useMultiTrackAudio) return;
+    const id = setInterval(() => {
+      const mtTime = useAudioStore.getState().transport.currentTime;
+      setPlaybackTime(mtTime);
+
+      // Detect YouTube manual seek (delta > 1.5s → sync multi-track)
+      if (youtubeControls && studioControls) {
+        const ytTime = youtubeControls.getCurrentTime();
+        if (Math.abs(ytTime - mtTime) > 1.5) {
+          studioControls.seek(ytTime);
+        }
+      }
+    }, 250);
+    return () => clearInterval(id);
+  }, [useMultiTrackAudio, setPlaybackTime, youtubeControls, studioControls]);
+
+  // ── 6h. Drift correction: sync YouTube video to multi-track every 5s ──
+  useEffect(() => {
+    if (!useMultiTrackAudio || !youtubeControls) return;
+    const id = setInterval(() => {
+      const mtTime = useAudioStore.getState().transport.currentTime;
+      const ytTime = youtubeControls.getCurrentTime();
+      if (Math.abs(mtTime - ytTime) > 1.0) {
+        youtubeControls.seekTo(mtTime);
+      }
+    }, 5000);
+    return () => clearInterval(id);
+  }, [useMultiTrackAudio, youtubeControls]);
 
   const [analysisTaskId, setAnalysisTaskId] = useState<string | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -735,6 +859,7 @@ export default function AppPage() {
     setAnalysisTaskId(null);
     setAnalysisProgress(null);
     setStudioControls(null);
+    setMultiTrackReady(false);
     setYoutubeControls(null);
     setYoutubeDuration(0);
     reset();
@@ -771,6 +896,10 @@ export default function AppPage() {
     handleReset,
     setStatus,
   ]);
+
+  const handleMixerToggle = useCallback(() => {
+    setMixerOpen((v) => !v);
+  }, []);
 
   // Shared lyrics display props
   const displayMode = karaokeMode && wordLines ? "karaoke" : "line";
@@ -887,8 +1016,10 @@ export default function AppPage() {
             displayMode={karaokeMode && wordLines ? "karaoke" : "line"}
             lyricsOffset={lyricsOffset}
             onOffsetChange={handleOffsetChange}
-            onTimeUpdate={setPlaybackTime}
-            onStateChange={setIsVideoPlaying}
+            onTimeUpdate={handleYoutubeTimeUpdate}
+            onStateChange={handleYoutubeStateChange}
+            onControlsReady={handleYoutubeControlsReady}
+            onDurationChange={handleYoutubeDurationChange}
             isRecording={status === "recording"}
             recordingDuration={
               status === "recording" ? recordingDuration : undefined
@@ -915,15 +1046,7 @@ export default function AppPage() {
         )}
 
       {/* ── Desktop unified layout (lg+) ── */}
-      <div className="hidden lg:flex h-[calc(100dvh-3.5rem)] overflow-hidden">
-        {sessionId && (
-          <AppSidebar
-            sessionId={sessionId}
-            studioContext={studioContext}
-            onTransportReady={setStudioControls}
-          />
-        )}
-
+      <div className="hidden lg:flex flex-col h-[calc(100dvh-3.5rem)] overflow-hidden">
         <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
           {/* Slim track banner */}
           <TrackBannerSlim track={selectedTrack} onReset={handleReset} />
@@ -936,7 +1059,10 @@ export default function AppPage() {
           )}
 
           {/* Center zone: left content + right lyrics */}
-          <div className="flex flex-1 min-h-0 overflow-hidden">
+          <div className={cn(
+            "flex min-h-0 overflow-hidden transition-all duration-300 ease-in-out",
+            mixerOpen ? "flex-none h-[200px]" : "flex-1"
+          )}>
             {/* LEFT — main content zone */}
             <div className="flex-1 min-w-0 overflow-y-auto p-4 flex flex-col gap-3">
               {/* Video (preparing / downloading / ready / recording) */}
@@ -1181,7 +1307,7 @@ export default function AppPage() {
             </div>
           </div>
 
-          {/* Sticky bottom bar */}
+          {/* Sticky bottom bar with expandable mixer */}
           <AppBottomBar
             status={status as "ready" | "recording" | "uploading" | "analyzing" | "results" | "idle" | "selecting" | "preparing" | "needs_fallback" | "downloading"}
             selectedTrack={selectedTrack}
@@ -1192,9 +1318,16 @@ export default function AppPage() {
             onReset={handleReset}
             onCancel={handleCancel}
             analysisProgress={analysisProgress}
-            isPlaying={youtubeActive ? isVideoPlaying : undefined}
-            currentTime={youtubeActive ? playbackTime : undefined}
-            duration={youtubeActive ? youtubeDuration : undefined}
+            isPlaying={useMultiTrackAudio ? undefined : youtubeActive ? isVideoPlaying : undefined}
+            currentTime={useMultiTrackAudio ? undefined : youtubeActive ? playbackTime : undefined}
+            duration={useMultiTrackAudio ? undefined : youtubeActive ? youtubeDuration : undefined}
+            audioSource={useMultiTrackAudio ? 'multitrack' : youtubeActive ? 'youtube' : null}
+            mixerOpen={mixerOpen}
+            onMixerToggle={handleMixerToggle}
+            sessionId={sessionId}
+            studioContext={studioContext}
+            onTransportReady={handleStudioTransportReady}
+            spotifyTrackId={selectedTrack?.id || null}
           />
         </div>
       </div>

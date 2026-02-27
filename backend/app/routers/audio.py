@@ -71,28 +71,43 @@ async def list_available_tracks(session_id: str):
         _is_storage_url(reference_path) or Path(reference_path).exists()
     )
 
-    # Separated tracks: check storage (4 HEAD requests, concurrent)
-    async def _check(rel_path: str) -> bool:
+    # Separated tracks: check storage (session path first, then cache fallback)
+    youtube_id = session.get("youtube_id")
+
+    async def _check_with_fallback(session_path: str, cache_path: str | None) -> tuple[bool, str]:
+        """Check session path first, fallback to cache. Returns (available, source)."""
         try:
-            return await storage.exists(rel_path)
+            if await storage.exists(session_path):
+                return True, "session"
         except Exception:
-            return False
+            pass
+        if cache_path:
+            try:
+                if await storage.exists(cache_path):
+                    return True, "cache"
+            except Exception:
+                pass
+        return False, ""
 
     ref_vocals_path = f"sessions/{session_id}_ref/vocals.wav"
     ref_instru_path = f"sessions/{session_id}_ref/instrumentals.wav"
     user_vocals_path = f"sessions/{session_id}_user/vocals.wav"
     user_instru_path = f"sessions/{session_id}_user/instrumentals.wav"
 
+    # Cache fallback paths (only for ref tracks, keyed by youtube_id)
+    cache_vocals = f"cache/{youtube_id}/vocals.wav" if youtube_id else None
+    cache_instru = f"cache/{youtube_id}/instrumentals.wav" if youtube_id else None
+
     (
-        ref_vocals_ready,
-        ref_instru_ready,
-        user_vocals_ready,
-        user_instru_ready,
+        (ref_vocals_ready, ref_vocals_source),
+        (ref_instru_ready, ref_instru_source),
+        (user_vocals_ready, _user_v_src),
+        (user_instru_ready, _user_i_src),
     ) = await asyncio.gather(
-        _check(ref_vocals_path),
-        _check(ref_instru_path),
-        _check(user_vocals_path),
-        _check(user_instru_path),
+        _check_with_fallback(ref_vocals_path, cache_vocals),
+        _check_with_fallback(ref_instru_path, cache_instru),
+        _check_with_fallback(user_vocals_path, None),
+        _check_with_fallback(user_instru_path, None),
     )
 
     return {
@@ -102,6 +117,8 @@ async def list_available_tracks(session_id: str):
                 "vocals": ref_vocals_ready,
                 "instrumentals": ref_instru_ready,
                 "original": ref_original_ready,
+                "vocals_source": ref_vocals_source,
+                "instrumentals_source": ref_instru_source,
             },
             "user": {
                 "vocals": user_vocals_ready,
@@ -170,6 +187,14 @@ async def get_audio_track(
     # Quick storage existence check (also handles backward-compat via legacy dirs)
     if await storage.exists(rel_path):
         return RedirectResponse(url=storage_url, status_code=302)
+
+    # Cache fallback for ref tracks (available before session copies finish)
+    if source == "ref":
+        youtube_id = session.get("youtube_id")
+        if youtube_id:
+            cache_path = f"cache/{youtube_id}/{track_type}.wav"
+            if await storage.exists(cache_path):
+                return RedirectResponse(url=storage.public_url(cache_path), status_code=302)
 
     # Backward-compat: try legacy local path
     legacy_base = Path(settings.audio_upload_dir)

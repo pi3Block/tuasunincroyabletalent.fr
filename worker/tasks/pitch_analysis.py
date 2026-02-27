@@ -89,7 +89,7 @@ def do_extract_pitch(vocals_path: str, session_id: str, fast_mode: bool = False)
         "mean_pitch": float(np.mean(valid_freqs)) if len(valid_freqs) > 0 else 0,
         "std_pitch": float(np.std(valid_freqs)) if len(valid_freqs) > 0 else 0,
         "pitch_range": float(np.ptp(valid_freqs)) if len(valid_freqs) > 0 else 0,
-        "voiced_ratio": float(np.sum(frequency > 0) / len(frequency)),
+        "voiced_ratio": float(np.sum(frequency > 0) / len(frequency)) if len(frequency) > 0 else 0,
     }
 
     logger.info("Pitch extraction complete: %s", pitch_path)

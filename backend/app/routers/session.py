@@ -333,7 +333,18 @@ async def upload_recording(session_id: str, audio: UploadFile = File(...)):
             detail="Reference audio not ready yet"
         )
 
+    # Validate file type
+    allowed_types = {"audio/webm", "audio/wav", "audio/wave", "audio/x-wav", "audio/ogg", "audio/mp4"}
+    if audio.content_type and audio.content_type not in allowed_types:
+        raise HTTPException(status_code=415, detail=f"Unsupported audio format: {audio.content_type}")
+
     content = await audio.read()
+
+    # Validate file size (max 100 MB)
+    max_size = 100 * 1024 * 1024
+    if len(content) > max_size:
+        raise HTTPException(status_code=413, detail="File too large (max 100 MB)")
+
     ext = Path(audio.filename or "user_recording.webm").suffix or ".webm"
 
     # Upload directly to remote storage

@@ -2,18 +2,20 @@
 
 /**
  * AppBottomBar — Barre de contrôle sticky en bas de l'interface.
- * Gauche : transport studio (play/pause/seek) ou info chanson.
+ * Inclut un panneau mixer expandable au-dessus du transport.
+ * Gauche : transport studio (play/pause/seek) avec bouton mixer.
  * Centre : indicateur de statut (prêt, enregistrement, analyse...).
  * Droite : bouton CTA principal (Enregistrer / Arrêter / Recommencer).
  */
 
 import React, { memo } from "react";
-import { Mic, Square, RotateCcw, Loader2, CheckCircle2, X } from "lucide-react";
+import { Mic, Square, RotateCcw, Loader2, CheckCircle2, X, SlidersHorizontal } from "lucide-react";
 import { TransportBar } from "@/audio/components/TransportBar";
+import { StudioMode } from "@/audio";
 import { useAudioStore } from "@/stores/audioStore";
 import { cn } from "@/lib/utils";
 import type { Track } from "@/api/client";
-import type { StudioTransportControls } from "@/audio/types";
+import type { StudioTransportControls, StudioContext } from "@/audio/types";
 
 type AppStatus =
   | "idle"
@@ -51,6 +53,20 @@ interface AppBottomBarProps {
   currentTime?: number;
   /** Override duration for TransportBar (e.g. from YouTube) */
   duration?: number;
+  /** Whether the mixer panel is open */
+  mixerOpen?: boolean;
+  /** Toggle the mixer panel */
+  onMixerToggle?: () => void;
+  /** Session ID for StudioMode (required for mixer) */
+  sessionId?: string | null;
+  /** Studio context for StudioMode */
+  studioContext?: StudioContext;
+  /** Callback when StudioMode transport is ready */
+  onTransportReady?: (controls: StudioTransportControls) => void;
+  /** Current audio source indicator */
+  audioSource?: 'youtube' | 'multitrack' | null;
+  /** Spotify track ID for persisting mixer preferences */
+  spotifyTrackId?: string | null;
 }
 
 function formatDuration(seconds: number): string {
@@ -72,6 +88,13 @@ export const AppBottomBar = memo(function AppBottomBar({
   isPlaying,
   currentTime,
   duration,
+  mixerOpen = false,
+  onMixerToggle,
+  sessionId,
+  studioContext = "practice",
+  onTransportReady,
+  audioSource,
+  spotifyTrackId,
 }: AppBottomBarProps) {
   // Fallback direct sur l'audioStore si studioControls pas encore prêt (chargement async).
   // Les callbacks de studioControls proviennent du même store — fonctionnellement identiques.
@@ -87,17 +110,60 @@ export const AppBottomBar = memo(function AppBottomBar({
   };
 
   return (
-    <div
-      className={cn(
-        "shrink-0 h-16 flex items-center gap-3 px-4",
-        "border-t border-border/50",
-        "bg-card/90 backdrop-blur-md",
-        // Gradient accent sur le bord supérieur
-        "relative",
-        "before:absolute before:inset-x-0 before:top-0 before:h-px",
-        "before:bg-linear-to-r before:from-transparent before:via-primary/40 before:to-transparent"
+    <div className="shrink-0 flex flex-col bg-card/90 backdrop-blur-md">
+      {/* Panneau Mixer expandable — au-dessus du transport */}
+      {sessionId && (
+        <div
+          className={cn(
+            "overflow-hidden transition-all duration-300 ease-in-out",
+            mixerOpen ? "max-h-[280px] border-t border-border/50" : "max-h-0"
+          )}
+        >
+          <div className="p-3">
+            {/* Header mixer */}
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <SlidersHorizontal className="h-4 w-4 text-primary" />
+                <span className="font-semibold text-sm">Mixer</span>
+              </div>
+              <button
+                type="button"
+                onClick={onMixerToggle}
+                className={cn(
+                  "h-7 w-7 rounded-md flex items-center justify-center",
+                  "text-muted-foreground hover:text-foreground hover:bg-muted",
+                  "transition-colors touch-manipulation active:scale-95"
+                )}
+                aria-label="Fermer le mixer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* StudioMode — toujours monté pour le lifecycle des pistes */}
+            <StudioMode
+              key={`${sessionId}-${studioContext}`}
+              sessionId={sessionId}
+              context={studioContext}
+              onTransportReady={onTransportReady}
+              showTransport={false}
+              spotifyTrackId={spotifyTrackId}
+            />
+          </div>
+        </div>
       )}
-    >
+
+      {/* Transport row */}
+      <div
+        className={cn(
+          "h-16 flex items-center gap-3 px-4",
+          "border-t border-border/50",
+          // Gradient accent sur le bord supérieur
+          "relative",
+          "before:absolute before:inset-x-0 before:top-0 before:h-px",
+          "before:bg-linear-to-r before:from-transparent before:via-primary/40 before:to-transparent"
+        )}
+      >
       {/* Zone GAUCHE — Transport (toujours visible, fallback audioStore si pistes pas encore prêtes) */}
       <div className="flex-1 min-w-0 flex items-center">
         <TransportBar
@@ -109,6 +175,9 @@ export const AppBottomBar = memo(function AppBottomBar({
           currentTime={currentTime}
           duration={duration}
           compact
+          onMixerToggle={sessionId ? onMixerToggle : undefined}
+          mixerOpen={mixerOpen}
+          audioSource={audioSource}
           className="max-w-sm"
         />
       </div>
@@ -281,6 +350,7 @@ export const AppBottomBar = memo(function AppBottomBar({
             <span>Recommencer</span>
           </button>
         )}
+      </div>
       </div>
     </div>
   );

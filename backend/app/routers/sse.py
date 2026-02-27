@@ -52,6 +52,7 @@ async def _session_event_generator(session_id: str):
     last_ref_status = None
     last_analysis_status = None
     last_progress_step = None
+    last_tracks_ready = None
 
     yield _format_sse("connected", {"session_id": session_id})
 
@@ -74,6 +75,16 @@ async def _session_event_generator(session_id: str):
                     "track_name": session.get("track_name"),
                     "artist_name": session.get("artist_name"),
                     "error": session.get("error"),
+                })
+
+            # --- Tracks ready (ref stems from prepare_reference) ---
+            tracks_ready_at = session.get("tracks_ready_at")
+            if tracks_ready_at and tracks_ready_at != last_tracks_ready:
+                last_tracks_ready = tracks_ready_at
+                yield _format_sse("tracks_ready", {
+                    "session_id": session_id,
+                    "source": "ref",
+                    "tracks": ["vocals", "instrumentals"],
                 })
 
             # --- Analysis task progress ---
@@ -158,6 +169,7 @@ async def stream_session_events(session_id: str):
     Events:
     - connected: Initial connection confirmation
     - session_status: Reference status changes
+    - tracks_ready: Reference stems available for multi-track playback
     - analysis_progress: Pipeline step updates
     - analysis_complete: Final results
     - analysis_error: Pipeline failure

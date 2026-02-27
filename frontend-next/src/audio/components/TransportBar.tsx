@@ -4,7 +4,7 @@
 import { useCallback } from 'react'
 import { useTransport } from '@/stores/audioStore'
 import { Slider } from '@/components/ui/slider'
-import { Play, Pause, SkipBack, SkipForward, Square } from 'lucide-react'
+import { Play, Pause, SkipBack, SkipForward, Square, SlidersHorizontal } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 interface TransportBarProps {
@@ -20,6 +20,12 @@ interface TransportBarProps {
   duration?: number
   /** Inline single-row layout for bottom bar */
   compact?: boolean
+  /** Toggle mixer panel */
+  onMixerToggle?: () => void
+  /** Whether the mixer panel is open */
+  mixerOpen?: boolean
+  /** Current audio source indicator */
+  audioSource?: 'youtube' | 'multitrack' | null
   className?: string
 }
 
@@ -38,6 +44,9 @@ export function TransportBar({
   currentTime: currentTimeOverride,
   duration: durationOverride,
   compact = false,
+  onMixerToggle,
+  mixerOpen = false,
+  audioSource,
   className,
 }: TransportBarProps) {
   const transport = useTransport()
@@ -76,6 +85,37 @@ export function TransportBar({
   if (compact) {
     return (
       <div className={cn('flex items-center gap-2', className)}>
+        {/* Mixer toggle */}
+        {onMixerToggle && (
+          <button
+            type="button"
+            onClick={onMixerToggle}
+            className={cn(
+              'h-8 w-8 rounded-full flex items-center justify-center shrink-0',
+              'transition-colors touch-manipulation active:scale-95',
+              mixerOpen
+                ? 'bg-primary/20 text-primary'
+                : 'text-muted-foreground hover:text-foreground'
+            )}
+            title={mixerOpen ? 'Fermer le mixer' : 'Ouvrir le mixer'}
+            aria-label={mixerOpen ? 'Fermer le mixer' : 'Ouvrir le mixer'}
+          >
+            <SlidersHorizontal className="h-4 w-4" />
+          </button>
+        )}
+
+        {/* Audio source badge */}
+        {audioSource === 'youtube' && (
+          <span className="shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30">
+            YT
+          </span>
+        )}
+        {audioSource === 'multitrack' && (
+          <span className="shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+            MT
+          </span>
+        )}
+
         {/* Skip back */}
         <button
           type="button"
@@ -196,6 +236,25 @@ export function TransportBar({
 
       {/* Controls */}
       <div className="flex items-center justify-center gap-2">
+        {/* Mixer toggle */}
+        {onMixerToggle && (
+          <button
+            type="button"
+            onClick={onMixerToggle}
+            className={cn(
+              'h-12 w-12 lg:h-9 lg:w-9 rounded-full flex items-center justify-center',
+              'transition-colors touch-manipulation active:scale-95',
+              mixerOpen
+                ? 'bg-primary/20 text-primary'
+                : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
+            )}
+            title={mixerOpen ? 'Fermer le mixer' : 'Ouvrir le mixer'}
+            aria-label={mixerOpen ? 'Fermer le mixer' : 'Ouvrir le mixer'}
+          >
+            <SlidersHorizontal className="h-5 w-5 lg:h-4 lg:w-4" />
+          </button>
+        )}
+
         {/* Skip back 10s */}
         <button
           type="button"

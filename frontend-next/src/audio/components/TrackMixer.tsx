@@ -5,6 +5,7 @@ import { useAudioStore, useTracks, useMasterVolume } from '@/stores/audioStore'
 import { AudioTrack } from './AudioTrack'
 import { VolumeSlider } from './VolumeSlider'
 import { getTrackKey } from '../core/AudioPlayerFactory'
+import { useMixerPreferences } from '../hooks/useMixerPreferences'
 import { cn } from '@/lib/utils'
 import type { TrackId } from '../types'
 
@@ -44,6 +45,8 @@ interface TrackMixerProps {
   compact?: boolean
   showMaster?: boolean
   showDownload?: boolean
+  /** Spotify track ID for persisting mixer preferences */
+  spotifyTrackId?: string | null
   className?: string
 }
 
@@ -51,12 +54,14 @@ export function TrackMixer({
   compact = false,
   showMaster = true,
   showDownload = false,
+  spotifyTrackId = null,
   className,
 }: TrackMixerProps) {
   const tracks = useTracks()
   const masterVolume = useMasterVolume()
   const { setTrackVolume, setTrackMuted, setTrackSolo, setMasterVolume } =
     useAudioStore()
+  const { save: saveMixerPrefs } = useMixerPreferences(spotifyTrackId)
 
   const trackEntries = Object.entries(tracks)
 
@@ -66,6 +71,7 @@ export function TrackMixer({
 
   const handleVolumeChange = (id: TrackId) => (volume: number) => {
     setTrackVolume(id, volume)
+    saveMixerPrefs()
   }
 
   const handleMuteToggle = (id: TrackId) => () => {
@@ -73,6 +79,7 @@ export function TrackMixer({
     const track = tracks[key]
     if (track) {
       setTrackMuted(id, !track.muted)
+      saveMixerPrefs()
     }
   }
 
@@ -81,6 +88,7 @@ export function TrackMixer({
     const track = tracks[key]
     if (track) {
       setTrackSolo(id, !track.solo)
+      saveMixerPrefs()
     }
   }
 

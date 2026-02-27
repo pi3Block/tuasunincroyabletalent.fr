@@ -165,6 +165,12 @@ export function useWordTimestamps({
       if (response.status === 'queued' && response.task_id) {
         taskIdRef.current = response.task_id
 
+        // Clear any existing polling before starting a new one
+        if (pollIntervalRef.current) {
+          clearInterval(pollIntervalRef.current)
+          pollIntervalRef.current = null
+        }
+
         // Start polling for completion
         pollIntervalRef.current = setInterval(async () => {
           try {
@@ -250,6 +256,12 @@ export function useWordTimestamps({
 
       if (response.status === 'queued' && response.task_id) {
         taskIdRef.current = response.task_id
+
+        // Clear any existing polling before starting a new one
+        if (pollIntervalRef.current) {
+          clearInterval(pollIntervalRef.current)
+          pollIntervalRef.current = null
+        }
 
         // Start polling for completion
         pollIntervalRef.current = setInterval(async () => {

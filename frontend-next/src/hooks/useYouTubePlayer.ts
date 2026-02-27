@@ -25,6 +25,10 @@ interface UseYouTubePlayerReturn {
   play: () => void
   pause: () => void
   seekTo: (seconds: number) => void
+  mute: () => void
+  unMute: () => void
+  setVolume: (volume: number) => void
+  getVolume: () => number
 }
 
 let apiLoaded = false
@@ -201,6 +205,22 @@ export function useYouTubePlayer({
     onTimeUpdateRef.current?.(seconds)
   }, [])
 
+  const mute = useCallback(() => {
+    playerRef.current?.mute()
+  }, [])
+
+  const unMute = useCallback(() => {
+    playerRef.current?.unMute()
+  }, [])
+
+  const setVolume = useCallback((volume: number) => {
+    playerRef.current?.setVolume(volume)
+  }, [])
+
+  const getVolume = useCallback(() => {
+    return playerRef.current?.getVolume() ?? 100
+  }, [])
+
   return {
     containerRef,
     isReady,
@@ -210,5 +230,9 @@ export function useYouTubePlayer({
     play,
     pause,
     seekTo,
+    mute,
+    unMute,
+    setVolume,
+    getVolume,
   }
 }

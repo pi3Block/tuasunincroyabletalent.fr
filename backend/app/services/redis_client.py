@@ -16,12 +16,15 @@ class RedisClient:
         self._client: redis.Redis | None = None
 
     async def get_client(self) -> redis.Redis:
-        """Get or create Redis connection."""
+        """Get or create Redis connection with connection pooling."""
         if self._client is None:
             self._client = redis.from_url(
                 settings.redis_url,
                 encoding="utf-8",
                 decode_responses=True,
+                max_connections=20,
+                socket_connect_timeout=5,
+                socket_keepalive=True,
             )
         return self._client
 

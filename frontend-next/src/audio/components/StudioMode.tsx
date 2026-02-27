@@ -20,6 +20,8 @@ interface StudioModeProps {
   onTransportReady?: (controls: StudioTransportControls) => void
   /** Whether to show the inline TransportBar (default: false — moved to AppBottomBar) */
   showTransport?: boolean
+  /** Spotify track ID for persisting mixer preferences */
+  spotifyTrackId?: string | null
   className?: string
 }
 
@@ -42,6 +44,7 @@ export function StudioMode({
   onError,
   onTransportReady,
   showTransport = false,
+  spotifyTrackId = null,
   className,
 }: StudioModeProps) {
   const [error, setError] = React.useState<string | null>(null)
@@ -49,6 +52,7 @@ export function StudioMode({
   const [waitingForTracks, setWaitingForTracks] = React.useState(false)
   const { isLoading, loadingMessage } = useAudioLoading()
   const retryIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const loadDelayRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const reset = useAudioStore((s) => s.reset)
 
   const { loadTracks, resetInit, play, pause, stop, seek, isReady } = useMultiTrack({
@@ -86,25 +90,32 @@ export function StudioMode({
     loadTracks()
   }, [loadTracks])
 
-  // Auto-retry for analyzing context only (practice tracks won't exist until after first analysis)
+  // Auto-retry for analyzing and practice contexts
   useEffect(() => {
-    if (context === 'analyzing' && waitingForTracks && !isReady) {
-      // Poll every 5 seconds to check if tracks are available
+    if ((context === 'analyzing' || context === 'practice') && waitingForTracks && !isReady) {
+      // Practice: poll faster (2s) since ref tracks arrive in 5-25s
+      // Analyzing: poll every 5s for separated tracks
+      const retryInterval = context === 'practice' ? 2000 : 5000
       retryIntervalRef.current = setInterval(() => {
         setRetryCount((c) => c + 1)
         // Reset the store + init guard before retrying
         reset()
         resetInit()
         // Small delay before reloading
-        setTimeout(() => {
+        if (loadDelayRef.current) clearTimeout(loadDelayRef.current)
+        loadDelayRef.current = setTimeout(() => {
           loadTracks()
         }, 100)
-      }, 5000)
+      }, retryInterval)
 
       return () => {
         if (retryIntervalRef.current) {
           clearInterval(retryIntervalRef.current)
           retryIntervalRef.current = null
+        }
+        if (loadDelayRef.current) {
+          clearTimeout(loadDelayRef.current)
+          loadDelayRef.current = null
         }
       }
     }
@@ -115,6 +126,9 @@ export function StudioMode({
     return () => {
       if (retryIntervalRef.current) {
         clearInterval(retryIntervalRef.current)
+      }
+      if (loadDelayRef.current) {
+        clearTimeout(loadDelayRef.current)
       }
     }
   }, [])
@@ -132,7 +146,8 @@ export function StudioMode({
     setWaitingForTracks(false)
     reset()
     resetInit()
-    setTimeout(() => {
+    if (loadDelayRef.current) clearTimeout(loadDelayRef.current)
+    loadDelayRef.current = setTimeout(() => {
       loadTracks()
     }, 100)
   }, [loadTracks, reset, resetInit])
@@ -170,7 +185,7 @@ export function StudioMode({
         className={cn(
           'rounded-xl border',
           isPractice
-            ? 'bg-muted/30 border-border/50'
+            ? 'bg-amber-500/10 border-amber-500/30'
             : 'bg-amber-500/10 border-amber-500/30',
           className
         )}
@@ -178,7 +193,10 @@ export function StudioMode({
         <div className="flex flex-col items-center justify-center py-8 gap-3">
           <div className="relative">
             {isPractice ? (
-              <Music2 className="h-10 w-10 text-muted-foreground" />
+              <>
+                <div className="h-10 w-10 rounded-full border-2 border-amber-500 border-t-transparent animate-spin" />
+                <Music2 className="h-4 w-4 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-amber-500" />
+              </>
             ) : (
               <>
                 <div className="h-10 w-10 rounded-full border-2 border-amber-500 border-t-transparent animate-spin" />
@@ -189,10 +207,15 @@ export function StudioMode({
           <div className="text-center">
             {isPractice ? (
               <>
-                <p className="font-medium text-muted-foreground">Studio disponible après analyse</p>
-                <p className="text-sm text-muted-foreground/60 mt-1">
-                  Enregistre-toi, les pistes seront prêtes ensuite
+                <p className="font-medium text-amber-200">Pistes audio en préparation...</p>
+                <p className="text-sm text-amber-300/70 mt-1">
+                  Les pistes de référence arrivent bientôt
                 </p>
+                {retryCount > 0 && (
+                  <p className="text-xs text-muted-foreground mt-2">
+                    Vérification automatique... ({retryCount})
+                  </p>
+                )}
               </>
             ) : (
               <>
@@ -308,7 +331,7 @@ export function StudioMode({
       )}
 
       {/* Mixer */}
-      <TrackMixer showDownload={context === 'results'} />
+      <TrackMixer showDownload={context === 'results'} spotifyTrackId={spotifyTrackId} />
     </div>
   )
 }

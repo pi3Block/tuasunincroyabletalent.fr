@@ -4,7 +4,7 @@
  */
 
 import { memo } from 'react'
-import { YouTubePlayer } from '@/components/app/YouTubePlayer'
+import { YouTubePlayer, type YouTubePlayerControls } from '@/components/app/YouTubePlayer'
 import { LyricsDisplayPro } from '@/components/lyrics/LyricsDisplayPro'
 import type { YouTubeMatch, SyncedLyricLine, WordLine } from '@/api/client'
 
@@ -37,6 +37,10 @@ interface LandscapeRecordingLayoutProps {
   recordingDuration?: number
   /** Action button (start/stop recording) */
   actionButton: React.ReactNode
+  /** Called when YouTube player controls are ready */
+  onControlsReady?: (controls: YouTubePlayerControls) => void
+  /** Called when YouTube player duration changes */
+  onDurationChange?: (duration: number) => void
 }
 
 /**
@@ -58,6 +62,8 @@ export const LandscapeRecordingLayout = memo(function LandscapeRecordingLayout({
   isRecording = false,
   recordingDuration = 0,
   actionButton,
+  onControlsReady,
+  onDurationChange,
 }: LandscapeRecordingLayoutProps) {
   const formatSeconds = (seconds: number): string => {
     const mins = Math.floor(seconds / 60)
@@ -77,6 +83,8 @@ export const LandscapeRecordingLayout = memo(function LandscapeRecordingLayout({
                 video={youtubeMatch}
                 onTimeUpdate={onTimeUpdate}
                 onStateChange={onStateChange}
+                onControlsReady={onControlsReady}
+                onDurationChange={onDurationChange}
               />
             </div>
           ) : (
