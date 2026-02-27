@@ -335,8 +335,25 @@ def generate_word_timestamps_cached(
     vocals_path = cache_dir / "vocals.wav"
     instrumentals_path = cache_dir / "instrumentals.wav"
 
-    # Step 1: Demucs separation (only if vocals not cached)
-    if not vocals_path.exists() or force_regenerate:
+    # Step 1: Check for cached vocals (local → remote storage → Demucs)
+    from .storage_client import get_storage
+    storage = get_storage()
+    need_demucs = (not vocals_path.exists() or force_regenerate)
+
+    if need_demucs:
+        # Check remote storage for Demucs cache (uploaded by prepare_reference)
+        remote_vocals = f"cache/{youtube_video_id}/vocals.wav"
+
+        if not force_regenerate and storage.exists(remote_vocals):
+            logger.info("Found Demucs cache in remote storage for %s — downloading", youtube_video_id)
+            self.update_state(state="PROGRESS", meta={
+                "step": "downloading_cached",
+                "spotify_track_id": spotify_track_id,
+            })
+            storage.download_to_file(remote_vocals, vocals_path)
+            need_demucs = False
+
+    if need_demucs:
         self.update_state(state="PROGRESS", meta={
             "step": "unloading_ollama",
             "spotify_track_id": spotify_track_id,
@@ -352,8 +369,15 @@ def generate_word_timestamps_cached(
 
         logger.info("Running Demucs separation...")
 
-        # Load and prepare audio
-        audio_path = Path(reference_path)
+        # Resolve reference_path: download from storage if it's a URL
+        if reference_path.startswith("http://") or reference_path.startswith("https://"):
+            local_ref_path = cache_dir / "reference_dl.wav"
+            logger.info("Downloading reference from storage: %s", reference_path)
+            storage.download_to_file(reference_path, local_ref_path)
+            audio_path = local_ref_path
+        else:
+            audio_path = Path(reference_path)
+
         if audio_path.suffix.lower() in [".webm", ".opus", ".ogg"]:
             wav_path = audio_path.with_suffix(".wav")
             convert_to_wav(audio_path, wav_path)

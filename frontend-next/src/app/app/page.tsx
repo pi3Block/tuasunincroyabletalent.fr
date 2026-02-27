@@ -363,6 +363,8 @@ export default function AppPage() {
   );
 
   // ── 6c. Crossfade YouTube → Multi-Track when ref stems load ──
+  // Once multi-track has loaded, YouTube stays permanently muted (no unmute on status change).
+  // Only unmute if multi-track was never loaded (initial YouTube-only phase or after full reset).
   useEffect(() => {
     if (!youtubeControls) return;
 
@@ -382,11 +384,12 @@ export default function AppPage() {
         }
       }, stepMs);
       return () => clearInterval(fadeOut);
-    } else {
+    } else if (!multiTrackReady) {
+      // Only restore YouTube audio if multi-track was never loaded
       youtubeControls.unMute();
       youtubeControls.setVolume(100);
     }
-  }, [useMultiTrackAudio, youtubeControls]);
+  }, [useMultiTrackAudio, multiTrackReady, youtubeControls]);
 
   // ── 6d. Sync multi-track to YouTube position on first load ──
   const prevMultiTrackReady = useRef(false);
@@ -822,6 +825,10 @@ export default function AppPage() {
 
     stopPitchAnalysis();
 
+    // Pause all audio BEFORE status change to avoid crossfade unmuting YouTube
+    studioControls?.stop();
+    youtubeControls?.pause();
+
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach((track) => track.stop());
       mediaStreamRef.current = null;
@@ -851,6 +858,8 @@ export default function AppPage() {
     sessionId,
     stopAudioRecording,
     stopPitchAnalysis,
+    studioControls,
+    youtubeControls,
     setStatus,
     setError,
   ]);

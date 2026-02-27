@@ -92,9 +92,11 @@ async def prepare_reference_audio(session_id: str, youtube_url: str, youtube_id:
                 "youtube_id": youtube_id,
             })
             # Trigger GPU separation for StudioMode (uses its own cache internally)
+            # Always pass youtube_url so worker can fallback to yt-dlp if storage 404s
+            cached_yt_url = cached.get("youtube_url") or youtube_url
             celery_app.send_task(
                 "tasks.pipeline.prepare_reference",
-                args=[session_id, cached["reference_path"], youtube_id],
+                args=[session_id, cached["reference_path"], youtube_id, cached_yt_url],
                 queue="gpu-heavy",  # Demucs requires high VRAM
             )
             print(f"[Session {session_id}] Queued GPU separation for StudioMode")
