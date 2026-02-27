@@ -303,7 +303,17 @@ export function useWordTimestamps({
   }, [spotifyTrackId, youtubeVideoId, artistName, trackName, language, pollInterval])
 
   // Initial fetch when IDs change
+  // Also cleans up any active polling from the previous track to prevent
+  // stale data from a previous generation being loaded into state.
   useEffect(() => {
+    // Clear polling from previous track before fetching new data
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current)
+      pollIntervalRef.current = null
+    }
+    taskIdRef.current = null
+    setIsGenerating(false)
+
     if (spotifyTrackId) {
       fetchWordTimestamps()
     } else {

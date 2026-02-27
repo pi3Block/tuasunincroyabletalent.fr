@@ -104,11 +104,10 @@ async def prepare_reference_audio(session_id: str, youtube_url: str, youtube_id:
 
         # Optimization A: skip backend download — worker downloads directly from YouTube.
         # Saves ~15s (backend download + upload to storage + worker download from storage).
-        # Worker will upload reference.wav to storage after downloading, so future
-        # analyze_performance tasks can fall back to it if Demucs cache is cold.
+        # Worker uploads reference.flac to storage (lossless, ~15-20 MB vs ~50 MB WAV).
         expected_ref_url = (
             f"{settings.storage_url}/files/{settings.storage_bucket}"
-            f"/cache/{youtube_id}/reference.wav"
+            f"/cache/{youtube_id}/reference.flac"
         )
 
         # Pre-populate cache with expected URL so future sessions hit cache directly

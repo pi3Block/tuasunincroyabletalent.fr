@@ -371,9 +371,22 @@ def generate_word_timestamps_cached(
 
         # Resolve reference_path: download from storage if it's a URL
         if reference_path.startswith("http://") or reference_path.startswith("https://"):
-            local_ref_path = cache_dir / "reference_dl.wav"
+            # Preserve original extension (.flac or .wav)
+            ext = ".flac" if reference_path.endswith(".flac") else ".wav"
+            local_ref_path = cache_dir / f"reference_dl{ext}"
             logger.info("Downloading reference from storage: %s", reference_path)
-            storage.download_to_file(reference_path, local_ref_path)
+            try:
+                storage.download_to_file(reference_path, local_ref_path)
+            except Exception:
+                # Fallback: try alternate extension (.wav ↔ .flac)
+                alt_url = (
+                    reference_path.rsplit(".", 1)[0]
+                    + (".wav" if ext == ".flac" else ".flac")
+                )
+                alt_ext = ".wav" if ext == ".flac" else ".flac"
+                local_ref_path = cache_dir / f"reference_dl{alt_ext}"
+                logger.info("Fallback: trying %s", alt_url)
+                storage.download_to_file(alt_url, local_ref_path)
             audio_path = local_ref_path
         else:
             audio_path = Path(reference_path)

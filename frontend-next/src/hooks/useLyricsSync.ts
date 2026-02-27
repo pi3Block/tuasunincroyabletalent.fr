@@ -215,33 +215,33 @@ export function useLyricsSync({
   displayMode,
   enableWordTracking = true,
 }: UseLyricsSyncOptions): UseLyricsSyncReturn {
-  // Cache previous line index for stability
-  const prevLineIndexRef = useRef<number>(-1)
+  // Direct computation — memo overhead exceeds cost of simple addition at 60fps
+  const adjustedTime = currentTime + offset
 
-  // Smoothing refs for word tracking
-  const prevWordIndexRef = useRef<number>(-1)
-  const wordIndexChangeTimeRef = useRef<number>(0)
-  const smoothedProgressRef = useRef<number>(0)
-  const lastLineIndexRef = useRef<number>(-1)
-
-  // Calculate adjusted time (with offset)
-  const adjustedTime = useMemo(
-    () => currentTime + offset,
-    [currentTime, offset]
-  )
+  // Consolidated word tracking state with Strict Mode idempotency guards.
+  // All mutable state lives in one ref to prevent scattered mutations.
+  // Guards ensure double-invocation in Strict Mode produces identical results
+  // by short-circuiting to cached output when inputs haven't changed.
+  const wordTrackingRef = useRef({
+    lineIndex: -1,
+    wordIndex: -1,
+    changeTime: 0,
+    smoothedProgress: 0,
+    // Idempotency guards (same inputs → same output, no double-mutation)
+    wordGuardTime: -Infinity,
+    wordGuardLine: -1,
+    progressGuardTime: -Infinity,
+    progressGuardWord: -1,
+    cachedWordIndex: -1,
+    cachedProgress: 0,
+    // Seek detection: -1 = not yet initialized (skip first-frame detection)
+    prevAdjustedTime: -1,
+  })
 
   // Find current line index using optimal algorithm
   const currentLineIndex = useMemo(() => {
     if (lines.length === 0) return -1
-
-    const index = findLineIndex(lines, adjustedTime)
-
-    // Update ref for stability
-    if (index !== -1) {
-      prevLineIndexRef.current = index
-    }
-
-    return index
+    return findLineIndex(lines, adjustedTime)
   }, [lines, adjustedTime])
 
   // Get current and next line objects
@@ -263,95 +263,134 @@ export function useLyricsSync({
     currentLine?.words &&
     currentLine.words.length > 0
 
-  // Calculate word index with hysteresis (prevents micro-jumps)
-  // IMPORTANT: Word index can only move FORWARD, never backward (except on line change)
-  // This prevents jumps caused by inconsistent Whisper timestamps
+  // Calculate word index with hysteresis (prevents micro-jumps).
+  // Word index only moves FORWARD (except on line change or after seek) to protect against Whisper jitter.
+  // Uses idempotency guards so React Strict Mode double-invocation produces identical results.
   const currentWordIndex = useMemo(() => {
     if (!shouldTrackWords || !currentLine) return -1
 
-    // CRITICAL: Detect line change INSIDE useMemo to avoid timing issues with useEffect
-    // useEffect runs AFTER render, so the first render would have stale refs
-    if (currentLineIndex !== lastLineIndexRef.current) {
-      lastLineIndexRef.current = currentLineIndex
-      prevWordIndexRef.current = -1
-      wordIndexChangeTimeRef.current = 0
-      smoothedProgressRef.current = 0
+    const t = wordTrackingRef.current
+
+    // Strict Mode idempotency: same inputs → return cached result, no double-mutation
+    if (t.wordGuardTime === adjustedTime && t.wordGuardLine === currentLineIndex) {
+      return t.cachedWordIndex
     }
+    t.wordGuardTime = adjustedTime
+    t.wordGuardLine = currentLineIndex
+
+    // Seek detection: large time jump (>1s) means user seeked — bypass forward-only this frame.
+    // prevAdjustedTime === -1 on first render → no seek detection on initial load.
+    const seekFrame = t.prevAdjustedTime >= 0 && Math.abs(adjustedTime - t.prevAdjustedTime) > 1
+    t.prevAdjustedTime = adjustedTime
+
+    // Line change → reset word tracking
+    if (currentLineIndex !== t.lineIndex) {
+      t.lineIndex = currentLineIndex
+      t.wordIndex = -1
+      t.changeTime = 0
+      t.smoothedProgress = 0
+    }
+
+    // Adaptive hysteresis: proportional to average word duration.
+    // Fast songs (120+ BPM) get a shorter window, slow songs get longer.
+    const hysteresisMs = (() => {
+      if (!currentLine.words || currentLine.words.length < 2) return WORD_CHANGE_DELAY_MS
+      const totalMs = currentLine.words.reduce((s, w) => s + w.endTimeMs - w.startTimeMs, 0)
+      return Math.min(0.15 * (totalMs / currentLine.words.length), 150)
+    })()
 
     const timeMs = adjustedTime * 1000
     const rawIndex = findWordIndex(currentLine, timeMs)
     const now = Date.now()
 
-    // CRITICAL FIX: When starting a new line (prev is -1), ALWAYS start at word 0
-    // This prevents Whisper's bad timestamps from jumping to middle of phrase
-    if (prevWordIndexRef.current === -1) {
-      // New line - start at beginning, only move forward from there
-      // If rawIndex > 0, it means Whisper has bad timestamps - ignore and start at 0
-      prevWordIndexRef.current = 0
-      wordIndexChangeTimeRef.current = 0
-      smoothedProgressRef.current = 0
-      return 0
+    let result: number
+
+    if (t.wordIndex === -1) {
+      if (seekFrame) {
+        // Seek to a new line: jump directly to the correct word (skip word-0 assumption)
+        t.wordIndex = Math.max(0, rawIndex)
+      } else {
+        // New line (normal play): start at word 0 — protects against bad Whisper timestamps
+        t.wordIndex = 0
+      }
+      t.changeTime = 0
+      t.smoothedProgress = 0
+      result = t.wordIndex
+    } else if (rawIndex === t.wordIndex) {
+      // Same word — reset hysteresis timer
+      t.changeTime = 0
+      result = rawIndex
+    } else if (rawIndex < t.wordIndex) {
+      // Backward movement — ignore (forward-only protects against Whisper jitter)
+      t.changeTime = 0
+      result = t.wordIndex
+    } else {
+      // Forward movement
+      if (seekFrame) {
+        // Seek within the same line: jump directly to the correct word
+        t.wordIndex = rawIndex
+        t.changeTime = 0
+        t.smoothedProgress = 0
+        result = rawIndex
+      } else if (rawIndex > t.wordIndex + 1) {
+        // Multi-word jump: allow if we're clearly past the current word's end time.
+        // This fixes stutter on fast songs where the +1 cap causes cumulative lag.
+        const curWord = currentLine.words![t.wordIndex]
+        if (curWord && timeMs > curWord.endTimeMs) {
+          t.wordIndex = rawIndex
+          t.changeTime = 0
+          t.smoothedProgress = 0
+          result = rawIndex
+        } else {
+          // Not past current word yet: cap at +1
+          t.wordIndex = t.wordIndex + 1
+          t.changeTime = 0
+          t.smoothedProgress = 0
+          result = t.wordIndex
+        }
+      } else {
+        // Single advance — apply adaptive hysteresis
+        if (t.changeTime === 0) {
+          t.changeTime = now
+        }
+
+        if (now - t.changeTime >= hysteresisMs) {
+          t.wordIndex = rawIndex
+          t.changeTime = 0
+          t.smoothedProgress = 0
+          result = rawIndex
+        } else {
+          result = t.wordIndex
+        }
+      }
     }
 
-    // If same word as before, keep it
-    if (rawIndex === prevWordIndexRef.current) {
-      wordIndexChangeTimeRef.current = 0
-      return rawIndex
-    }
-
-    // CRITICAL: Never go backward - only allow forward movement
-    // This prevents the "jump to middle then back to start" bug
-    if (rawIndex < prevWordIndexRef.current) {
-      // Whisper gave us an earlier word - ignore it, stay on current
-      wordIndexChangeTimeRef.current = 0
-      return prevWordIndexRef.current
-    }
-
-    // Only allow moving forward by 1 word at a time (prevents big jumps)
-    const nextExpectedWord = prevWordIndexRef.current + 1
-    const targetIndex = Math.min(rawIndex, nextExpectedWord)
-
-    // If trying to jump ahead, cap at next word
-    if (targetIndex !== rawIndex) {
-      // Whisper wants to skip words - only advance by 1
-      prevWordIndexRef.current = targetIndex
-      wordIndexChangeTimeRef.current = 0
-      smoothedProgressRef.current = 0
-      return targetIndex
-    }
-
-    // If new word detected (moving forward by 1), apply hysteresis
-    if (wordIndexChangeTimeRef.current === 0) {
-      // First detection of new word, start timer
-      wordIndexChangeTimeRef.current = now
-    }
-
-    // Only change if new word has been stable for WORD_CHANGE_DELAY_MS
-    if (now - wordIndexChangeTimeRef.current >= WORD_CHANGE_DELAY_MS) {
-      prevWordIndexRef.current = rawIndex
-      wordIndexChangeTimeRef.current = 0
-      // Reset progress smoothing when word changes
-      smoothedProgressRef.current = 0
-      return rawIndex
-    }
-
-    // Stay on previous word during hysteresis period
-    return prevWordIndexRef.current
+    t.cachedWordIndex = result
+    return result
   }, [shouldTrackWords, currentLine, currentLineIndex, adjustedTime])
 
   // Calculate word progress with EMA smoothing
   const wordProgress = useMemo(() => {
     if (!shouldTrackWords || !currentLine || currentWordIndex < 0) return 0
 
+    const t = wordTrackingRef.current
+
+    // Strict Mode idempotency guard
+    if (t.progressGuardTime === adjustedTime && t.progressGuardWord === currentWordIndex) {
+      return t.cachedProgress
+    }
+    t.progressGuardTime = adjustedTime
+    t.progressGuardWord = currentWordIndex
+
     const timeMs = adjustedTime * 1000
     const rawProgress = calculateWordProgress(currentLine, currentWordIndex, timeMs)
 
-    // Apply EMA smoothing: smoothed = α * raw + (1-α) * prev
+    // EMA smoothing: smoothed = α * raw + (1-α) * prev
     const smoothed = PROGRESS_SMOOTHING * rawProgress +
-      (1 - PROGRESS_SMOOTHING) * smoothedProgressRef.current
+      (1 - PROGRESS_SMOOTHING) * t.smoothedProgress
 
-    // Update ref for next frame
-    smoothedProgressRef.current = smoothed
+    t.smoothedProgress = smoothed
+    t.cachedProgress = smoothed
 
     return smoothed
   }, [shouldTrackWords, currentLine, currentWordIndex, adjustedTime])

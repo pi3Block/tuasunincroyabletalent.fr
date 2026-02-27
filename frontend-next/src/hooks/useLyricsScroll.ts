@@ -87,7 +87,7 @@ export function useLyricsScroll({
   isPlaying,
   containerRef,
   enabled = true,
-  behavior = 'smooth',
+  behavior: _behavior = 'smooth',
   block: _block = 'start',
   debounceMs = PERFORMANCE_CONFIG.SCROLL_DEBOUNCE_MS,
 }: UseLyricsScrollOptions): UseLyricsScrollReturn {
@@ -100,6 +100,12 @@ export function useLyricsScroll({
   const userScrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isUserScrollingRef = useRef(false)
   const lastScrollTimeRef = useRef(0)
+  // Spring animation state — persists across renders for interruption + velocity carry-over
+  const springStateRef = useRef<{
+    rafId: number | null
+    velocity: number
+    currentY: number
+  } | null>(null)
 
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(enabled)
 
@@ -107,15 +113,29 @@ export function useLyricsScroll({
   const scrollTargetIndex = currentLineIndex
 
   // Detect user scroll interaction
+  // IMPORTANT: Listen on the Radix ScrollArea viewport, not the outer container.
+  // The `scroll` event does NOT bubble, so the listener must be on the element
+  // that actually scrolls (the Radix viewport), not a parent container.
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
 
+    // Find the actual scrollable element (Radix ScrollArea nested viewport)
+    const viewport = container.querySelector('[data-radix-scroll-area-viewport]') as HTMLElement
+    const scrollTarget = viewport || container
+
     const handleScroll = () => {
       const now = Date.now()
 
-      // Ignore programmatic scrolls (they happen right after we trigger them)
+      // Ignore programmatic scrolls (spring animation keeps lastScrollTimeRef fresh)
       if (now - lastScrollTimeRef.current < 200) return
+
+      // Cancel any ongoing spring animation when user takes manual control
+      if (springStateRef.current?.rafId != null) {
+        cancelAnimationFrame(springStateRef.current.rafId)
+        springStateRef.current.rafId = null
+        springStateRef.current.velocity = 0
+      }
 
       // User is scrolling manually
       isUserScrollingRef.current = true
@@ -135,10 +155,10 @@ export function useLyricsScroll({
       }, 3000)
     }
 
-    container.addEventListener('scroll', handleScroll, { passive: true })
+    scrollTarget.addEventListener('scroll', handleScroll, { passive: true })
 
     return () => {
-      container.removeEventListener('scroll', handleScroll)
+      scrollTarget.removeEventListener('scroll', handleScroll)
       if (userScrollTimeoutRef.current) {
         clearTimeout(userScrollTimeoutRef.current)
       }
@@ -151,6 +171,60 @@ export function useLyricsScroll({
       setAutoScrollEnabled(true)
     }
   }, [isPlaying])
+
+  // Spring scroll — replaces scrollTo({ behavior: 'smooth' }).
+  // Uses rAF + spring physics for Apple Music-like natural deceleration.
+  // Interruptible: calling again mid-animation carries over velocity for smooth redirect.
+  // lastScrollTimeRef is refreshed on every tick to suppress the user-scroll listener.
+  const springScrollTo = useCallback((scrollContainer: HTMLElement, targetY: number) => {
+    const prevState = springStateRef.current
+    // Carry over velocity if already animating (avoids jarring direction change)
+    const initialVelocity = prevState?.rafId != null ? prevState.velocity : 0
+
+    if (prevState?.rafId != null) {
+      cancelAnimationFrame(prevState.rafId)
+    }
+
+    const stiffness = 120
+    const damping = 26
+    const mass = 1
+
+    const state = {
+      rafId: null as number | null,
+      velocity: initialVelocity,
+      currentY: scrollContainer.scrollTop,
+    }
+    springStateRef.current = state
+
+    let lastTime = performance.now()
+
+    function tick(now: number) {
+      // Keep marking as programmatic so scroll listener ignores these events
+      lastScrollTimeRef.current = Date.now()
+
+      const dt = Math.min((now - lastTime) / 1000, 0.05) // cap at 50ms (handles tab blur)
+      lastTime = now
+
+      const displacement = state.currentY - targetY
+      const springForce = -stiffness * displacement
+      const dampingForce = -damping * state.velocity
+      const acceleration = (springForce + dampingForce) / mass
+
+      state.velocity += acceleration * dt
+      state.currentY += state.velocity * dt
+      scrollContainer.scrollTop = state.currentY
+
+      if (Math.abs(state.velocity) > 0.5 || Math.abs(displacement) > 0.5) {
+        state.rafId = requestAnimationFrame(tick)
+      } else {
+        // Snap to final position to avoid sub-pixel drift
+        scrollContainer.scrollTop = targetY
+        state.rafId = null
+      }
+    }
+
+    state.rafId = requestAnimationFrame(tick)
+  }, []) // stable — only uses refs and closure variables
 
   // Debounced scroll to current line
   // Positions the line at ~30% from top of visible area (ideal for karaoke)
@@ -190,10 +264,7 @@ export function useLyricsScroll({
       const elementTopRelativeToContainer = elementRect.top - containerRect.top + scrollContainer.scrollTop
       const targetScrollTop = elementTopRelativeToContainer - targetOffset
 
-      scrollContainer.scrollTo({
-        top: Math.max(0, targetScrollTop),
-        behavior,
-      })
+      springScrollTo(scrollContainer, Math.max(0, targetScrollTop))
     }, debounceMs)
 
     return () => {
@@ -201,7 +272,7 @@ export function useLyricsScroll({
         clearTimeout(scrollTimeoutRef.current)
       }
     }
-  }, [currentLineIndex, scrollTargetIndex, autoScrollEnabled, enabled, behavior, debounceMs, containerRef])
+  }, [currentLineIndex, scrollTargetIndex, autoScrollEnabled, enabled, debounceMs, containerRef, springScrollTo])
 
   // Manual controls
   const enableAutoScroll = useCallback(() => {

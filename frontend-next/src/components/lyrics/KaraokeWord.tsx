@@ -1,42 +1,35 @@
 /**
- * @fileoverview Karaoke word component with progressive gradient fill.
+ * @fileoverview Karaoke word component with clip-path progressive fill.
  *
- * This component renders a single word with Apple Music-style
- * progressive highlight animation using CSS gradient + fun effects.
+ * Architecture: Progressive clip-path reveal for the active word (GPU compositor Tier S),
+ * single DOM nodes for inactive/past words (minimal overhead).
+ * Uses theme CSS variables for color-aware rendering in dark/light mode.
  *
- * Architecture: Pure presentational component with CSS-in-JS gradient.
+ * Why clip-path instead of background-clip:text?
+ * - background-clip:text was tried and abandoned (see git history — rendering issues)
+ * - clip-path is a real compositor property (GPU Tier S, no main thread repaints)
+ * - clip-path is compatible with text-shadow/glow (unlike background-clip:text)
+ * - Only 2 DOM nodes on the active word; 1 node for all others
  */
 
-import React, { memo, useMemo } from 'react'
-import { cn } from '@/lib/utils'
+import React, { memo } from 'react'
 import type { KaraokeWordProps } from '@/types/lyrics'
-
-// ============================================================================
-// CONSTANTS
-// ============================================================================
-
-/** Colors for karaoke display */
-const COLORS = {
-  /** Active/highlighted color - bright pink/magenta */
-  active: '#f472b6',
-  /** Inactive/upcoming color - lighter gray for better contrast */
-  inactive: '#9ca3af',
-  /** Past color - white/sung */
-  past: '#ffffff',
-} as const
 
 // ============================================================================
 // COMPONENT
 // ============================================================================
 
 /**
- * Karaoke word with progressive gradient fill and fun effects.
+ * Karaoke word with Apple Music-style progressive fill.
  *
- * Features:
- * - Progressive color fill as word is sung
- * - Subtle pulse animation on active word
- * - Glow effect on active word
- * - Past words stay highlighted in gold
+ * States:
+ * - Inactive: 1 DOM node, muted color
+ * - Past (sung): 1 DOM node, foreground color
+ * - Active: 2 DOM nodes — base (muted) + overlay (primary, clip-path animated)
+ *
+ * The active word clip-path (`inset(0 X% 0 0)`) reveals the primary-colored overlay
+ * from left to right as `progress` increases from 0 to 1. This animation runs on
+ * the GPU compositor thread — zero main thread involvement.
  *
  * @example
  * ```tsx
@@ -52,53 +45,47 @@ export const KaraokeWord = memo(function KaraokeWord({
   word,
   isActive,
   isPast,
-  progress: _progress,
+  progress,
 }: KaraokeWordProps) {
-  // progress reserved for future within-word gradient animation
-  void _progress
-  // Calculate style for word based on state
-  // Note: We avoid background-clip:text as it has rendering issues
-  // Instead, we use simple color transitions
-  const wordStyle = useMemo(() => {
-    if (isActive) {
-      // For active word, show it in the active color (fully highlighted)
-      // The progress is shown by which word is active, not within-word gradient
-      return {
-        color: COLORS.active,
-      } as React.CSSProperties
-    }
+  if (!isActive && !isPast) {
+    // Inactive: single node, no GPU overhead, muted foreground
+    return (
+      <span className="font-normal text-muted-foreground">
+        {word.text}
+      </span>
+    )
+  }
 
-    if (isPast) {
-      return {
-        color: COLORS.past,
-      } as React.CSSProperties
-    }
+  if (isPast) {
+    // Past (sung): single node, full foreground color
+    return (
+      <span className="font-semibold text-foreground">
+        {word.text}
+      </span>
+    )
+  }
 
-    return {
-      color: COLORS.inactive,
-    } as React.CSSProperties
-  }, [isActive, isPast])
-
-  // Determine text class based on state
-  const textClass = useMemo(() => {
-    if (isActive) {
-      return 'font-bold'
-    }
-    if (isPast) {
-      return 'font-semibold'
-    }
-    return 'font-normal'
-  }, [isActive, isPast])
+  // Active word: clip-path overlay reveals primary color from left to right.
+  // clip-path is GPU compositor-accelerated (Tier S) — no layout, no paint.
+  // Compatible with text-shadow/glow (unlike background-clip: text).
+  const clipRight = Math.max(0, 100 - progress * 100)
 
   return (
-    <span
-      className={cn(
-        'transition-colors duration-75 ease-out',
-        textClass
-      )}
-      style={wordStyle}
-    >
-      {word.text}
+    <span className="relative inline-block">
+      {/* Base layer: muted color, hidden from AT (overlay provides accessible text) */}
+      <span className="font-bold text-muted-foreground" aria-hidden="true">
+        {word.text}
+      </span>
+      {/* Overlay: primary color, revealed left-to-right by clip-path */}
+      <span
+        className="absolute inset-0 font-bold text-primary"
+        style={{
+          clipPath: `inset(0 ${clipRight}% 0 0)`,
+          willChange: 'clip-path',
+        }}
+      >
+        {word.text}
+      </span>
     </span>
   )
 })
@@ -112,7 +99,7 @@ interface KaraokeWordGroupProps {
   words: KaraokeWordProps['word'][]
   /** Current word index */
   currentWordIndex: number
-  /** Progress through current word */
+  /** Progress through current word (0-1) */
   wordProgress: number
   /** Custom class name */
   className?: string
@@ -128,13 +115,12 @@ export const KaraokeWordGroup = memo(function KaraokeWordGroup({
   className,
 }: KaraokeWordGroupProps) {
   return (
-    <span className={cn('inline', className)}>
+    <span className={className}>
       {words.map((word, index) => {
         const isCurrentWord = index === currentWordIndex
         const isLastWord = index === words.length - 1
 
-        // Special case: last word that's almost done should appear as "past" (white)
-        // This ensures the last word transitions to white before we change lines
+        // Last word at ≥85% completion transitions to "past" early for a clean line change
         const isLastWordFinished = isCurrentWord && isLastWord && wordProgress >= 0.85
 
         return (

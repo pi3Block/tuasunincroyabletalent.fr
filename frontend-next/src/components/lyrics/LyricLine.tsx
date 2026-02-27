@@ -104,15 +104,24 @@ export const LyricLine = memo(forwardRef<HTMLDivElement, LyricLineProps>(
     const isNext = distance === 1 && !isPast
 
     // Compute styles based on state
-    // Note: blur filter removed to allow smooth scrolling through lyrics
     const containerStyle = useMemo(() => {
       const scale = getScale(isActive, isNext)
       const opacity = getOpacity(distance, isActive, isNext, isPast)
 
+      // Blur depth-of-field: focuses the eye on the active line (Apple Music-style).
+      // Re-implemented with targeted transition + dynamic will-change (fixes previous
+      // scrolling performance issue caused by global will-change + transition-all).
+      const blurAmount = isActive ? 0
+        : isNext ? 0.3
+        : distance <= 3 ? Math.min(distance * 0.4, 1.5)
+        : Math.min(2 + (distance - 4) * 0.2, 3)
+
       return {
         transform: `scale(${scale})`,
         opacity,
-        // No filter/blur - it was preventing scrolling
+        filter: blurAmount > 0 ? `blur(${blurAmount}px)` : undefined,
+        // Dynamic will-change: promote ±10 lines to GPU layers (includes filter for blur)
+        willChange: distance <= 10 ? 'transform, opacity, filter' : 'auto',
         // Glow effect for active line
         ...(isActive && DEFAULT_ANIMATION_CONFIG.enableGlow
           ? {
@@ -128,7 +137,7 @@ export const LyricLine = memo(forwardRef<HTMLDivElement, LyricLineProps>(
     // Next line is larger and white to help singers read ahead
     const textClasses = useMemo(() => {
       if (isActive) {
-        return 'text-xl sm:text-2xl md:text-2xl lg:text-3xl xl:text-4xl font-bold text-white drop-shadow-[0_0_8px_rgba(255,255,255,0.4)]'
+        return 'text-xl sm:text-2xl md:text-2xl lg:text-3xl xl:text-4xl font-bold text-white'
       }
       // Next line: larger and WHITE for maximum readability
       if (isNext) {
@@ -195,10 +204,8 @@ export const LyricLine = memo(forwardRef<HTMLDivElement, LyricLineProps>(
         className={cn(
           // Base styles
           'cursor-pointer select-none',
-          // Transition
-          'transition-all duration-300 ease-out',
-          // Will-change for GPU acceleration
-          'will-change-transform',
+          // Transition — only compositor-friendly properties (avoids main thread repaints)
+          'transition-[transform,opacity,filter] duration-300 ease-out',
           // Hover effect (only on non-active)
           !isActive && 'hover:scale-[0.96] hover:opacity-80'
         )}
