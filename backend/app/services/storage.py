@@ -8,6 +8,7 @@ API compatible with the Augmenter project:
 """
 import logging
 import asyncio
+import hashlib
 from pathlib import Path
 
 import httpx
@@ -36,6 +37,13 @@ class StorageClient:
         self.base_url = self._normalize_base_url(settings.storage_url)
         self.api_key = settings.storage_api_key
         self.bucket = settings.storage_bucket
+        key_fp = hashlib.sha256(self.api_key.encode("utf-8")).hexdigest()[:10] if self.api_key else "missing"
+        logger.info(
+            "Storage client configured: base_url=%s bucket=%s api_key_fp=%s",
+            self.base_url,
+            self.bucket,
+            key_fp,
+        )
 
     @staticmethod
     def _normalize_base_url(raw_url: str) -> str:

@@ -321,7 +321,11 @@ def generate_word_timestamps_cached(
     import torchaudio
     from demucs.apply import apply_model
     from tasks.audio_separation import get_demucs_model, convert_to_wav
-    from tasks.pipeline import _unload_ollama_model_for_gpu
+    try:
+        from tasks.pipeline import _unload_ollama_model_for_gpu
+    except Exception:
+        # New GPU architecture does not require/define this helper.
+        _unload_ollama_model_for_gpu = None
 
     self.update_state(state="PROGRESS", meta={
         "step": "checking_cache",
@@ -359,8 +363,9 @@ def generate_word_timestamps_cached(
             "spotify_track_id": spotify_track_id,
         })
 
-        # Unload Ollama from GPU 0 to free ~4 GB VRAM for Demucs
-        _unload_ollama_model_for_gpu()
+        # Unload Ollama from GPU 0 if helper is available (legacy setups).
+        if _unload_ollama_model_for_gpu:
+            _unload_ollama_model_for_gpu()
 
         self.update_state(state="PROGRESS", meta={
             "step": "separating_audio",
