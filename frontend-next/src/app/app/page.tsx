@@ -657,6 +657,31 @@ export default function AppPage() {
     setStatus,
   ]);
 
+  // Annuler sans tout réinitialiser :
+  // - pendant recording → stop sans upload → retour à "ready" (garde la chanson/session)
+  // - sinon → même que handleReset
+  const handleCancel = useCallback(() => {
+    if (status === "recording") {
+      stopPitchAnalysis();
+      stopAudioRecording();
+      resetRecording();
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach((t) => t.stop());
+        mediaStreamRef.current = null;
+      }
+      setStatus("ready");
+    } else {
+      handleReset();
+    }
+  }, [
+    status,
+    stopPitchAnalysis,
+    stopAudioRecording,
+    resetRecording,
+    handleReset,
+    setStatus,
+  ]);
+
   // Shared lyrics display props
   const displayMode = karaokeMode && wordLines ? "karaoke" : "line";
   const lyricsDisplayProps = {
@@ -1053,6 +1078,7 @@ export default function AppPage() {
             onRecord={handleStartRecording}
             onStopRecording={handleStopRecording}
             onReset={handleReset}
+            onCancel={handleCancel}
             analysisProgress={analysisProgress}
           />
         </div>

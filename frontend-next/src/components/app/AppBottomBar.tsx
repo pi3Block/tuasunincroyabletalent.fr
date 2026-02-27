@@ -8,7 +8,7 @@
  */
 
 import React, { memo } from "react";
-import { Mic, Square, RotateCcw, Loader2, CheckCircle2 } from "lucide-react";
+import { Mic, Square, RotateCcw, Loader2, CheckCircle2, X } from "lucide-react";
 import { TransportBar } from "@/audio/components/TransportBar";
 import { cn } from "@/lib/utils";
 import type { Track } from "@/api/client";
@@ -41,6 +41,8 @@ interface AppBottomBarProps {
   onRecord: () => void;
   onStopRecording: () => void;
   onReset: () => void;
+  /** Annuler l'action en cours (recording → back to ready ; autres → back to selecting) */
+  onCancel?: () => void;
   analysisProgress: AnalysisProgress | null;
 }
 
@@ -58,6 +60,7 @@ export const AppBottomBar = memo(function AppBottomBar({
   onRecord,
   onStopRecording,
   onReset,
+  onCancel,
   analysisProgress,
 }: AppBottomBarProps) {
   return (
@@ -163,8 +166,32 @@ export const AppBottomBar = memo(function AppBottomBar({
         )}
       </div>
 
-      {/* Zone DROITE — Bouton CTA */}
+      {/* Zone DROITE — Bouton CTA + Annuler/Recommencer */}
       <div className="flex-1 flex items-center justify-end gap-2">
+        {/* Bouton Annuler — visible sur tous les états actifs sauf results */}
+        {(status === "preparing" ||
+          status === "downloading" ||
+          status === "ready" ||
+          status === "recording" ||
+          status === "analyzing") && (
+            <button
+              type="button"
+              onClick={status === "recording" ? onCancel ?? onReset : onReset}
+              className={cn(
+                "flex items-center gap-1.5 px-3 h-8 rounded-full",
+                "text-muted-foreground hover:text-foreground",
+                "text-sm border border-border/60 hover:border-border",
+                "bg-transparent hover:bg-muted/60",
+                "transition-all duration-200 touch-manipulation active:scale-95",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              )}
+              title="Annuler et recommencer"
+            >
+              <X className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Annuler</span>
+            </button>
+          )}
+
         {(status === "preparing" || status === "downloading") && (
           <button
             type="button"
@@ -192,7 +219,6 @@ export const AppBottomBar = memo(function AppBottomBar({
               "shadow-lg shadow-red-500/25",
               "transition-all duration-200 touch-manipulation active:scale-95",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500",
-              // Ring animé quand prêt
               "ring-2 ring-red-500/30 ring-offset-1 ring-offset-background"
             )}
           >

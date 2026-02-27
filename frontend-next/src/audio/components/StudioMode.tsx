@@ -65,8 +65,12 @@ export function StudioMode({
       onReady?.()
     },
     onError: (err) => {
-      // For analyzing context, don't show error immediately - tracks may not be ready yet
-      if (context === 'analyzing' && err.message.includes('Aucune piste')) {
+      // For analyzing/practice context, don't show error — tracks may not be ready yet
+      const isWaitingContext =
+        context === 'analyzing' ||
+        (context === 'practice' &&
+          (err.message.includes('Aucune piste') || err.message.includes('Impossible de charger')))
+      if (isWaitingContext) {
         setWaitingForTracks(true)
         setError(null)
       } else {
@@ -82,7 +86,7 @@ export function StudioMode({
     loadTracks()
   }, [loadTracks])
 
-  // Auto-retry for analyzing context when tracks aren't ready yet
+  // Auto-retry for analyzing context only (practice tracks won't exist until after first analysis)
   useEffect(() => {
     if (context === 'analyzing' && waitingForTracks && !isReady) {
       // Poll every 5 seconds to check if tracks are available
@@ -156,29 +160,50 @@ export function StudioMode({
     )
   }
 
-  // Waiting for tracks (analyzing context - tracks being separated)
-  if (waitingForTracks && context === 'analyzing') {
+  // Waiting for tracks (analyzing context — active separation; practice context — no analysis yet)
+  if (waitingForTracks && (context === 'analyzing' || context === 'practice')) {
+    const isPractice = context === 'practice'
     return (
       <div
         className={cn(
-          'rounded-xl bg-amber-500/10 border border-amber-500/30',
+          'rounded-xl border',
+          isPractice
+            ? 'bg-muted/30 border-border/50'
+            : 'bg-amber-500/10 border-amber-500/30',
           className
         )}
       >
         <div className="flex flex-col items-center justify-center py-8 gap-3">
           <div className="relative">
-            <div className="h-10 w-10 rounded-full border-2 border-amber-500 border-t-transparent animate-spin" />
-            <Music2 className="h-4 w-4 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-amber-500" />
+            {isPractice ? (
+              <Music2 className="h-10 w-10 text-muted-foreground" />
+            ) : (
+              <>
+                <div className="h-10 w-10 rounded-full border-2 border-amber-500 border-t-transparent animate-spin" />
+                <Music2 className="h-4 w-4 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-amber-500" />
+              </>
+            )}
           </div>
           <div className="text-center">
-            <p className="font-medium text-amber-200">Séparation audio en cours...</p>
-            <p className="text-sm text-amber-300/70 mt-1">
-              Le studio sera disponible une fois les pistes prêtes
-            </p>
-            {retryCount > 0 && (
-              <p className="text-xs text-muted-foreground mt-2">
-                Vérification automatique... ({retryCount})
-              </p>
+            {isPractice ? (
+              <>
+                <p className="font-medium text-muted-foreground">Studio disponible après analyse</p>
+                <p className="text-sm text-muted-foreground/60 mt-1">
+                  Enregistre-toi, les pistes seront prêtes ensuite
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="font-medium text-amber-200">Séparation audio en cours...</p>
+                <p className="text-sm text-amber-300/70 mt-1">
+                  Le studio sera disponible une fois les pistes prêtes
+                </p>
+                {retryCount > 0 && (
+                  <p className="text-xs text-muted-foreground mt-2">
+                    Vérification automatique... ({retryCount})
+                  </p>
+                )}
+              </>
             )}
           </div>
         </div>
