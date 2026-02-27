@@ -51,7 +51,7 @@ export function StudioMode({
   const retryIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const reset = useAudioStore((s) => s.reset)
 
-  const { loadTracks, play, pause, stop, seek, isReady } = useMultiTrack({
+  const { loadTracks, resetInit, play, pause, stop, seek, isReady } = useMultiTrack({
     sessionId,
     context,
     onReady: () => {
@@ -92,8 +92,9 @@ export function StudioMode({
       // Poll every 5 seconds to check if tracks are available
       retryIntervalRef.current = setInterval(() => {
         setRetryCount((c) => c + 1)
-        // Reset the store before retrying
+        // Reset the store + init guard before retrying
         reset()
+        resetInit()
         // Small delay before reloading
         setTimeout(() => {
           loadTracks()
@@ -107,7 +108,7 @@ export function StudioMode({
         }
       }
     }
-  }, [context, waitingForTracks, isReady, loadTracks, reset])
+  }, [context, waitingForTracks, isReady, loadTracks, reset, resetInit])
 
   // Cleanup on unmount
   useEffect(() => {
@@ -130,10 +131,11 @@ export function StudioMode({
     setError(null)
     setWaitingForTracks(false)
     reset()
+    resetInit()
     setTimeout(() => {
       loadTracks()
     }, 100)
-  }, [loadTracks, reset])
+  }, [loadTracks, reset, resetInit])
 
   // Loading state
   if (isLoading) {

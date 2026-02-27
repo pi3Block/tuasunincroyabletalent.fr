@@ -10,6 +10,7 @@
 import React, { memo } from "react";
 import { Mic, Square, RotateCcw, Loader2, CheckCircle2, X } from "lucide-react";
 import { TransportBar } from "@/audio/components/TransportBar";
+import { useAudioStore } from "@/stores/audioStore";
 import { cn } from "@/lib/utils";
 import type { Track } from "@/api/client";
 import type { StudioTransportControls } from "@/audio/types";
@@ -54,7 +55,7 @@ function formatDuration(seconds: number): string {
 
 export const AppBottomBar = memo(function AppBottomBar({
   status,
-  selectedTrack,
+  // selectedTrack: kept in interface for potential future use
   studioControls,
   recordingDuration,
   onRecord,
@@ -63,6 +64,19 @@ export const AppBottomBar = memo(function AppBottomBar({
   onCancel,
   analysisProgress,
 }: AppBottomBarProps) {
+  // Fallback direct sur l'audioStore si studioControls pas encore prêt (chargement async).
+  // Les callbacks de studioControls proviennent du même store — fonctionnellement identiques.
+  const audioPlay = useAudioStore((s) => s.play);
+  const audioPause = useAudioStore((s) => s.pause);
+  const audioStop = useAudioStore((s) => s.stop);
+  const audioSeek = useAudioStore((s) => s.seek);
+  const effectiveControls: StudioTransportControls = studioControls ?? {
+    play: async () => { audioPlay(); },
+    pause: audioPause,
+    stop: audioStop,
+    seek: audioSeek,
+  };
+
   return (
     <div
       className={cn(
@@ -75,37 +89,16 @@ export const AppBottomBar = memo(function AppBottomBar({
         "before:bg-linear-to-r before:from-transparent before:via-primary/40 before:to-transparent"
       )}
     >
-      {/* Zone GAUCHE — Transport studio OU info chanson */}
+      {/* Zone GAUCHE — Transport (toujours visible, fallback audioStore si pistes pas encore prêtes) */}
       <div className="flex-1 min-w-0 flex items-center">
-        {studioControls ? (
-          <TransportBar
-            onPlay={studioControls.play}
-            onPause={studioControls.pause}
-            onStop={studioControls.stop}
-            onSeek={studioControls.seek}
-            compact
-            className="max-w-sm"
-          />
-        ) : selectedTrack ? (
-          <div className="flex items-center gap-2.5 min-w-0">
-            {selectedTrack.album?.image && (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={selectedTrack.album.image}
-                alt={selectedTrack.album.name || selectedTrack.name}
-                className="h-9 w-9 rounded-md shrink-0 object-cover"
-              />
-            )}
-            <div className="min-w-0">
-              <p className="text-sm font-semibold truncate leading-tight">
-                {selectedTrack.name}
-              </p>
-              <p className="text-xs text-muted-foreground truncate leading-tight">
-                {selectedTrack.artists.join(", ")}
-              </p>
-            </div>
-          </div>
-        ) : null}
+        <TransportBar
+          onPlay={effectiveControls.play}
+          onPause={effectiveControls.pause}
+          onStop={effectiveControls.stop}
+          onSeek={effectiveControls.seek}
+          compact
+          className="max-w-sm"
+        />
       </div>
 
       {/* Zone CENTRE — Statut contextuel */}

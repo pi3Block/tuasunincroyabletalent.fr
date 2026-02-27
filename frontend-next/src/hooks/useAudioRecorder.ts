@@ -7,6 +7,8 @@ import { useState, useRef, useCallback } from 'react'
 export interface UseAudioRecorderOptions {
   onDataAvailable?: (blob: Blob) => void
   onError?: (error: Error) => void
+  /** Called right after getUserMedia succeeds — use this stream for pitch analysis etc. */
+  onStreamReady?: (stream: MediaStream) => void
   mimeType?: string
 }
 
@@ -26,6 +28,7 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}): UseAudi
   const {
     onDataAvailable,
     onError,
+    onStreamReady,
     mimeType = 'audio/webm;codecs=opus',
   } = options
 
@@ -72,7 +75,7 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}): UseAudi
     }
   }, [])
 
-  const startRecording = useCallback(async () => {
+  const startRecording = useCallback(async (): Promise<void> => {
     try {
       // Reset state
       chunksRef.current = []
@@ -90,6 +93,9 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}): UseAudi
       })
 
       streamRef.current = stream
+
+      // Notify caller so they can attach pitch analysis, etc. — avoids a second getUserMedia call
+      onStreamReady?.(stream)
 
       // Create MediaRecorder
       const selectedMimeType = getSupportedMimeType() || mimeType
@@ -122,7 +128,7 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}): UseAudi
       onError?.(err)
       throw err
     }
-  }, [getSupportedMimeType, mimeType, onDataAvailable, onError, startTimer])
+  }, [getSupportedMimeType, mimeType, onDataAvailable, onError, onStreamReady, startTimer])
 
   const stopRecording = useCallback(async (): Promise<Blob | null> => {
     return new Promise((resolve) => {

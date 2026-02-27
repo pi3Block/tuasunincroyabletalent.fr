@@ -1,5 +1,12 @@
+import { useEffect, useRef } from 'react'
 import type { YouTubeMatch } from '@/api/client'
 import { useYouTubePlayer } from '@/hooks/useYouTubePlayer'
+
+export interface YouTubePlayerControls {
+  play: () => void
+  pause: () => void
+  seekTo: (seconds: number) => void
+}
 
 interface YouTubePlayerProps {
   video: YouTubeMatch
@@ -7,6 +14,9 @@ interface YouTubePlayerProps {
   onReady?: () => void
   onStateChange?: (isPlaying: boolean) => void
   onTimeUpdate?: (time: number) => void
+  onDurationChange?: (duration: number) => void
+  /** Called when the player is ready with imperative controls */
+  onControlsReady?: (controls: YouTubePlayerControls) => void
 }
 
 export function YouTubePlayer({
@@ -15,14 +25,27 @@ export function YouTubePlayer({
   onReady,
   onStateChange,
   onTimeUpdate,
+  onDurationChange,
+  onControlsReady,
 }: YouTubePlayerProps) {
-  const { containerRef, isReady } = useYouTubePlayer({
+  const { containerRef, isReady, play, pause, seekTo } = useYouTubePlayer({
     videoId: video.id,
     autoplay,
     onReady,
     onStateChange,
     onTimeUpdate,
+    onDurationChange,
   })
+
+  // Expose imperative controls to parent when player is ready
+  const onControlsReadyRef = useRef(onControlsReady)
+  onControlsReadyRef.current = onControlsReady
+
+  useEffect(() => {
+    if (isReady) {
+      onControlsReadyRef.current?.({ play, pause, seekTo })
+    }
+  }, [isReady, play, pause, seekTo])
 
   return (
     <div className="w-full rounded-xl overflow-hidden bg-black shadow-lg">

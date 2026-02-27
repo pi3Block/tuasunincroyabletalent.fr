@@ -13,6 +13,7 @@ interface UseYouTubePlayerOptions {
   onReady?: () => void
   onStateChange?: (isPlaying: boolean) => void
   onTimeUpdate?: (time: number) => void
+  onDurationChange?: (duration: number) => void
 }
 
 interface UseYouTubePlayerReturn {
@@ -65,6 +66,7 @@ export function useYouTubePlayer({
   onReady,
   onStateChange,
   onTimeUpdate,
+  onDurationChange,
 }: UseYouTubePlayerOptions): UseYouTubePlayerReturn {
   const containerRef = useRef<HTMLDivElement>(null)
   const playerRef = useRef<YT.Player | null>(null)
@@ -79,12 +81,14 @@ export function useYouTubePlayer({
   const onReadyRef = useRef(onReady)
   const onStateChangeRef = useRef(onStateChange)
   const onTimeUpdateRef = useRef(onTimeUpdate)
+  const onDurationChangeRef = useRef(onDurationChange)
 
   useEffect(() => {
     onReadyRef.current = onReady
     onStateChangeRef.current = onStateChange
     onTimeUpdateRef.current = onTimeUpdate
-  }, [onReady, onStateChange, onTimeUpdate])
+    onDurationChangeRef.current = onDurationChange
+  }, [onReady, onStateChange, onTimeUpdate, onDurationChange])
 
   // Time update polling
   const startTimePolling = useCallback(() => {
@@ -131,7 +135,9 @@ export function useYouTubePlayer({
           onReady: (event) => {
             if (!mounted) return
             setIsReady(true)
-            setDuration(event.target.getDuration())
+            const d = event.target.getDuration()
+            setDuration(d)
+            onDurationChangeRef.current?.(d)
             onReadyRef.current?.()
 
             // Start polling if autoplay
@@ -151,7 +157,9 @@ export function useYouTubePlayer({
               startTimePolling()
               // Update duration in case it wasn't available initially
               if (playerRef.current) {
-                setDuration(playerRef.current.getDuration())
+                const d = playerRef.current.getDuration()
+                setDuration(d)
+                onDurationChangeRef.current?.(d)
               }
             } else {
               stopTimePolling()

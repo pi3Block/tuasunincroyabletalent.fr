@@ -117,12 +117,19 @@ export function useMultiTrack({
       if (!response.ok) {
         throw new Error('Failed to fetch tracks')
       }
-      return await response.json()
+      const text = await response.text()
+      if (!text) return null
+      return JSON.parse(text) as AudioTracksResponse
     } catch (err) {
       console.error('Failed to fetch available tracks:', err)
       return null
     }
   }, [sessionId])
+
+  // Reset initialization state so loadTracks can be called again (e.g. retries)
+  const resetInit = useCallback(() => {
+    isInitializedRef.current = false
+  }, [])
 
   // Load all available tracks
   const loadTracks = useCallback(async () => {
@@ -304,6 +311,7 @@ export function useMultiTrack({
 
   return {
     loadTracks,
+    resetInit,
     play,
     pause,
     stop,
