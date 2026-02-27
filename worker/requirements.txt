@@ -20,6 +20,7 @@ jiwer>=3.0.0
 soundfile>=0.12.1
 pydub>=0.25.1
 torchcodec>=0.1.0
+yt-dlp>=2024.1.0
 
 # ML Models (PyTorch-based)
 demucs>=4.0.1

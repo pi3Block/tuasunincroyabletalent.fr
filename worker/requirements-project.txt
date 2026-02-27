@@ -25,6 +25,9 @@ torchcrepe>=0.0.22
 # Audio codec handling
 torchcodec>=0.1.0
 
+# YouTube download (Optimization A: worker downloads reference directly, ~-15s first run)
+yt-dlp>=2024.1.0
+
 # Evaluation Metrics
 fastdtw>=0.3.4
 jiwer>=3.0.0

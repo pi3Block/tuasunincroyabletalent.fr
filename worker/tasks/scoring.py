@@ -585,37 +585,48 @@ async def _generate_comment_async(
         model=LITELLM_JURY_MODEL,
         prompt=prompt,
     ) as gen:
-        # ── Tier 1: LiteLLM proxy → Groq qwen3-32b (free, async) ──
+        # ── Tier 1: LiteLLM proxy → Groq qwen3-32b (free, async, with retries) ──
         if LITELLM_API_KEY:
-            try:
-                headers = {
-                    "Authorization": f"Bearer {LITELLM_API_KEY}",
-                    "Content-Type": "application/json",
-                }
-                response = await client.post(
-                    f"{LITELLM_HOST}/chat/completions",
-                    headers=headers,
-                    json={
-                        "model": LITELLM_JURY_MODEL,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": 300,
-                        "temperature": 0.8,
-                    },
-                    timeout=15.0,
-                )
-                response.raise_for_status()
-                data = response.json()
-                comment = data["choices"][0]["message"]["content"].strip()
-                actual_model = data.get("model", LITELLM_JURY_MODEL)
-                model_used = f"litellm/{actual_model}"
-                if not comment:
-                    raise ValueError("Empty response from LiteLLM")
-            except Exception as litellm_err:
-                logger.warning(
-                    "LiteLLM failed for %s: %s, trying Ollama fallback",
-                    persona["name"], litellm_err,
-                )
-                comment = ""
+            max_retries = 2
+            headers = {
+                "Authorization": f"Bearer {LITELLM_API_KEY}",
+                "Content-Type": "application/json",
+            }
+            for attempt in range(max_retries + 1):
+                try:
+                    response = await client.post(
+                        f"{LITELLM_HOST}/chat/completions",
+                        headers=headers,
+                        json={
+                            "model": LITELLM_JURY_MODEL,
+                            "messages": [{"role": "user", "content": prompt}],
+                            "max_tokens": 300,
+                            "temperature": 0.8,
+                        },
+                        timeout=15.0,
+                    )
+                    response.raise_for_status()
+                    data = response.json()
+                    comment = data["choices"][0]["message"]["content"].strip()
+                    actual_model = data.get("model", LITELLM_JURY_MODEL)
+                    model_used = f"litellm/{actual_model}"
+                    if not comment:
+                        raise ValueError("Empty response from LiteLLM")
+                    break  # Success
+                except Exception as litellm_err:
+                    if attempt < max_retries:
+                        wait = 1.0 * (2 ** attempt)  # 1s, 2s
+                        logger.info(
+                            "LiteLLM attempt %d/%d failed for %s: %s — retrying in %.0fs",
+                            attempt + 1, max_retries + 1, persona["name"], litellm_err, wait,
+                        )
+                        await asyncio.sleep(wait)
+                        continue
+                    logger.warning(
+                        "LiteLLM failed for %s after %d attempts: %s — trying Ollama fallback",
+                        persona["name"], max_retries + 1, litellm_err,
+                    )
+                    comment = ""
         else:
             logger.debug("LITELLM_API_KEY not set, skipping LiteLLM tier")
 

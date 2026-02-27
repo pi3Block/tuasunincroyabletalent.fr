@@ -30,6 +30,40 @@ from .storage_client import get_storage
 
 logger = logging.getLogger(__name__)
 
+# Redis URL for cross-project GPU coordination (shared-redis)
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+GPU_PIPELINE_KEY = "gpu:heavy:pipeline_active"
+GPU_PIPELINE_TTL = 300  # 5 minutes — self-healing if worker crashes
+
+
+def _acquire_gpu_lock():
+    """
+    Set a Redis key to signal augmenter's GpuHealthService that GPU 1
+    is in use by kiaraoke's pipeline. Prevents the health service from
+    reloading Ollama Heavy mid-Demucs.
+
+    Self-healing: 5-min TTL ensures the key expires even if worker crashes.
+    Graceful: if Redis is unavailable, pipeline continues without lock.
+    """
+    try:
+        import redis
+        client = redis.from_url(REDIS_URL, socket_timeout=2)
+        client.setex(GPU_PIPELINE_KEY, GPU_PIPELINE_TTL, "kiaraoke")
+        logger.info("GPU pipeline lock acquired (%s, TTL %ds)", GPU_PIPELINE_KEY, GPU_PIPELINE_TTL)
+    except Exception as e:
+        logger.debug("GPU pipeline lock skipped (Redis unavailable): %s", e)
+
+
+def _release_gpu_lock():
+    """Release the GPU pipeline lock. Safe to call even if lock was never acquired."""
+    try:
+        import redis
+        client = redis.from_url(REDIS_URL, socket_timeout=2)
+        client.delete(GPU_PIPELINE_KEY)
+        logger.info("GPU pipeline lock released")
+    except Exception:
+        pass  # TTL will auto-expire
+
 
 def _is_storage_url(path: str) -> bool:
     return path.startswith("http://") or path.startswith("https://")
@@ -55,6 +89,45 @@ def _resolve_audio(url_or_path: str, dest: Path) -> str:
         storage.download_to_file(url_or_path, dest)
         return str(dest)
     return url_or_path
+
+
+def _download_youtube_audio(youtube_url: str, dest: Path) -> Path:
+    """
+    Optimization A: download YouTube audio directly in the worker.
+
+    Eliminates the backend→storage→worker double transit (~-15s on first run).
+    Uses the same yt-dlp options as backend/app/services/youtube.py.
+
+    Args:
+        youtube_url: YouTube video URL
+        dest: Target .wav file path
+
+    Returns:
+        dest (the downloaded .wav file)
+    """
+    import yt_dlp
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    # yt-dlp appends the extension after FFmpeg conversion — strip it for outtmpl
+    output_stem = str(dest.with_suffix(""))
+    opts = {
+        "format": "bestaudio/best",
+        "postprocessors": [{
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "wav",
+            "preferredquality": "192",
+        }],
+        "outtmpl": output_stem,
+        "quiet": True,
+        "no_warnings": True,
+        "extract_flat": False,
+    }
+    logger.info("Worker: downloading YouTube audio %s → %s", youtube_url, dest)
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        ydl.download([youtube_url])
+    if not dest.exists():
+        raise FileNotFoundError(f"yt-dlp download failed: expected {dest}")
+    return dest
 
 
 def update_progress(task, step: str, progress: int, detail: str = ""):
@@ -191,9 +264,12 @@ def analyze_performance(
 
     try:
         # ============================================================
-        # GPU STATUS CHECK
+        # GPU STATUS CHECK + PIPELINE LOCK
+        # Acquire Redis lock to prevent augmenter's GpuHealthService
+        # from reloading Ollama Heavy while we use GPU 1.
         # ============================================================
         has_gpu = log_gpu_status()
+        _acquire_gpu_lock()
 
         # ============================================================
         # GPU TIME-SHARING: Unload Ollama Heavy from GPU 1
@@ -373,55 +449,58 @@ def analyze_performance(
                 sync_result = {"offset_seconds": 0.0, "confidence": 0.0, "method": "fallback"}
 
             # ========================================================
-            # STEP 4: Extract pitch (CREPE)
-            # Use 'full' model for user (accuracy), 'tiny' for ref (speed)
+            # STEPS 4-6: PARALLEL — CREPE (GPU 1) || Whisper+Lyrics (GPU 3/HTTP)
+            # CREPE and Whisper use different GPUs, so they run concurrently.
+            # Saves ~5-6s per session vs sequential execution.
             # ========================================================
-            update_progress(self, "extracting_pitch_user", 40, "Analyse de ta justesse...")
-            user_pitch = do_extract_pitch(user_separation["vocals_path"], f"{session_id}_user", fast_mode=False)
+            update_progress(self, "analyzing_parallel", 40, "Analyse en cours...")
 
-            update_progress(self, "extracting_pitch_ref", 50, "Analyse de la reference...")
-            # Fix #4: check pitch cache before running CREPE on reference
-            ref_pitch_cache_key = (
-                f"cache/{youtube_id}/pitch_data.npz" if youtube_id else None
-            )
-            if ref_pitch_cache_key and storage.exists(ref_pitch_cache_key):
-                logger.info("Pitch cache HIT for reference %s — skipping CREPE", youtube_id)
-                cached_npz = ref_temp / "pitch_data_cached.npz"
-                storage.download_to_file(ref_pitch_cache_key, cached_npz)
-                ref_pitch = {"pitch_path": str(cached_npz), "stats": {}, "status": "cached"}
-            else:
-                ref_pitch = do_extract_pitch(
-                    str(ref_vocals_path), f"{session_id}_ref", fast_mode=True
+            def _do_crepe():
+                """Thread A: CREPE pitch extraction on GPU 1."""
+                up = do_extract_pitch(
+                    user_separation["vocals_path"], f"{session_id}_user", fast_mode=False,
                 )
-                # Persist pitch to storage cache for future sessions
-                if ref_pitch_cache_key and ref_pitch.get("pitch_path"):
-                    storage.upload_from_file(
-                        Path(ref_pitch["pitch_path"]),
-                        ref_pitch_cache_key,
-                        content_type="application/octet-stream",
+                # Reference pitch: check cache first
+                ref_pitch_cache_key = (
+                    f"cache/{youtube_id}/pitch_data.npz" if youtube_id else None
+                )
+                if ref_pitch_cache_key and storage.exists(ref_pitch_cache_key):
+                    logger.info("Pitch cache HIT for reference %s — skipping CREPE", youtube_id)
+                    cached_npz = ref_temp / "pitch_data_cached.npz"
+                    storage.download_to_file(ref_pitch_cache_key, cached_npz)
+                    rp = {"pitch_path": str(cached_npz), "stats": {}, "status": "cached"}
+                else:
+                    rp = do_extract_pitch(
+                        str(ref_vocals_path), f"{session_id}_ref", fast_mode=True,
                     )
-                    logger.info("Cached reference pitch to storage: %s", youtube_id)
-            update_progress(self, "extracting_pitch_done", 55, "Justesse analysee !")
+                    if ref_pitch_cache_key and rp.get("pitch_path"):
+                        storage.upload_from_file(
+                            Path(rp["pitch_path"]),
+                            ref_pitch_cache_key,
+                            content_type="application/octet-stream",
+                        )
+                        logger.info("Cached reference pitch to storage: %s", youtube_id)
+                return up, rp
 
-            # ========================================================
-            # STEP 5: Transcribe vocals (Whisper 3-tier fallback)
-            # ========================================================
-            update_progress(self, "transcribing", 60, "Transcription de tes paroles...")
-            transcription = do_transcribe_audio(user_separation["vocals_path"], session_id, "fr")
-            update_progress(self, "transcribing_done", 70, "Paroles transcrites !")
+            def _do_whisper_lyrics():
+                """Thread B: Whisper transcription (GPU 3 HTTP) + Lyrics (Genius HTTP)."""
+                trans = do_transcribe_audio(user_separation["vocals_path"], session_id, "fr")
+                lr = get_lyrics(artist_name, song_title)
+                return trans, lr
 
-            # ========================================================
-            # STEP 6: Fetch reference lyrics (Genius)
-            # ========================================================
-            update_progress(self, "fetching_lyrics", 75, "Recuperation des paroles officielles...")
-            lyrics_result = get_lyrics(artist_name, song_title)
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                crepe_future = pool.submit(_do_crepe)
+                whisper_future = pool.submit(_do_whisper_lyrics)
+                user_pitch, ref_pitch = crepe_future.result()
+                transcription, lyrics_result = whisper_future.result()
+
             reference_lyrics = lyrics_result.get("text", "")
 
             if lyrics_result.get("status") == "found":
-                update_progress(self, "lyrics_found", 78, "Paroles trouvees !")
+                update_progress(self, "analysis_done", 78, "Analyse terminee !")
                 logger.info("Lyrics found from %s", lyrics_result.get("source"))
             else:
-                update_progress(self, "lyrics_not_found", 78, "Paroles non trouvees (score neutre)")
+                update_progress(self, "analysis_done", 78, "Analyse terminee (paroles non trouvees)")
 
             # ========================================================
             # STEP 7: Score + Jury feedback (parallel x3 personas)
@@ -452,8 +531,9 @@ def analyze_performance(
 
     finally:
         # ============================================================
-        # CLEANUP: Delete all temp dirs for this session
+        # CLEANUP: Release GPU lock + delete all temp dirs
         # ============================================================
+        _release_gpu_lock()
         for temp_path in [session_temp, user_temp, ref_temp]:
             shutil.rmtree(temp_path, ignore_errors=True)
         logger.info("Cleaned up temp dirs for session %s", session_id)
@@ -467,6 +547,7 @@ def prepare_reference(
     session_id: str,
     reference_audio_path: str,
     youtube_id: str = None,
+    youtube_url: str = None,
 ) -> dict:
     """
     Pre-process reference audio (separate vocals, extract pitch) for StudioMode.
@@ -476,10 +557,16 @@ def prepare_reference(
       2. Pitch cache:   cache/{youtube_id}/pitch_data.npz → skip CREPE entirely
       3. Session copy:  sessions/{session_id}_ref/vocals.wav → StudioMode access
 
+    Optimization A (youtube_url provided + Demucs MISS):
+      Worker downloads reference.wav directly from YouTube via yt-dlp (~-15s).
+      Uploads reference.wav to storage for analyze_performance fallback, then
+      runs Demucs as usual.
+
     Perf targets (warm cache):
-      Demucs+CREPE miss (1st time):  ~65s
-      Demucs cached, CREPE miss:     ~35s
-      Both cached (2nd session+):    ~10s
+      Demucs+CREPE miss, direct YT download (Opt A):  ~50s   (was ~65s)
+      Demucs+CREPE miss, storage download:            ~65s
+      Demucs cached, CREPE miss:                      ~35s
+      Both cached (2nd session+):                     ~10s
     """
     from tasks.audio_separation import do_separate_audio
     from tasks.pitch_analysis import do_extract_pitch
@@ -488,6 +575,16 @@ def prepare_reference(
     ref_temp = _temp_dir(f"{session_id}_ref")
 
     try:
+        # ================================================================
+        # GPU TIME-SHARING: Lock + Unload Ollama Heavy from GPU 1
+        # Same pattern as analyze_performance — prevents OOM when
+        # Demucs (3.5 GB) runs while Ollama Heavy (5.2 GB) is resident.
+        # ================================================================
+        has_gpu = log_gpu_status()
+        _acquire_gpu_lock()
+        if has_gpu:
+            _unload_ollama_model_for_gpu()
+
         vocals_local = None
         instrumentals_local = None
 
@@ -524,15 +621,38 @@ def prepare_reference(
                 state="PROGRESS",
                 meta={"step": "downloading", "progress": 10},
             )
-            local_ref = _resolve_audio(
-                reference_audio_path,
-                ref_temp / "reference.wav",
-            )
+            if youtube_url:
+                # Optimization A: direct download from YouTube (skip backend→storage→worker transit)
+                local_ref_path = ref_temp / "reference.wav"
+                _download_youtube_audio(youtube_url, local_ref_path)
+                local_ref = str(local_ref_path)
+                # Upload reference.wav to storage so analyze_performance can fall back to it
+                if youtube_id:
+                    storage.upload_from_file(
+                        local_ref_path,
+                        f"cache/{youtube_id}/reference.wav",
+                        content_type="audio/wav",
+                    )
+                    logger.info("Uploaded reference.wav to storage: cache/%s/reference.wav", youtube_id)
+            else:
+                local_ref = _resolve_audio(
+                    reference_audio_path,
+                    ref_temp / "reference.wav",
+                )
             self.update_state(
                 state="PROGRESS",
                 meta={"step": "separating", "progress": 30},
             )
             result = do_separate_audio(local_ref, f"{session_id}_ref")
+
+            # Free GPU cache after Demucs (prevent VRAM fragmentation for CREPE)
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+
             vocals_local = Path(result["vocals_path"])
             instrumentals_local = Path(result["instrumentals_path"])
 
@@ -593,6 +713,15 @@ def prepare_reference(
             pitch_result = do_extract_pitch(
                 str(vocals_local), f"{session_id}_ref", fast_mode=True
             )
+
+            # Free GPU cache after CREPE
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+
             pitch_path = pitch_result.get("pitch_path", "")
             # Cache pitch for future sessions with same video
             if pitch_cache_key and pitch_path:
@@ -612,5 +741,6 @@ def prepare_reference(
         }
 
     finally:
+        _release_gpu_lock()
         shutil.rmtree(ref_temp, ignore_errors=True)
         logger.info("Cleaned up temp dir for prepare_reference session %s", session_id)

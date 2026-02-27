@@ -100,45 +100,37 @@ async def prepare_reference_audio(session_id: str, youtube_url: str, youtube_id:
             print(f"[Session {session_id}] Queued GPU separation for StudioMode")
             return
 
-        # Update status to downloading
-        await redis_client.update_session(session_id, {
-            "reference_status": "downloading",
-        })
-
-        print(f"[Session {session_id}] Starting download from {youtube_url}")
-
-        # Download audio to cache directory (shared across sessions)
-        cache_path = youtube_cache.get_reference_path(youtube_id)
-        audio_path = await youtube_service.download_audio(
-            url=youtube_url,
-            session_id=f"cache/{youtube_id}",  # Store in cache directory
-            filename="reference",
+        # Optimization A: skip backend download — worker downloads directly from YouTube.
+        # Saves ~15s (backend download + upload to storage + worker download from storage).
+        # Worker will upload reference.wav to storage after downloading, so future
+        # analyze_performance tasks can fall back to it if Demucs cache is cold.
+        expected_ref_url = (
+            f"{settings.storage_url}/files/{settings.storage_bucket}"
+            f"/cache/{youtube_id}/reference.wav"
         )
 
-        print(f"[Session {session_id}] Download complete: {audio_path}")
-
-        # Store in cache
+        # Pre-populate cache with expected URL so future sessions hit cache directly
         await youtube_cache.set_cached_reference(youtube_id, {
-            "reference_path": str(audio_path),
+            "reference_path": expected_ref_url,
             "youtube_url": youtube_url,
         })
 
-        # Mark as ready for recording
+        # Mark as ready immediately — user can start recording while worker downloads
         await redis_client.update_session(session_id, {
             "reference_status": "ready",
-            "reference_path": str(audio_path),
+            "reference_path": expected_ref_url,
             "youtube_id": youtube_id,
         })
 
-        print(f"[Session {session_id}] Reference ready (cached for future use)")
+        print(f"[Session {session_id}] Reference queued (worker will download directly from YouTube)")
 
-        # Trigger GPU separation for StudioMode (Demucs + CREPE)
+        # Trigger GPU separation — worker downloads reference via yt-dlp (Optimization A)
         celery_app.send_task(
             "tasks.pipeline.prepare_reference",
-            args=[session_id, str(audio_path), youtube_id],
-            queue="gpu-heavy",  # Demucs requires high VRAM
+            args=[session_id, expected_ref_url, youtube_id, youtube_url],
+            queue="gpu-heavy",
         )
-        print(f"[Session {session_id}] Queued GPU separation for StudioMode")
+        print(f"[Session {session_id}] Queued GPU separation with direct YouTube download")
 
     except Exception as e:
         print(f"[Session {session_id}] Error: {e}")
