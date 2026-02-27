@@ -11,6 +11,7 @@ API:
 """
 import logging
 import os
+import time
 from pathlib import Path
 
 import httpx
@@ -21,6 +22,8 @@ _UPLOAD_TIMEOUT = 120.0    # large audio files (~50-150 MB)
 _DELETE_TIMEOUT = 10.0
 _EXISTS_TIMEOUT = 5.0
 _DOWNLOAD_TIMEOUT = 180.0  # reference.wav can be large
+_UPLOAD_ATTEMPTS = 3
+_UPLOAD_RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
 
 def _is_storage_url(path_or_url: str) -> bool:
@@ -31,9 +34,26 @@ class StorageClient:
     """Synchronous HTTP client for storages.augmenter.pro (bucket: kiaraoke)."""
 
     def __init__(self):
-        self.base_url = os.getenv("STORAGE_URL", "https://storages.augmenter.pro").rstrip("/")
+        self.base_url = self._normalize_base_url(
+            os.getenv("STORAGE_URL", "https://storages.augmenter.pro")
+        )
         self.api_key = os.getenv("STORAGE_API_KEY", "")
         self.bucket = os.getenv("STORAGE_BUCKET", "kiaraoke")
+
+    @staticmethod
+    def _normalize_base_url(raw_url: str) -> str:
+        """
+        Normalize storage base URL.
+
+        Accepts either:
+          - https://storages.augmenter.pro
+          - https://storages.augmenter.pro/api
+        and always returns the host root URL.
+        """
+        url = raw_url.rstrip("/")
+        if url.endswith("/api"):
+            url = url[:-4]
+        return url
 
     def _auth_headers(self) -> dict:
         return {"Authorization": f"Bearer {self.api_key}"}
@@ -58,22 +78,43 @@ class StorageClient:
             "Content-Type": content_type,
             "X-File-Path": full_path,
         }
-        with httpx.Client() as client:
-            try:
-                response = client.post(
-                    f"{self.base_url}/api/upload.php",
-                    content=data,
-                    headers=headers,
-                    timeout=_UPLOAD_TIMEOUT,
-                )
-                response.raise_for_status()
-                result = response.json()
-                url = result.get("url") or self.public_url(full_path)
-                logger.info("Storage upload OK: %s (%d bytes)", full_path, len(data))
-                return url
-            except Exception as e:
-                logger.error("Storage upload failed for %s: %s", full_path, e)
-                raise
+        with httpx.Client(follow_redirects=True) as client:
+            last_exc: Exception | None = None
+            for attempt in range(1, _UPLOAD_ATTEMPTS + 1):
+                try:
+                    response = client.post(
+                        f"{self.base_url}/api/upload.php",
+                        content=data,
+                        headers=headers,
+                        timeout=_UPLOAD_TIMEOUT,
+                    )
+                    if response.status_code in _UPLOAD_RETRYABLE_STATUS:
+                        raise httpx.HTTPStatusError(
+                            f"Retryable status {response.status_code}",
+                            request=response.request,
+                            response=response,
+                        )
+                    response.raise_for_status()
+                    result = response.json()
+                    url = result.get("url") or self.public_url(full_path)
+                    logger.info("Storage upload OK: %s (%d bytes)", full_path, len(data))
+                    return url
+                except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError) as e:
+                    last_exc = e
+                    retryable = not isinstance(e, httpx.HTTPStatusError) or (
+                        e.response is not None and e.response.status_code in _UPLOAD_RETRYABLE_STATUS
+                    )
+                    if not retryable or attempt == _UPLOAD_ATTEMPTS:
+                        logger.error("Storage upload failed for %s: %s", full_path, e)
+                        raise
+                    backoff = 1.5 * (2 ** (attempt - 1))
+                    logger.warning(
+                        "Storage upload retry %d/%d for %s after %.1fs (%s)",
+                        attempt + 1, _UPLOAD_ATTEMPTS, full_path, backoff, e,
+                    )
+                    time.sleep(backoff)
+            assert last_exc is not None
+            raise last_exc
 
     def upload_from_file(self, local_path: Path, relative_path: str, content_type: str = "audio/wav") -> str:
         """Upload a local file to storage, returns public URL."""
@@ -85,7 +126,7 @@ class StorageClient:
         """Delete a file from storage (non-fatal on error)."""
         full_path = self.storage_path(relative_path)
         headers = {**self._auth_headers(), "Content-Type": "application/json"}
-        with httpx.Client() as client:
+        with httpx.Client(follow_redirects=True) as client:
             try:
                 response = client.post(
                     f"{self.base_url}/api/delete.php",
@@ -103,7 +144,7 @@ class StorageClient:
     def exists(self, relative_path: str) -> bool:
         """Check existence via HEAD request."""
         url = self.public_url(relative_path)
-        with httpx.Client() as client:
+        with httpx.Client(follow_redirects=True) as client:
             try:
                 response = client.head(url, timeout=_EXISTS_TIMEOUT)
                 return response.status_code == 200
@@ -113,7 +154,7 @@ class StorageClient:
     def download(self, relative_path: str) -> bytes:
         """Download file bytes from storage."""
         url = self.public_url(relative_path)
-        with httpx.Client() as client:
+        with httpx.Client(follow_redirects=True) as client:
             response = client.get(url, timeout=_DOWNLOAD_TIMEOUT)
             response.raise_for_status()
             logger.debug("Storage download OK: %s (%d bytes)", relative_path, len(response.content))
@@ -125,7 +166,7 @@ class StorageClient:
         # Stream for large files
         url = self.public_url(relative_path)
         logger.info("Downloading storage:%s → %s", relative_path, local_path)
-        with httpx.Client() as client:
+        with httpx.Client(follow_redirects=True) as client:
             with client.stream("GET", url, timeout=_DOWNLOAD_TIMEOUT) as response:
                 response.raise_for_status()
                 with open(local_path, "wb") as f:
