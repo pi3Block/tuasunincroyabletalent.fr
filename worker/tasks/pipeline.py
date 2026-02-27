@@ -37,6 +37,10 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 # Dedicated GPU devices — no Ollama sharing, no locks needed
 DEMUCS_DEVICE = os.getenv("DEMUCS_DEVICE", "cuda:0")  # GPU 1 RTX 3080 10GB
 CREPE_DEVICE = os.getenv("CREPE_DEVICE", "cuda:1")     # GPU 4 RTX 3060 Ti 8GB
+try:
+    STORAGE_UPLOAD_PARALLELISM = max(1, min(2, int(os.getenv("STORAGE_UPLOAD_PARALLELISM", "1"))))
+except ValueError:
+    STORAGE_UPLOAD_PARALLELISM = 1
 
 
 def _notify_tracks_ready(session_id: str):
@@ -76,6 +80,23 @@ def _safe_upload(storage, local_path: Path, relative_path: str, content_type: st
     except Exception as e:
         logger.warning("Upload failed (non-fatal) %s: %s", relative_path, e)
         return None
+
+
+def _upload_pair(storage, first: tuple[Path, str], second: tuple[Path, str]) -> tuple[str | None, str | None]:
+    """
+    Upload two files with bounded parallelism.
+
+    Large WAV uploads to the storage gateway can timeout when sent concurrently;
+    default to sequential uploads unless explicitly overridden.
+    """
+    if STORAGE_UPLOAD_PARALLELISM <= 1:
+        u1 = _safe_upload(storage, first[0], first[1])
+        u2 = _safe_upload(storage, second[0], second[1])
+        return u1, u2
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f1 = pool.submit(_safe_upload, storage, first[0], first[1])
+        f2 = pool.submit(_safe_upload, storage, second[0], second[1])
+        return f1.result(), f2.result()
 
 
 def _temp_dir(name: str) -> Path:
@@ -510,6 +531,10 @@ def prepare_reference(
 
     storage = get_storage()
     ref_temp = _temp_dir(f"{session_id}_ref")
+    logger.info(
+        "prepare_reference storage upload parallelism=%d (STORAGE_UPLOAD_PARALLELISM)",
+        STORAGE_UPLOAD_PARALLELISM,
+    )
 
     try:
         has_gpu = log_gpu_status()
@@ -587,18 +612,12 @@ def prepare_reference(
 
             # Persist to permanent cache — non-fatal (future sessions benefit from cache)
             if youtube_id:
-                with ThreadPoolExecutor(max_workers=2) as pool:
-                    f_cv = pool.submit(
-                        _safe_upload, storage,
-                        vocals_local,
-                        f"cache/{youtube_id}/vocals.wav",
-                    )
-                    f_ci = pool.submit(
-                        _safe_upload, storage,
-                        instrumentals_local,
-                        f"cache/{youtube_id}/instrumentals.wav",
-                    )
-                if f_cv.result() and f_ci.result():
+                cv_url, ci_url = _upload_pair(
+                    storage,
+                    (vocals_local, f"cache/{youtube_id}/vocals.wav"),
+                    (instrumentals_local, f"cache/{youtube_id}/instrumentals.wav"),
+                )
+                if cv_url and ci_url:
                     logger.info("Saved Demucs output to storage cache: %s", youtube_id)
                 else:
                     logger.warning("Demucs cache upload failed for %s (non-fatal)", youtube_id)
@@ -613,11 +632,13 @@ def prepare_reference(
         )
         vocals_rel = f"sessions/{session_id}_ref/vocals.wav"
         instru_rel = f"sessions/{session_id}_ref/instrumentals.wav"
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            f_v = pool.submit(_safe_upload, storage, vocals_local, vocals_rel)
-            f_i = pool.submit(_safe_upload, storage, instrumentals_local, instru_rel)
-        vocals_url = f_v.result() or storage.public_url(vocals_rel)
-        instru_url = f_i.result() or storage.public_url(instru_rel)
+        v_url, i_url = _upload_pair(
+            storage,
+            (vocals_local, vocals_rel),
+            (instrumentals_local, instru_rel),
+        )
+        vocals_url = v_url or storage.public_url(vocals_rel)
+        instru_url = i_url or storage.public_url(instru_rel)
 
         # Notify frontend that ref tracks are available for multi-track playback
         _notify_tracks_ready(session_id)
