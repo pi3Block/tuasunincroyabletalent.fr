@@ -7,7 +7,7 @@ import Link from "next/link";
 
 export const FooterSection = memo(function FooterSection() {
   return (
-    <footer className="relative py-12 px-4 border-t border-white/10">
+    <footer className="relative py-12 px-4 border-t border-border">
       <div className="max-w-6xl mx-auto">
         <div className="flex flex-col md:flex-row items-center justify-between gap-6">
           <motion.div
@@ -17,13 +17,13 @@ export const FooterSection = memo(function FooterSection() {
             viewport={{ once: true }}
           >
             <span className="text-2xl">🎤</span>
-            <Link href="/" className="text-lg font-bold text-white">
+            <Link href="/" className="text-lg font-bold text-foreground">
               Kiaraoke
             </Link>
           </motion.div>
 
           <motion.div
-            className="flex items-center gap-1 text-gray-400 text-sm"
+            className="flex items-center gap-1 text-muted-foreground text-sm"
             initial={{ opacity: 0 }}
             whileInView={{ opacity: 1 }}
             viewport={{ once: true }}
@@ -41,7 +41,7 @@ export const FooterSection = memo(function FooterSection() {
               href="https://pierrelegrand.fr"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-purple-400 hover:text-purple-300 hover:underline transition-colors"
+              className="text-primary hover:text-primary/80 hover:underline transition-colors"
             >
               pierrelegrand.fr
             </a>
@@ -58,7 +58,7 @@ export const FooterSection = memo(function FooterSection() {
               href="https://github.com/pi3Block/"
               target="_blank"
               rel="noopener noreferrer"
-              className="p-2 rounded-full bg-white/5 border border-white/10 text-gray-400 hover:text-white hover:bg-white/10 transition-colors"
+              className="p-2 rounded-full bg-secondary/50 border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
               whileHover={{ scale: 1.1 }}
               whileTap={{ scale: 0.9 }}
             >
@@ -68,7 +68,7 @@ export const FooterSection = memo(function FooterSection() {
               href="https://x.com/Pi3r2Dev"
               target="_blank"
               rel="noopener noreferrer"
-              className="p-2 rounded-full bg-white/5 border border-white/10 text-gray-400 hover:text-white hover:bg-white/10 transition-colors"
+              className="p-2 rounded-full bg-secondary/50 border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
               whileHover={{ scale: 1.1 }}
               whileTap={{ scale: 0.9 }}
             >
@@ -78,22 +78,22 @@ export const FooterSection = memo(function FooterSection() {
         </div>
 
         <motion.div
-          className="mt-8 text-center text-gray-500 text-sm"
+          className="mt-8 text-center text-muted-foreground text-sm"
           initial={{ opacity: 0 }}
           whileInView={{ opacity: 1 }}
           viewport={{ once: true }}
           transition={{ delay: 0.3 }}
         >
           <p>
-            &copy; {new Date().getFullYear()} Kiaraoke. Tous droits réservés.
+            &copy; {new Date().getFullYear()} Kiaraoke. Tous droits reserves.
           </p>
           <p className="mt-1">
-            Propulsé par{" "}
+            Propulse par{" "}
             <a
               href="https://ollama.ai"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-purple-400 hover:underline"
+              className="text-primary hover:underline"
             >
               Ollama
             </a>
@@ -102,7 +102,7 @@ export const FooterSection = memo(function FooterSection() {
               href="https://github.com/facebookresearch/demucs"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-purple-400 hover:underline"
+              className="text-primary hover:underline"
             >
               Demucs
             </a>
@@ -111,7 +111,7 @@ export const FooterSection = memo(function FooterSection() {
               href="https://github.com/openai/whisper"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-purple-400 hover:underline"
+              className="text-primary hover:underline"
             >
               Whisper
             </a>

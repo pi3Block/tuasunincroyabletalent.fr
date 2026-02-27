@@ -20,7 +20,7 @@ const GradientBackground = memo(function GradientBackground() {
   return (
     <div className="absolute inset-0 overflow-hidden">
       <motion.div
-        className="absolute w-[600px] h-[600px] rounded-full bg-gradient-to-r from-purple-600/30 to-pink-600/30 blur-3xl"
+        className="absolute w-[600px] h-[600px] rounded-full bg-linear-to-r from-green-600/30 to-emerald-600/30 blur-3xl"
         animate={{
           x: ["-20%", "10%", "-20%"],
           y: ["-20%", "20%", "-20%"],
@@ -30,7 +30,7 @@ const GradientBackground = memo(function GradientBackground() {
         style={{ left: "10%", top: "20%" }}
       />
       <motion.div
-        className="absolute w-[500px] h-[500px] rounded-full bg-gradient-to-r from-blue-600/20 to-cyan-600/20 blur-3xl"
+        className="absolute w-[500px] h-[500px] rounded-full bg-linear-to-r from-amber-500/20 to-orange-400/20 blur-3xl"
         animate={{
           x: ["20%", "-10%", "20%"],
           y: ["20%", "-20%", "20%"],
@@ -40,7 +40,7 @@ const GradientBackground = memo(function GradientBackground() {
         style={{ right: "10%", bottom: "20%" }}
       />
       <motion.div
-        className="absolute w-[400px] h-[400px] rounded-full bg-gradient-to-r from-gold-500/20 to-orange-500/20 blur-3xl"
+        className="absolute w-[400px] h-[400px] rounded-full bg-linear-to-r from-primary-300/20 to-green-400/20 blur-3xl"
         animate={{
           x: ["-10%", "10%", "-10%"],
           y: ["10%", "-10%", "10%"],
@@ -93,9 +93,9 @@ const AnimatedTitle = memo(function AnimatedTitle() {
           key={word}
           className={`inline-block mr-3 ${
             word === "IA"
-              ? "bg-gradient-to-r from-gold-400 via-gold-500 to-orange-500 bg-clip-text text-transparent"
+              ? "bg-linear-to-r from-green-400 via-green-500 to-emerald-500 bg-clip-text text-transparent"
               : word === "Vocal"
-                ? "bg-gradient-to-r from-purple-400 to-pink-500 bg-clip-text text-transparent"
+                ? "bg-linear-to-r from-amber-400 to-orange-500 bg-clip-text text-transparent"
                 : ""
           }`}
           initial={{ opacity: 0, y: 30, rotateX: -90 }}
@@ -122,22 +122,22 @@ const AnimatedMic = memo(function AnimatedMic() {
       transition={{ type: "spring", stiffness: 200, damping: 15, delay: 0.5 }}
     >
       <motion.div
-        className="absolute inset-0 rounded-full bg-gradient-to-br from-gold-400 to-gold-600 blur-xl"
+        className="absolute inset-0 rounded-full bg-gradient-to-br from-green-400 to-green-600 blur-xl"
         animate={{ scale: [1, 1.2, 1], opacity: [0.5, 0.8, 0.5] }}
         transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
       />
       <motion.div
-        className="relative w-full h-full rounded-full bg-gradient-to-br from-gold-400 to-gold-600 flex items-center justify-center shadow-2xl"
+        className="relative w-full h-full rounded-full bg-gradient-to-br from-green-400 to-green-600 flex items-center justify-center shadow-2xl"
         whileHover={{ scale: 1.05 }}
         whileTap={{ scale: 0.95 }}
       >
         <motion.div
-          className="absolute inset-0 rounded-full border-4 border-gold-300/50"
+          className="absolute inset-0 rounded-full border-4 border-green-300/50"
           animate={{ scale: [1, 1.5], opacity: [0.8, 0] }}
           transition={{ duration: 1.5, repeat: Infinity, ease: "easeOut" }}
         />
         <motion.div
-          className="absolute inset-0 rounded-full border-4 border-gold-300/50"
+          className="absolute inset-0 rounded-full border-4 border-green-300/50"
           animate={{ scale: [1, 1.5], opacity: [0.8, 0] }}
           transition={{
             duration: 1.5,
@@ -195,11 +195,11 @@ const StatCounter = memo(function StatCounter({
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: delay / 1000 + 1 }}
     >
-      <div className="text-2xl md:text-3xl font-bold text-gold-400">
+      <div className="text-2xl md:text-3xl font-bold text-primary">
         {count.toLocaleString()}
         {suffix}
       </div>
-      <div className="text-sm text-gray-400">{label}</div>
+      <div className="text-sm text-muted-foreground">{label}</div>
     </motion.div>
   );
 });
@@ -218,14 +218,14 @@ export const HeroSection = memo(function HeroSection() {
         <AnimatedTitle />
 
         <motion.p
-          className="mt-6 text-lg md:text-xl text-gray-300 max-w-2xl mx-auto"
+          className="mt-6 text-lg md:text-xl text-muted-foreground max-w-2xl mx-auto"
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.8, duration: 0.6 }}
         >
-          Chante ta chanson préférée et laisse notre{" "}
-          <span className="text-purple-400 font-semibold">jury IA</span>{" "}
-          analyser ta performance en temps réel !
+          Chante ta chanson preferee et laisse notre{" "}
+          <span className="text-primary font-semibold">jury IA</span>{" "}
+          analyser ta performance en temps reel !
         </motion.p>
 
         <motion.div
@@ -236,10 +236,10 @@ export const HeroSection = memo(function HeroSection() {
         >
           {[
             { icon: <Mic className="w-4 h-4" />, text: "Analyse vocale" },
-            { icon: <Music className="w-4 h-4" />, text: "Karaoké sync" },
+            { icon: <Music className="w-4 h-4" />, text: "Karaoke sync" },
             {
               icon: <Star className="w-4 h-4" />,
-              text: "Jury personnalisé",
+              text: "Jury personnalise",
             },
             {
               icon: <Sparkles className="w-4 h-4" />,
@@ -248,13 +248,12 @@ export const HeroSection = memo(function HeroSection() {
           ].map((feature, i) => (
             <motion.span
               key={feature.text}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/5 border border-white/10 text-sm text-gray-300"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-secondary/50 border border-border text-sm text-muted-foreground"
               initial={{ opacity: 0, scale: 0.8 }}
               animate={{ opacity: 1, scale: 1 }}
               transition={{ delay: 1.1 + i * 0.1 }}
               whileHover={{
                 scale: 1.05,
-                backgroundColor: "rgba(255,255,255,0.1)",
               }}
             >
               {feature.icon}
@@ -271,12 +270,12 @@ export const HeroSection = memo(function HeroSection() {
         >
           <Link href="/app">
             <motion.span
-              className="group relative inline-flex px-8 py-4 md:px-12 md:py-5 rounded-full text-lg md:text-xl font-bold text-gray-900 overflow-hidden cursor-pointer"
+              className="group relative inline-flex px-8 py-4 md:px-12 md:py-5 rounded-full text-lg md:text-xl font-bold text-white overflow-hidden cursor-pointer"
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
             >
               <motion.span
-                className="absolute inset-0 bg-gradient-to-r from-gold-400 via-gold-500 to-orange-500"
+                className="absolute inset-0 bg-linear-to-r from-green-500 via-green-400 to-emerald-500"
                 animate={{
                   backgroundPosition: ["0% 50%", "100% 50%", "0% 50%"],
                 }}
@@ -284,7 +283,7 @@ export const HeroSection = memo(function HeroSection() {
                 style={{ backgroundSize: "200% 200%" }}
               />
               <motion.span
-                className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent"
+                className="absolute inset-0 bg-linear-to-r from-transparent via-white/30 to-transparent"
                 initial={{ x: "-100%" }}
                 animate={{ x: "100%" }}
                 transition={{
@@ -314,7 +313,7 @@ export const HeroSection = memo(function HeroSection() {
           transition={{ delay: 1.5 }}
         >
           <StatCounter value={1247} label="Performances" delay={1500} />
-          <StatCounter value={98} label="Précision" suffix="%" delay={1700} />
+          <StatCounter value={98} label="Precision" suffix="%" delay={1700} />
           <StatCounter
             value={4.8}
             label="Note moyenne"
@@ -331,11 +330,11 @@ export const HeroSection = memo(function HeroSection() {
         transition={{ delay: 2 }}
       >
         <motion.div
-          className="flex flex-col items-center gap-2 text-gray-500"
+          className="flex flex-col items-center gap-2 text-muted-foreground"
           animate={{ y: [0, 10, 0] }}
           transition={{ duration: 2, repeat: Infinity }}
         >
-          <span className="text-xs">Découvrir</span>
+          <span className="text-xs">Decouvrir</span>
           <svg
             className="w-5 h-5"
             fill="none"

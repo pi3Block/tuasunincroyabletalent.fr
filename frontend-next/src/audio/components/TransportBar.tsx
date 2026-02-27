@@ -12,6 +12,12 @@ interface TransportBarProps {
   onPause: () => void
   onStop: () => void
   onSeek: (time: number) => void
+  /** Override playing state from an external source (e.g. YouTube) */
+  isPlaying?: boolean
+  /** Override current time from an external source (e.g. YouTube) */
+  currentTime?: number
+  /** Override duration from an external source (e.g. YouTube) */
+  duration?: number
   /** Inline single-row layout for bottom bar */
   compact?: boolean
   className?: string
@@ -28,18 +34,24 @@ export function TransportBar({
   onPause,
   onStop,
   onSeek,
+  isPlaying: isPlayingOverride,
+  currentTime: currentTimeOverride,
+  duration: durationOverride,
   compact = false,
   className,
 }: TransportBarProps) {
   const transport = useTransport()
+  const playing = isPlayingOverride ?? transport.playing
+  const time = currentTimeOverride ?? transport.currentTime
+  const dur = durationOverride ?? transport.duration
 
   const handlePlayPause = useCallback(() => {
-    if (transport.playing) {
+    if (playing) {
       onPause()
     } else {
       onPlay()
     }
-  }, [transport.playing, onPlay, onPause])
+  }, [playing, onPlay, onPause])
 
   const handleSeekChange = useCallback(
     (values: number[]) => {
@@ -49,15 +61,15 @@ export function TransportBar({
   )
 
   const handleSkipBack = useCallback(() => {
-    onSeek(Math.max(0, transport.currentTime - 10))
-  }, [onSeek, transport.currentTime])
+    onSeek(Math.max(0, time - 10))
+  }, [onSeek, time])
 
   const handleSkipForward = useCallback(() => {
-    onSeek(Math.min(transport.duration, transport.currentTime + 10))
-  }, [onSeek, transport.currentTime, transport.duration])
+    onSeek(Math.min(dur, time + 10))
+  }, [onSeek, time, dur])
 
-  const progress = transport.duration > 0
-    ? (transport.currentTime / transport.duration) * 100
+  const progress = dur > 0
+    ? (time / dur) * 100
     : 0
 
   // Compact (inline) layout — used in AppBottomBar
@@ -105,9 +117,9 @@ export function TransportBar({
             'touch-manipulation active:scale-95',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
           )}
-          aria-label={transport.playing ? 'Pause' : 'Lecture'}
+          aria-label={playing ? 'Pause' : 'Lecture'}
         >
-          {transport.playing ? (
+          {playing ? (
             <Pause className="h-4 w-4" />
           ) : (
             <Play className="h-4 w-4 ml-0.5" />
@@ -131,19 +143,19 @@ export function TransportBar({
 
         {/* Time + Slider */}
         <span className="text-xs font-mono text-muted-foreground tabular-nums shrink-0 ml-1">
-          {formatTime(transport.currentTime)}
+          {formatTime(time)}
         </span>
         <div className="flex-1 min-w-[80px] relative">
           <Slider
-            value={[transport.currentTime]}
-            max={transport.duration || 100}
+            value={[time]}
+            max={dur || 100}
             step={0.1}
             onValueChange={handleSeekChange}
             className="cursor-pointer"
           />
         </div>
         <span className="text-xs font-mono text-muted-foreground tabular-nums shrink-0">
-          {formatTime(transport.duration)}
+          {formatTime(dur)}
         </span>
       </div>
     )
@@ -161,12 +173,12 @@ export function TransportBar({
       {/* Time slider */}
       <div className="flex items-center gap-3">
         <span className="text-sm font-mono text-muted-foreground w-12 text-right tabular-nums">
-          {formatTime(transport.currentTime)}
+          {formatTime(time)}
         </span>
         <div className="flex-1 relative">
           <Slider
-            value={[transport.currentTime]}
-            max={transport.duration || 100}
+            value={[time]}
+            max={dur || 100}
             step={0.1}
             onValueChange={handleSeekChange}
             className="cursor-pointer"
@@ -178,7 +190,7 @@ export function TransportBar({
           />
         </div>
         <span className="text-sm font-mono text-muted-foreground w-12 tabular-nums">
-          {formatTime(transport.duration)}
+          {formatTime(dur)}
         </span>
       </div>
 
@@ -227,9 +239,9 @@ export function TransportBar({
             'touch-manipulation active:scale-95',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2'
           )}
-          aria-label={transport.playing ? 'Pause' : 'Lecture'}
+          aria-label={playing ? 'Pause' : 'Lecture'}
         >
-          {transport.playing ? (
+          {playing ? (
             <Pause className="h-7 w-7 lg:h-5 lg:w-5" />
           ) : (
             <Play className="h-7 w-7 lg:h-5 lg:w-5 ml-1" />

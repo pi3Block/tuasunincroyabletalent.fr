@@ -56,10 +56,9 @@ const PerformanceCard = memo(function PerformanceCard({
       transition={{ delay: index * 0.1, duration: 0.4 }}
     >
       <motion.div
-        className="relative p-5 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-sm overflow-hidden"
+        className="relative p-5 rounded-2xl bg-card/50 border border-border backdrop-blur-sm overflow-hidden"
         whileHover={{
           scale: 1.02,
-          backgroundColor: "rgba(255,255,255,0.08)",
         }}
         transition={{ duration: 0.2 }}
       >
@@ -70,12 +69,12 @@ const PerformanceCard = memo(function PerformanceCard({
         </div>
 
         <div className="flex items-center gap-3 mb-4">
-          <div className="w-10 h-10 rounded-full bg-linear-to-br from-purple-500 to-pink-500 flex items-center justify-center text-white font-bold text-sm">
+          <div className="w-10 h-10 rounded-full bg-linear-to-br from-primary to-emerald-500 flex items-center justify-center text-white font-bold text-sm">
             🎤
           </div>
           <div>
-            <div className="text-white font-medium text-sm">Anonyme</div>
-            <div className="text-gray-500 text-xs flex items-center gap-1">
+            <div className="text-foreground font-medium text-sm">Anonyme</div>
+            <div className="text-muted-foreground text-xs flex items-center gap-1">
               <Clock className="w-3 h-3" />
               {formatRelativeTime(timestamp)}
             </div>
@@ -83,17 +82,17 @@ const PerformanceCard = memo(function PerformanceCard({
         </div>
 
         <div className="mb-4">
-          <h4 className="text-white font-semibold text-lg truncate">
+          <h4 className="text-foreground font-semibold text-lg truncate">
             {performance.track_name}
           </h4>
-          <p className="text-gray-400 text-sm truncate">
+          <p className="text-muted-foreground text-sm truncate">
             {performance.artist_name}
           </p>
         </div>
 
         {juryComment && (
-          <div className="p-3 rounded-lg bg-white/5 border border-white/5 mb-4">
-            <p className="text-gray-300 text-sm italic">
+          <div className="p-3 rounded-lg bg-secondary/50 border border-border/50 mb-4">
+            <p className="text-muted-foreground text-sm italic">
               &ldquo;{juryComment}&rdquo;
             </p>
           </div>
@@ -108,10 +107,10 @@ const PerformanceCard = memo(function PerformanceCard({
               {performance.total_score >= 90
                 ? "Excellent"
                 : performance.total_score >= 80
-                  ? "Très bien"
+                  ? "Tres bien"
                   : performance.total_score >= 70
                     ? "Bien"
-                    : "À améliorer"}
+                    : "A ameliorer"}
             </span>
           </div>
         </div>
@@ -123,20 +122,20 @@ const PerformanceCard = memo(function PerformanceCard({
 const SkeletonCard = memo(function SkeletonCard() {
   return (
     <div className="relative min-w-[280px] md:min-w-[320px] snap-center">
-      <div className="p-5 rounded-2xl bg-white/5 border border-white/10 animate-pulse">
+      <div className="p-5 rounded-2xl bg-card/50 border border-border animate-pulse">
         <div className="flex items-center gap-3 mb-4">
-          <div className="w-10 h-10 rounded-full bg-white/10" />
+          <div className="w-10 h-10 rounded-full bg-muted" />
           <div className="space-y-2">
-            <div className="h-3 w-24 rounded bg-white/10" />
-            <div className="h-2 w-16 rounded bg-white/10" />
+            <div className="h-3 w-24 rounded bg-muted" />
+            <div className="h-2 w-16 rounded bg-muted" />
           </div>
         </div>
         <div className="space-y-2 mb-4">
-          <div className="h-5 w-40 rounded bg-white/10" />
-          <div className="h-3 w-28 rounded bg-white/10" />
+          <div className="h-5 w-40 rounded bg-muted" />
+          <div className="h-3 w-28 rounded bg-muted" />
         </div>
-        <div className="h-12 rounded-lg bg-white/10 mb-4" />
-        <div className="h-3 w-16 rounded bg-white/10 ml-auto" />
+        <div className="h-12 rounded-lg bg-muted mb-4" />
+        <div className="h-3 w-16 rounded bg-muted ml-auto" />
       </div>
     </div>
   );
@@ -176,7 +175,6 @@ export const RecentPerformancesSection = memo(
         .finally(() => setLoading(false));
     }, []);
 
-    // Masquer la section si aucune donnée après chargement
     if (!loading && performances.length === 0) return null;
 
     const canScrollLeft = currentIndex > 0;
@@ -194,7 +192,7 @@ export const RecentPerformancesSection = memo(
     return (
       <section className="relative py-20 px-4 overflow-hidden">
         <div className="absolute inset-0 pointer-events-none">
-          <div className="absolute top-0 left-1/4 w-72 h-72 bg-pink-600/10 rounded-full blur-3xl" />
+          <div className="absolute top-0 left-1/4 w-72 h-72 bg-green-500/10 rounded-full blur-3xl" />
           <div className="absolute bottom-0 right-1/4 w-72 h-72 bg-gold-600/10 rounded-full blur-3xl" />
         </div>
 
@@ -218,15 +216,15 @@ export const RecentPerformancesSection = memo(
                     transition={{ delay: 0.3 }}
                   >
                     <TrendingUp className="w-3 h-3" />
-                    {performances.length} récentes
+                    {performances.length} recentes
                   </motion.span>
                 )}
               </div>
 
-              <h2 className="text-3xl md:text-4xl font-bold text-white">
+              <h2 className="text-3xl md:text-4xl font-bold text-foreground">
                 Performances{" "}
-                <span className="bg-gradient-to-r from-pink-400 to-gold-500 bg-clip-text text-transparent">
-                  récentes
+                <span className="bg-linear-to-r from-primary to-amber-400 bg-clip-text text-transparent">
+                  recentes
                 </span>
               </h2>
             </div>
@@ -236,8 +234,8 @@ export const RecentPerformancesSection = memo(
                 <motion.button
                   className={`p-2 rounded-full border ${
                     canScrollLeft
-                      ? "border-white/20 text-white hover:bg-white/10"
-                      : "border-white/10 text-white/30 cursor-not-allowed"
+                      ? "border-border text-foreground hover:bg-secondary"
+                      : "border-border/50 text-muted-foreground/50 cursor-not-allowed"
                   }`}
                   onClick={scrollLeft}
                   disabled={!canScrollLeft}
@@ -249,8 +247,8 @@ export const RecentPerformancesSection = memo(
                 <motion.button
                   className={`p-2 rounded-full border ${
                     canScrollRight
-                      ? "border-white/20 text-white hover:bg-white/10"
-                      : "border-white/10 text-white/30 cursor-not-allowed"
+                      ? "border-border text-foreground hover:bg-secondary"
+                      : "border-border/50 text-muted-foreground/50 cursor-not-allowed"
                   }`}
                   onClick={scrollRight}
                   disabled={!canScrollRight}
@@ -301,7 +299,7 @@ export const RecentPerformancesSection = memo(
                 <motion.div
                   key={index}
                   className={`w-2 h-2 rounded-full ${
-                    index === 0 ? "bg-white" : "bg-white/30"
+                    index === 0 ? "bg-foreground" : "bg-foreground/30"
                   }`}
                   animate={index === 0 ? { scale: [1, 1.2, 1] } : {}}
                   transition={{ duration: 2, repeat: Infinity }}
@@ -317,15 +315,15 @@ export const RecentPerformancesSection = memo(
             viewport={{ once: true }}
             transition={{ delay: 0.5 }}
           >
-            <p className="text-gray-400 mb-4">
-              Rejoins la communauté et montre ton talent !
+            <p className="text-muted-foreground mb-4">
+              Rejoins la communaute et montre ton talent !
             </p>
             <Link href="/app">
               <motion.span
-                className="inline-block px-6 py-3 rounded-full bg-linear-to-r from-purple-500 to-pink-500 text-white font-semibold shadow-lg shadow-purple-500/25 cursor-pointer"
+                className="inline-block px-6 py-3 rounded-full bg-linear-to-r from-primary to-emerald-500 text-primary-foreground font-semibold shadow-lg shadow-primary/25 cursor-pointer"
                 whileHover={{
                   scale: 1.05,
-                  boxShadow: "0 20px 40px -10px rgba(168, 85, 247, 0.4)",
+                  boxShadow: "0 20px 40px -10px rgba(34, 197, 94, 0.4)",
                 }}
                 whileTap={{ scale: 0.95 }}
               >

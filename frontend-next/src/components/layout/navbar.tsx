@@ -36,7 +36,7 @@ export function Navbar({ className }: NavbarProps) {
           href="/"
           className="font-bold text-lg flex items-center gap-2 hover:opacity-80 transition-opacity"
         >
-          <Music2 className="h-5 w-5 text-gold-400" />
+          <Music2 className="h-5 w-5 text-primary" />
           <span>Kiaraoke</span>
         </Link>
 

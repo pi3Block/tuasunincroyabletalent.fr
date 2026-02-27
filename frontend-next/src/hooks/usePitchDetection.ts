@@ -188,22 +188,33 @@ export function usePitchDetection(
   }, [isAnalyzing, minFrequency, maxFrequency, smoothingFactor])
 
   const startAnalysis = useCallback((stream: MediaStream) => {
-    // Create audio context
-    const audioContext = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)()
-    audioContextRef.current = audioContext
+    try {
+      // Create audio context
+      const audioContext = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)()
+      audioContextRef.current = audioContext
 
-    // Create analyser node
-    const analyser = audioContext.createAnalyser()
-    analyser.fftSize = 2048
-    analyser.smoothingTimeConstant = 0.8
-    analyserRef.current = analyser
+      // Create analyser node
+      const analyser = audioContext.createAnalyser()
+      analyser.fftSize = 2048
+      analyser.smoothingTimeConstant = 0.8
+      analyserRef.current = analyser
 
-    // Connect stream to analyser
-    const source = audioContext.createMediaStreamSource(stream)
-    source.connect(analyser)
-    sourceRef.current = source
+      // Connect stream to analyser
+      const source = audioContext.createMediaStreamSource(stream)
+      source.connect(analyser)
+      sourceRef.current = source
 
-    setIsAnalyzing(true)
+      setIsAnalyzing(true)
+    } catch (err) {
+      // Clean up AudioContext if setup failed partway through
+      if (audioContextRef.current) {
+        audioContextRef.current.close()
+        audioContextRef.current = null
+      }
+      analyserRef.current = null
+      sourceRef.current = null
+      throw err
+    }
   }, [])
 
   const stopAnalysis = useCallback(() => {

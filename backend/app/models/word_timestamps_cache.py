@@ -2,7 +2,7 @@
 SQLAlchemy model for word-level timestamps cache storage.
 Stores word-by-word synchronized lyrics with timestamps for karaoke display.
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import Column, Integer, String, Text, DateTime, Index, Numeric, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 
@@ -50,10 +50,10 @@ class WordTimestampsCache(Base):
     track_name = Column(String(255), nullable=True)
 
     # Cache management
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     expires_at = Column(
         DateTime(timezone=True),
-        default=lambda: datetime.utcnow() + timedelta(days=90)
+        default=lambda: datetime.now(timezone.utc) + timedelta(days=90),
     )
 
     __table_args__ = (
@@ -72,7 +72,7 @@ class WordTimestampsCache(Base):
         """Check if cache entry has expired."""
         if self.expires_at is None:
             return True
-        return datetime.utcnow() > self.expires_at
+        return datetime.now(timezone.utc) > self.expires_at
 
     @property
     def source_priority(self) -> int:

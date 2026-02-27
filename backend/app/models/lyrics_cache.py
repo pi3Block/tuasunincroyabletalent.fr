@@ -2,7 +2,7 @@
 SQLAlchemy model for lyrics cache storage.
 Stores lyrics data (synced and plain text) with TTL-based expiration.
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import Column, Integer, String, Text, DateTime, Index
 from sqlalchemy.dialects.postgresql import JSONB
 
@@ -39,10 +39,10 @@ class LyricsCache(Base):
     track_name = Column(String(255), nullable=True)
 
     # Cache management
-    fetched_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    fetched_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     expires_at = Column(
         DateTime(timezone=True),
-        default=lambda: datetime.utcnow() + timedelta(days=7)
+        default=lambda: datetime.now(timezone.utc) + timedelta(days=7),
     )
 
     __table_args__ = (
@@ -58,7 +58,7 @@ class LyricsCache(Base):
         """Check if cache entry has expired."""
         if self.expires_at is None:
             return True
-        return datetime.utcnow() > self.expires_at
+        return datetime.now(timezone.utc) > self.expires_at
 
     def to_dict(self) -> dict:
         """Convert to dictionary for API response."""

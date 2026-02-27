@@ -389,11 +389,6 @@ async def start_analysis(session_id: str, background_tasks: BackgroundTasks):
             detail="Reference audio path not found"
         )
 
-    # Update session status
-    await redis_client.update_session(session_id, {
-        "status": "analyzing",
-    })
-
     # Trigger the full analysis pipeline
     # Pass youtube_id for reference separation cache lookup
     task = celery_app.send_task(
@@ -409,8 +404,10 @@ async def start_analysis(session_id: str, background_tasks: BackgroundTasks):
         queue="gpu",  # Explicitly route to gpu queue
     )
 
-    # Store task ID
+    # Store task ID and status atomically to avoid race condition
+    # (polling could see status=analyzing without task_id)
     await redis_client.update_session(session_id, {
+        "status": "analyzing",
         "analysis_task_id": task.id,
     })
 

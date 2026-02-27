@@ -243,69 +243,75 @@ export default function AppPage() {
   const masterVolume = useMasterVolume();
   const play = useAudioStore((s) => s.play);
   const pause = useAudioStore((s) => s.pause);
-  const stop = useAudioStore((s) => s.stop);
   const seek = useAudioStore((s) => s.seek);
-  const setCurrentTime = useAudioStore((s) => s.setCurrentTime);
-  const setDuration = useAudioStore((s) => s.setDuration);
   const setMasterVolume = useAudioStore((s) => s.setMasterVolume);
+
+  // YouTube duration tracked locally — NOT synced to audioStore to avoid useMultiTrack conflicts
+  const [youtubeDuration, setYoutubeDuration] = useState(0);
+
+  // Is YouTube the active video source? (visible across all pre-results states)
+  const youtubeActive =
+    ["preparing", "downloading", "ready", "recording", "uploading", "analyzing"].includes(status) &&
+    !!youtubeControls;
 
   useKeyboardShortcuts({
     enabled: status === "ready" || status === "results",
     onPlayPause: () => {
-      if (transport.playing) {
-        youtubeControls?.pause();
-        pause();
+      if (youtubeActive) {
+        if (isVideoPlaying) youtubeControls!.pause();
+        else youtubeControls!.play();
       } else {
-        youtubeControls?.play();
-        play();
+        if (transport.playing) pause();
+        else play();
       }
     },
     onSeekBack: () => {
-      const t = Math.max(0, transport.currentTime - 10);
-      youtubeControls?.seekTo(t);
-      seek(t);
+      const cur = youtubeActive ? playbackTime : transport.currentTime;
+      const t = Math.max(0, cur - 10);
+      if (youtubeActive) youtubeControls!.seekTo(t);
+      else seek(t);
     },
     onSeekForward: () => {
-      const t = Math.min(transport.duration, transport.currentTime + 10);
-      youtubeControls?.seekTo(t);
-      seek(t);
+      const d = youtubeActive ? youtubeDuration : transport.duration;
+      const cur = youtubeActive ? playbackTime : transport.currentTime;
+      const t = Math.min(d, cur + 10);
+      if (youtubeActive) youtubeControls!.seekTo(t);
+      else seek(t);
     },
     onVolumeUp: () => setMasterVolume(Math.min(1, masterVolume + 0.05)),
     onVolumeDown: () => setMasterVolume(Math.max(0, masterVolume - 0.05)),
   });
 
-  // ── YouTube ↔ audioStore sync ──
-  // When YouTube is the active player (before StudioMode loads multi-track),
-  // sync YouTube state → audioStore so TransportBar displays correct time/duration.
+  // ── YouTube time sync ──
+  // Do NOT sync anything to audioStore (play/pause, currentTime, duration).
+  // Writing to audioStore.transport triggers useMultiTrack.syncPlayback which
+  // moves/plays multi-track audio elements → double audio fighting with YouTube.
+  // Instead, YouTube state is passed as override props to TransportBar.
   const handleYoutubeTimeUpdate = useCallback(
     (time: number) => {
       setPlaybackTime(time);
-      // Sync to audioStore only when StudioMode tracks aren't loaded yet
-      if (!studioControls) {
-        setCurrentTime(time);
-      }
+      // NOT calling setCurrentTime — that would trigger useMultiTrack.syncPlayback
     },
-    [setPlaybackTime, setCurrentTime, studioControls],
+    [setPlaybackTime],
   );
 
   const handleYoutubeStateChange = useCallback(
     (isPlaying: boolean) => {
       setIsVideoPlaying(isPlaying);
-      if (!studioControls) {
-        if (isPlaying) play();
-        else pause();
-      }
+      // NOT calling audioStore.play()/pause() — that would make useMultiTrack
+      // play its tracks and fight with YouTube audio.
     },
-    [setIsVideoPlaying, studioControls, play, pause],
+    [setIsVideoPlaying],
   );
 
   const handleYoutubeDurationChange = useCallback(
     (duration: number) => {
-      if (!studioControls && duration > 0) {
-        setDuration(duration);
+      if (duration > 0) {
+        setYoutubeDuration(duration);
+        // NOT calling audioStore.setDuration — keep YouTube state isolated
       }
     },
-    [studioControls, setDuration],
+    [],
   );
 
   const handleYoutubeControlsReady = useCallback(
@@ -315,27 +321,24 @@ export default function AppPage() {
     [],
   );
 
-  // Effective transport controls: studioControls (multi-track) > YouTube > null
-  const effectiveStudioControls: StudioTransportControls | null =
-    studioControls ??
-    (youtubeControls
-      ? {
-          play: async () => {
-            youtubeControls.play();
-          },
-          pause: () => {
-            youtubeControls.pause();
-          },
-          stop: () => {
-            youtubeControls.seekTo(0);
-            youtubeControls.pause();
-            stop();
-          },
-          seek: (time: number) => {
-            youtubeControls.seekTo(time);
-          },
-        }
-      : null);
+  // Effective transport controls: YouTube when video is visible, else multi-track
+  const effectiveStudioControls: StudioTransportControls | null = youtubeActive
+    ? {
+        play: async () => {
+          youtubeControls!.play();
+        },
+        pause: () => {
+          youtubeControls!.pause();
+        },
+        stop: () => {
+          youtubeControls!.seekTo(0);
+          youtubeControls!.pause();
+        },
+        seek: (time: number) => {
+          youtubeControls!.seekTo(time);
+        },
+      }
+    : studioControls;
 
   const [analysisTaskId, setAnalysisTaskId] = useState<string | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -558,16 +561,15 @@ export default function AppPage() {
     };
   }, []);
 
-  // Fallback: poll analysis status (only if SSE failed)
+  // Safety-net polling: ALWAYS poll during "analyzing" regardless of SSE.
+  // SSE may silently lose events (proxy buffering, Traefik, connection drops).
+  // Poll at 3s when SSE is active (safety net), 2s when SSE failed (primary).
   useEffect(() => {
-    if (
-      !usePollingFallback ||
-      !sessionId ||
-      status !== "analyzing" ||
-      !analysisTaskId
-    ) {
+    if (!sessionId || status !== "analyzing") {
       return;
     }
+
+    const pollInterval = usePollingFallback ? 2000 : 3000;
 
     const pollAnalysis = async () => {
       try {
@@ -593,15 +595,19 @@ export default function AppPage() {
       }
     };
 
-    const interval = setInterval(pollAnalysis, 2000);
-    pollAnalysis();
+    // Delay first poll slightly to let SSE deliver first if it can
+    const firstPollDelay = usePollingFallback ? 0 : 2000;
+    const firstPollTimeout = setTimeout(pollAnalysis, firstPollDelay);
+    const interval = setInterval(pollAnalysis, pollInterval);
 
-    return () => clearInterval(interval);
+    return () => {
+      clearTimeout(firstPollTimeout);
+      clearInterval(interval);
+    };
   }, [
     usePollingFallback,
     sessionId,
     status,
-    analysisTaskId,
     setAnalysisProgress,
     setResults,
     setError,
@@ -730,6 +736,7 @@ export default function AppPage() {
     setAnalysisProgress(null);
     setStudioControls(null);
     setYoutubeControls(null);
+    setYoutubeDuration(0);
     reset();
     setStatus("selecting");
   }, [
@@ -933,9 +940,70 @@ export default function AppPage() {
             {/* LEFT — main content zone */}
             <div className="flex-1 min-w-0 overflow-y-auto p-4 flex flex-col gap-3">
               {/* Video (preparing / downloading / ready / recording) */}
-              {["preparing", "downloading", "ready", "recording"].includes(
+              {/* Video — persists through uploading/analyzing (shrinks + progress aside) */}
+              {["preparing", "downloading", "ready", "recording", "uploading", "analyzing"].includes(
                 status,
               ) && youtubeMatch && (
+                (status === "uploading" || status === "analyzing") ? (
+                  <div className="flex gap-4 items-start">
+                    <div className="w-1/2 shrink-0">
+                      <YouTubePlayer
+                        video={youtubeMatch}
+                        onTimeUpdate={handleYoutubeTimeUpdate}
+                        onStateChange={handleYoutubeStateChange}
+                        onDurationChange={handleYoutubeDurationChange}
+                        onControlsReady={handleYoutubeControlsReady}
+                      />
+                    </div>
+
+                    {status === "uploading" && (
+                      <div className="flex-1 flex flex-col items-center justify-center gap-3 py-4">
+                        <div className="w-10 h-10 border-3 border-primary/30 border-t-primary rounded-full animate-spin" />
+                        <div className="text-center">
+                          <p className="font-semibold text-sm">
+                            Envoi en cours...
+                          </p>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Préparation de l&apos;analyse
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {status === "analyzing" && (
+                      <div className="flex-1 flex flex-col items-center justify-center gap-3 py-4">
+                        <div className="relative">
+                          <div className="w-14 h-14 border-3 border-primary/30 border-t-primary rounded-full animate-spin" />
+                          <div className="absolute inset-0 flex items-center justify-center">
+                            <span className="text-xl">👨‍⚖️</span>
+                          </div>
+                        </div>
+                        <div className="text-center">
+                          <p className="font-bold text-primary text-sm">
+                            Le jury délibère...
+                          </p>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Analyse en cours
+                          </p>
+                        </div>
+                        {analysisProgress && (
+                          <div className="w-full space-y-1">
+                            <div className="h-2 bg-muted rounded-full overflow-hidden">
+                              <div
+                                className="h-full bg-primary transition-all duration-700 ease-out"
+                                style={{ width: `${analysisProgress.progress}%` }}
+                              />
+                            </div>
+                            <p className="text-xs text-muted-foreground text-center">
+                              {getProgressLabel(analysisProgress.step)} (
+                              {analysisProgress.progress}%)
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ) : (
                   <>
                     <YouTubePlayer
                       video={youtubeMatch}
@@ -948,55 +1016,7 @@ export default function AppPage() {
                       <PitchIndicator pitchData={pitchData} />
                     )}
                   </>
-                )}
-
-              {/* Uploading */}
-              {status === "uploading" && (
-                <div className="flex-1 flex flex-col items-center justify-center gap-4">
-                  <div className="w-16 h-16 border-4 border-primary/30 border-t-primary rounded-full animate-spin" />
-                  <div className="text-center">
-                    <p className="text-lg font-semibold">
-                      Envoi de ton enregistrement...
-                    </p>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      Préparation de l&apos;analyse
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              {/* Analyzing */}
-              {status === "analyzing" && (
-                <div className="flex-1 flex flex-col items-center justify-center gap-6">
-                  <div className="relative">
-                    <div className="w-20 h-20 border-4 border-primary/30 border-t-primary rounded-full animate-spin" />
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <span className="text-3xl">👨‍⚖️</span>
-                    </div>
-                  </div>
-                  <div className="text-center">
-                    <p className="text-xl font-bold text-primary">
-                      Le jury délibère...
-                    </p>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      Analyse de ta performance en cours
-                    </p>
-                  </div>
-                  {analysisProgress && (
-                    <div className="w-full max-w-xs space-y-2">
-                      <div className="h-2 bg-muted rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-primary transition-all duration-700 ease-out"
-                          style={{ width: `${analysisProgress.progress}%` }}
-                        />
-                      </div>
-                      <p className="text-xs text-muted-foreground text-center">
-                        {getProgressLabel(analysisProgress.step)} (
-                        {analysisProgress.progress}%)
-                      </p>
-                    </div>
-                  )}
-                </div>
+                )
               )}
 
               {/* Results */}
@@ -1172,6 +1192,9 @@ export default function AppPage() {
             onReset={handleReset}
             onCancel={handleCancel}
             analysisProgress={analysisProgress}
+            isPlaying={youtubeActive ? isVideoPlaying : undefined}
+            currentTime={youtubeActive ? playbackTime : undefined}
+            duration={youtubeActive ? youtubeDuration : undefined}
           />
         </div>
       </div>
@@ -1314,52 +1337,77 @@ export default function AppPage() {
             </div>
           )}
 
-          {/* UPLOADING — mobile */}
+          {/* UPLOADING — mobile (video persists + compact indicator) */}
           {status === "uploading" && (
-            <div className="text-center space-y-4">
-              <div className="w-20 h-20 mx-auto border-4 border-primary/40 border-t-primary rounded-full animate-spin" />
-              <p className="text-xl font-semibold">
-                Envoi de ton enregistrement...
-              </p>
-              <p className="text-muted-foreground">
-                Préparation de l&apos;analyse
-              </p>
+            <div className="w-full max-w-md space-y-4">
+              {youtubeMatch && (
+                <YouTubePlayer
+                  video={youtubeMatch}
+                  onTimeUpdate={handleYoutubeTimeUpdate}
+                  onStateChange={handleYoutubeStateChange}
+                  onDurationChange={handleYoutubeDurationChange}
+                  onControlsReady={handleYoutubeControlsReady}
+                />
+              )}
+              <div className="flex items-center justify-center gap-3 bg-muted/30 border border-border/50 rounded-lg p-3">
+                <div className="w-5 h-5 border-2 border-primary/40 border-t-primary rounded-full animate-spin shrink-0" />
+                <div>
+                  <p className="font-semibold text-sm">
+                    Envoi en cours...
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Préparation de l&apos;analyse
+                  </p>
+                </div>
+              </div>
             </div>
           )}
 
-          {/* ANALYZING — mobile */}
+          {/* ANALYZING — mobile (video persists + compact progress) */}
           {status === "analyzing" && (
-            <div className="space-y-6 w-full max-w-md text-center">
-              <div className="relative inline-block">
-                <div className="w-20 h-20 mx-auto border-4 border-primary/30 border-t-primary rounded-full animate-spin" />
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <span className="text-3xl">👨‍⚖️</span>
-                </div>
-              </div>
-
-              <div>
-                <p className="text-xl font-bold text-primary">
-                  Le jury délibère...
-                </p>
-                <p className="text-muted-foreground text-sm mt-1">
-                  Analyse de ta performance en cours
-                </p>
-              </div>
-
-              {analysisProgress && (
-                <div className="space-y-2 max-w-xs mx-auto">
-                  <div className="h-2 bg-muted rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-primary transition-all duration-700 ease-out"
-                      style={{ width: `${analysisProgress.progress}%` }}
-                    />
-                  </div>
-                  <p className="text-muted-foreground text-sm">
-                    {getProgressLabel(analysisProgress.step)} (
-                    {analysisProgress.progress}%)
-                  </p>
-                </div>
+            <div className="w-full max-w-md space-y-4">
+              {youtubeMatch && (
+                <YouTubePlayer
+                  video={youtubeMatch}
+                  onTimeUpdate={handleYoutubeTimeUpdate}
+                  onStateChange={handleYoutubeStateChange}
+                  onDurationChange={handleYoutubeDurationChange}
+                  onControlsReady={handleYoutubeControlsReady}
+                />
               )}
+              <div className="bg-primary/5 border border-primary/20 rounded-lg p-4 text-center space-y-3">
+                <div className="flex items-center justify-center gap-2">
+                  <div className="relative">
+                    <div className="w-10 h-10 border-3 border-primary/30 border-t-primary rounded-full animate-spin" />
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <span className="text-sm">👨‍⚖️</span>
+                    </div>
+                  </div>
+                  <div className="text-left">
+                    <p className="font-bold text-primary text-sm">
+                      Le jury délibère...
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Analyse en cours
+                    </p>
+                  </div>
+                </div>
+
+                {analysisProgress && (
+                  <div className="space-y-1">
+                    <div className="h-2 bg-muted rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-primary transition-all duration-700 ease-out"
+                        style={{ width: `${analysisProgress.progress}%` }}
+                      />
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {getProgressLabel(analysisProgress.step)} (
+                      {analysisProgress.progress}%)
+                    </p>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 

@@ -85,8 +85,8 @@ def cleanup_session_files():
                         try:
                             storage.delete(rel_path)
                             deleted_storage_files += 1
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.warning("Failed to delete %s: %s", rel_path, e)
 
                     deleted_sessions += 1
                     logger.info("Cleaned up storage for session: %s", session_id)

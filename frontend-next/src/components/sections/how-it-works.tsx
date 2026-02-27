@@ -32,10 +32,10 @@ const STEPS = [
   },
   {
     icon: Music2,
-    title: "Séparation audio",
+    title: "Separation audio",
     description:
-      "Notre IA isole les voix de la musique pour une analyse précise.",
-    color: "from-purple-500 to-violet-600",
+      "Notre IA isole les voix de la musique pour une analyse precise.",
+    color: "from-teal-500 to-emerald-600",
     techs: [
       {
         name: "Demucs",
@@ -47,8 +47,8 @@ const STEPS = [
   {
     icon: Mic2,
     title: "Enregistre ta performance",
-    description: "Chante avec le karaoké synchronisé mot par mot.",
-    color: "from-pink-500 to-rose-600",
+    description: "Chante avec le karaoke synchronise mot par mot.",
+    color: "from-amber-500 to-orange-600",
     techs: [
       {
         name: "Web Audio API",
@@ -61,8 +61,8 @@ const STEPS = [
     icon: Brain,
     title: "Analyse IA",
     description:
-      "Détection de la justesse, du rythme et de la prononciation.",
-    color: "from-blue-500 to-cyan-600",
+      "Detection de la justesse, du rythme et de la prononciation.",
+    color: "from-green-600 to-teal-600",
     techs: [
       { name: "CREPE", url: "https://github.com/marl/crepe" },
       { name: "Librosa", url: "https://librosa.org/" },
@@ -71,7 +71,7 @@ const STEPS = [
   {
     icon: MessageSquare,
     title: "Feedback du Jury IA",
-    description: "Des personnalités virtuelles commentent ta prestation.",
+    description: "Des personnalites virtuelles commentent ta prestation.",
     color: "from-orange-500 to-amber-600",
     techs: [
       { name: "Ollama", url: "https://ollama.ai/" },
@@ -119,32 +119,31 @@ const StepCard = memo(function StepCard({
   return (
     <motion.div variants={itemVariants} className="relative group">
       {index < STEPS.length - 1 && (
-        <div className="hidden lg:block absolute top-12 left-[calc(100%+1rem)] w-8 h-0.5 bg-gradient-to-r from-white/20 to-transparent" />
+        <div className="hidden lg:block absolute top-12 left-[calc(100%+1rem)] w-8 h-0.5 bg-linear-to-r from-border to-transparent" />
       )}
 
       <motion.div
-        className="relative p-6 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-sm h-full"
+        className="relative p-6 rounded-2xl bg-card/50 border border-border backdrop-blur-sm h-full"
         whileHover={{
           scale: 1.02,
-          backgroundColor: "rgba(255,255,255,0.08)",
         }}
         transition={{ duration: 0.2 }}
       >
-        <div className="absolute -top-3 -left-3 w-8 h-8 rounded-full bg-gray-900 border-2 border-white/20 flex items-center justify-center text-sm font-bold text-white/60">
+        <div className="absolute -top-3 -left-3 w-8 h-8 rounded-full bg-background border-2 border-border flex items-center justify-center text-sm font-bold text-muted-foreground">
           {index + 1}
         </div>
 
         <motion.div
-          className={`w-14 h-14 rounded-xl bg-gradient-to-br ${step.color} flex items-center justify-center mb-4 shadow-lg`}
+          className={`w-14 h-14 rounded-xl bg-linear-to-br ${step.color} flex items-center justify-center mb-4 shadow-lg`}
           whileHover={{ rotate: [0, -10, 10, 0] }}
           transition={{ duration: 0.5 }}
         >
           <Icon className="w-7 h-7 text-white" />
         </motion.div>
 
-        <h3 className="text-lg font-semibold text-white mb-2">{step.title}</h3>
+        <h3 className="text-lg font-semibold text-foreground mb-2">{step.title}</h3>
 
-        <p className="text-sm text-gray-400 mb-4">{step.description}</p>
+        <p className="text-sm text-muted-foreground mb-4">{step.description}</p>
 
         {step.techs.length > 0 && (
           <div className="flex flex-wrap gap-2">
@@ -154,7 +153,7 @@ const StepCard = memo(function StepCard({
                 href={tech.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-white/5 border border-white/10 text-xs text-gray-400 hover:text-white hover:bg-white/10 transition-colors"
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-secondary/50 border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
               >
@@ -172,12 +171,12 @@ const StepCard = memo(function StepCard({
 export const HowItWorksSection = memo(function HowItWorksSection() {
   return (
     <section
-      aria-label="Comment ça marche"
+      aria-label="Comment ca marche"
       className="relative py-20 px-4 overflow-hidden"
     >
       <div className="absolute inset-0 pointer-events-none">
-        <div className="absolute top-1/4 left-0 w-96 h-96 bg-purple-600/10 rounded-full blur-3xl" />
-        <div className="absolute bottom-1/4 right-0 w-96 h-96 bg-blue-600/10 rounded-full blur-3xl" />
+        <div className="absolute top-1/4 left-0 w-96 h-96 bg-green-600/10 rounded-full blur-3xl" />
+        <div className="absolute bottom-1/4 right-0 w-96 h-96 bg-amber-500/10 rounded-full blur-3xl" />
       </div>
 
       <div className="relative z-10 max-w-6xl mx-auto">
@@ -189,23 +188,23 @@ export const HowItWorksSection = memo(function HowItWorksSection() {
           transition={{ duration: 0.6 }}
         >
           <motion.span
-            className="inline-block px-4 py-1.5 rounded-full bg-purple-500/20 border border-purple-500/30 text-purple-400 text-sm font-medium mb-4"
+            className="inline-block px-4 py-1.5 rounded-full bg-primary/20 border border-primary/30 text-primary text-sm font-medium mb-4"
             initial={{ opacity: 0, scale: 0.8 }}
             whileInView={{ opacity: 1, scale: 1 }}
             viewport={{ once: true }}
             transition={{ delay: 0.2 }}
           >
-            Comment ça marche ?
+            Comment ca marche ?
           </motion.span>
 
-          <h2 className="text-3xl md:text-4xl lg:text-5xl font-bold text-white mb-4">
+          <h2 className="text-3xl md:text-4xl lg:text-5xl font-bold text-foreground mb-4">
             De la chanson au{" "}
-            <span className="bg-gradient-to-r from-purple-400 to-pink-500 bg-clip-text text-transparent">
+            <span className="bg-linear-to-r from-primary to-emerald-400 bg-clip-text text-transparent">
               verdict du jury
             </span>
           </h2>
 
-          <p className="text-gray-400 text-lg max-w-2xl mx-auto">
+          <p className="text-muted-foreground text-lg max-w-2xl mx-auto">
             Notre pipeline IA analyse ta voix en utilisant les meilleures
             technologies open source.
           </p>
@@ -234,7 +233,7 @@ export const HowItWorksSection = memo(function HowItWorksSection() {
             href="https://github.com"
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-2 px-6 py-3 rounded-full bg-white/5 border border-white/10 text-gray-300 hover:text-white hover:bg-white/10 transition-colors"
+            className="inline-flex items-center gap-2 px-6 py-3 rounded-full bg-secondary/50 border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
           >
             <svg
               className="w-5 h-5"

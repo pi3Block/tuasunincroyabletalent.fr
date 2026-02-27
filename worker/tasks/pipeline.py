@@ -325,16 +325,20 @@ def analyze_performance(
             user_vocals_local = Path(user_separation["vocals_path"])
             user_instru_local = Path(user_separation["instrumentals_path"])
             with ThreadPoolExecutor(max_workers=2) as pool:
-                pool.submit(
-                    storage.upload_from_file,
-                    user_vocals_local,
-                    f"sessions/{session_id}_user/vocals.wav",
-                )
-                pool.submit(
-                    storage.upload_from_file,
-                    user_instru_local,
-                    f"sessions/{session_id}_user/instrumentals.wav",
-                )
+                futures = [
+                    pool.submit(
+                        storage.upload_from_file,
+                        user_vocals_local,
+                        f"sessions/{session_id}_user/vocals.wav",
+                    ),
+                    pool.submit(
+                        storage.upload_from_file,
+                        user_instru_local,
+                        f"sessions/{session_id}_user/instrumentals.wav",
+                    ),
+                ]
+                for f in futures:
+                    f.result()  # propagate upload errors
 
             update_progress(self, "separating_user_done", 20, "Voix isolee !")
 
@@ -361,16 +365,20 @@ def analyze_performance(
                 # Ensure session_ref tracks exist in storage for StudioMode — parallel
                 if not storage.exists(f"sessions/{session_id}_ref/vocals.wav"):
                     with ThreadPoolExecutor(max_workers=2) as pool:
-                        pool.submit(
-                            storage.upload_from_file,
-                            ref_vocals_local,
-                            f"sessions/{session_id}_ref/vocals.wav",
-                        )
-                        pool.submit(
-                            storage.upload_from_file,
-                            ref_instru_local,
-                            f"sessions/{session_id}_ref/instrumentals.wav",
-                        )
+                        ref_futures = [
+                            pool.submit(
+                                storage.upload_from_file,
+                                ref_vocals_local,
+                                f"sessions/{session_id}_ref/vocals.wav",
+                            ),
+                            pool.submit(
+                                storage.upload_from_file,
+                                ref_instru_local,
+                                f"sessions/{session_id}_ref/instrumentals.wav",
+                            ),
+                        ]
+                        for f in ref_futures:
+                            f.result()  # propagate upload errors
             else:
                 # CACHE MISS: download reference audio, separate, upload to cache + session_ref
                 logger.info("No storage cache for %s, separating reference...", youtube_id)

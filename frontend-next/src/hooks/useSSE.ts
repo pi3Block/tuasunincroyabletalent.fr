@@ -41,6 +41,7 @@ export function useSSE({
   onFallback,
 }: UseSSEOptions) {
   const eventSourceRef = useRef<EventSource | null>(null);
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectCountRef = useRef(0);
   const onEventRef = useRef(onEvent);
   const onFallbackRef = useRef(onFallback);
@@ -81,7 +82,8 @@ export function useSSE({
         console.warn(
           `[SSE] Connection error, retry ${reconnectCountRef.current}/${MAX_RECONNECTS} in ${delay}ms`,
         );
-        setTimeout(connect, delay);
+        if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = setTimeout(connect, delay);
       } else {
         console.warn("[SSE] Max reconnects reached, falling back to polling");
         onFallbackRef.current?.();
@@ -94,6 +96,7 @@ export function useSSE({
   useEffect(() => {
     connect();
     return () => {
+      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
       eventSourceRef.current?.close();
       eventSourceRef.current = null;
     };

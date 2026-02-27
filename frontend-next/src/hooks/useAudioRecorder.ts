@@ -124,6 +124,9 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}): UseAudi
       setIsPaused(false)
       startTimer()
     } catch (error) {
+      // Stop mic stream if it was acquired but MediaRecorder init failed
+      streamRef.current?.getTracks().forEach((track) => track.stop())
+      streamRef.current = null
       const err = error instanceof Error ? error : new Error('Failed to start recording')
       onError?.(err)
       throw err

@@ -2,7 +2,7 @@
 SQLAlchemy model for lyrics offset storage.
 Stores the timing offset between YouTube video and lyrics for each track/video pair.
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, String, Numeric, DateTime, UniqueConstraint, Index
 from sqlalchemy.orm import DeclarativeBase
 
@@ -24,8 +24,12 @@ class LyricsOffset(Base):
     spotify_track_id = Column(String(255), nullable=False)
     youtube_video_id = Column(String(32), nullable=False)
     offset_seconds = Column(Numeric(5, 2), nullable=False, default=0.0)
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
-    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
 
     __table_args__ = (
         UniqueConstraint('spotify_track_id', 'youtube_video_id', name='uq_track_video'),

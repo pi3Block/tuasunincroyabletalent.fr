@@ -50,12 +50,18 @@ class RedisClient:
         return None
 
     async def update_session(self, session_id: str, updates: dict[str, Any]) -> bool:
-        """Update existing session data."""
+        """Update existing session data, preserving the current TTL."""
+        client = await self.get_client()
+        key = f"session:{session_id}"
         current = await self.get_session(session_id)
         if current is None:
             return False
+        # Preserve remaining TTL (avoid resetting 3h → 1h on every update)
+        remaining_ttl = await client.ttl(key)
+        if remaining_ttl < 0:
+            remaining_ttl = 3600  # fallback 1h if no TTL set
         current.update(updates)
-        await self.set_session(session_id, current)
+        await client.setex(key, remaining_ttl, json.dumps(current))
         return True
 
     async def delete_session(self, session_id: str) -> None:

@@ -13,7 +13,7 @@ TTL Strategy:
 - Not found results: 7 days (retry after a week)
 """
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import select, delete, func
@@ -183,7 +183,7 @@ class LyricsCacheService:
         try:
             has_lyrics = bool(lyrics_text) or bool(synced_lines)
             ttl_days = self._get_ttl_days(sync_type, source, has_lyrics)
-            expires_at = datetime.utcnow() + timedelta(days=ttl_days)
+            expires_at = datetime.now(timezone.utc) + timedelta(days=ttl_days)
 
             async with get_db() as session:
                 stmt = insert(LyricsCache).values(
@@ -195,7 +195,7 @@ class LyricsCacheService:
                     source_url=source_url,
                     artist_name=artist_name,
                     track_name=track_name,
-                    fetched_at=datetime.utcnow(),
+                    fetched_at=datetime.now(timezone.utc),
                     expires_at=expires_at,
                 ).on_conflict_do_update(
                     index_elements=['spotify_track_id'],
@@ -207,7 +207,7 @@ class LyricsCacheService:
                         'source_url': source_url,
                         'artist_name': artist_name,
                         'track_name': track_name,
-                        'fetched_at': datetime.utcnow(),
+                        'fetched_at': datetime.now(timezone.utc),
                         'expires_at': expires_at,
                     }
                 )
@@ -240,7 +240,7 @@ class LyricsCacheService:
             async with get_db() as session:
                 result = await session.execute(
                     delete(LyricsCache).where(
-                        LyricsCache.expires_at < datetime.utcnow()
+                        LyricsCache.expires_at < datetime.now(timezone.utc)
                     )
                 )
                 deleted = result.rowcount
@@ -286,7 +286,7 @@ class LyricsCacheService:
                 # Expired count
                 expired_result = await session.execute(
                     select(func.count()).select_from(LyricsCache).where(
-                        LyricsCache.expires_at < datetime.utcnow()
+                        LyricsCache.expires_at < datetime.now(timezone.utc)
                     )
                 )
                 expired = expired_result.scalar() or 0
@@ -372,7 +372,7 @@ class LyricsCacheService:
             "source": source,
             "url": source_url,
             "status": "found" if has_lyrics else "not_found",
-            "cachedAt": datetime.utcnow().isoformat(),
+            "cachedAt": datetime.now(timezone.utc).isoformat(),
         }
 
         # Set in both tiers

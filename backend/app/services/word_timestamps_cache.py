@@ -13,7 +13,7 @@ TTL Strategy:
 - User-corrected: No expiry (permanent)
 """
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import select, delete, func, or_
@@ -152,7 +152,7 @@ class WordTimestampsCacheService:
                     .where(
                         or_(
                             WordTimestampsCache.expires_at.is_(None),
-                            WordTimestampsCache.expires_at > datetime.utcnow()
+                            WordTimestampsCache.expires_at > datetime.now(timezone.utc)
                         )
                     )
                 )
@@ -220,7 +220,7 @@ class WordTimestampsCacheService:
             ttl_days = self._get_ttl_days(source)
             expires_at = None
             if ttl_days is not None:
-                expires_at = datetime.utcnow() + timedelta(days=ttl_days)
+                expires_at = datetime.now(timezone.utc) + timedelta(days=ttl_days)
 
             # Calculate metadata
             word_count = len(words)
@@ -242,7 +242,7 @@ class WordTimestampsCacheService:
                     duration_ms=duration_ms,
                     artist_name=artist_name,
                     track_name=track_name,
-                    created_at=datetime.utcnow(),
+                    created_at=datetime.now(timezone.utc),
                     expires_at=expires_at,
                 ).on_conflict_do_update(
                     constraint='uq_word_timestamps_track_video',
@@ -257,7 +257,7 @@ class WordTimestampsCacheService:
                         'duration_ms': duration_ms,
                         'artist_name': artist_name,
                         'track_name': track_name,
-                        'created_at': datetime.utcnow(),
+                        'created_at': datetime.now(timezone.utc),
                         'expires_at': expires_at,
                     }
                 )
@@ -295,7 +295,7 @@ class WordTimestampsCacheService:
                 result = await session.execute(
                     delete(WordTimestampsCache).where(
                         WordTimestampsCache.expires_at.isnot(None),
-                        WordTimestampsCache.expires_at < datetime.utcnow()
+                        WordTimestampsCache.expires_at < datetime.now(timezone.utc)
                     )
                 )
                 deleted = result.rowcount
@@ -377,7 +377,7 @@ class WordTimestampsCacheService:
             "model_version": model_version,
             "confidence_avg": confidence_avg,
             "word_count": len(words),
-            "cached_at": datetime.utcnow().isoformat(),
+            "cached_at": datetime.now(timezone.utc).isoformat(),
         }
 
         # Set in both tiers
@@ -431,7 +431,7 @@ class WordTimestampsCacheService:
                 expired_result = await session.execute(
                     select(func.count()).select_from(WordTimestampsCache).where(
                         WordTimestampsCache.expires_at.isnot(None),
-                        WordTimestampsCache.expires_at < datetime.utcnow()
+                        WordTimestampsCache.expires_at < datetime.now(timezone.utc)
                     )
                 )
                 expired = expired_result.scalar() or 0
@@ -488,7 +488,7 @@ class WordTimestampsCacheService:
                     .where(
                         or_(
                             WordTimestampsCache.expires_at.is_(None),
-                            WordTimestampsCache.expires_at > datetime.utcnow()
+                            WordTimestampsCache.expires_at > datetime.now(timezone.utc)
                         )
                     )
                 )

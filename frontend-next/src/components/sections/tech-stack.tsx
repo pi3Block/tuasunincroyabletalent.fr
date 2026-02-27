@@ -8,17 +8,17 @@ const TECH_CATEGORIES = [
   {
     title: "Audio Intelligence",
     icon: Zap,
-    color: "from-purple-500 to-violet-600",
+    color: "from-green-500 to-emerald-600",
     items: [
       {
         name: "Demucs",
-        description: "Séparation de sources audio par Meta AI",
+        description: "Separation de sources audio par Meta AI",
         url: "https://github.com/facebookresearch/demucs",
         logo: "🎛️",
       },
       {
         name: "CREPE",
-        description: "Détection de pitch monophonique",
+        description: "Detection de pitch monophonique",
         url: "https://github.com/marl/crepe",
         logo: "🎵",
       },
@@ -43,13 +43,13 @@ const TECH_CATEGORIES = [
     items: [
       {
         name: "Ollama",
-        description: "LLM local et privé",
+        description: "LLM local et prive",
         url: "https://ollama.ai/",
         logo: "🦙",
       },
       {
         name: "Llama 3.2",
-        description: "Modèle de langage par Meta",
+        description: "Modele de langage par Meta",
         url: "https://llama.meta.com/",
         logo: "🧠",
       },
@@ -61,7 +61,7 @@ const TECH_CATEGORIES = [
       },
       {
         name: "CUDA",
-        description: "Accélération GPU NVIDIA",
+        description: "Acceleration GPU NVIDIA",
         url: "https://developer.nvidia.com/cuda-toolkit",
         logo: "⚡",
       },
@@ -70,7 +70,7 @@ const TECH_CATEGORIES = [
   {
     title: "Stack Web",
     icon: Code2,
-    color: "from-blue-500 to-cyan-600",
+    color: "from-teal-500 to-emerald-600",
     items: [
       {
         name: "React",
@@ -86,7 +86,7 @@ const TECH_CATEGORIES = [
       },
       {
         name: "Celery",
-        description: "Task queue distribuée",
+        description: "Task queue distribuee",
         url: "https://docs.celeryq.dev/",
         logo: "🥬",
       },
@@ -127,7 +127,7 @@ const TechItem = memo(function TechItem({
       href={item.url}
       target="_blank"
       rel="noopener noreferrer"
-      className="group flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 hover:border-white/20 transition-all"
+      className="group flex items-center gap-3 p-3 rounded-xl bg-secondary/50 border border-border hover:bg-secondary hover:border-border transition-all"
       variants={itemVariants}
       whileHover={{ scale: 1.02, x: 5 }}
       whileTap={{ scale: 0.98 }}
@@ -135,10 +135,10 @@ const TechItem = memo(function TechItem({
       <span className="text-2xl">{item.logo}</span>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <span className="text-white font-medium text-sm">{item.name}</span>
-          <ExternalLink className="w-3 h-3 text-gray-500 opacity-0 group-hover:opacity-100 transition-opacity" />
+          <span className="text-foreground font-medium text-sm">{item.name}</span>
+          <ExternalLink className="w-3 h-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
         </div>
-        <p className="text-gray-500 text-xs truncate">{item.description}</p>
+        <p className="text-muted-foreground text-xs truncate">{item.description}</p>
       </div>
     </motion.a>
   );
@@ -161,14 +161,14 @@ const CategoryCard = memo(function CategoryCard({
       viewport={{ once: true, margin: "-50px" }}
       transition={{ delay: index * 0.15, duration: 0.5 }}
     >
-      <div className="p-6 rounded-2xl bg-gradient-to-br from-white/5 to-transparent border border-white/10 backdrop-blur-sm h-full">
+      <div className="p-6 rounded-2xl bg-linear-to-br from-card/80 to-transparent border border-border backdrop-blur-sm h-full">
         <div className="flex items-center gap-3 mb-6">
           <div
-            className={`w-10 h-10 rounded-lg bg-gradient-to-br ${category.color} flex items-center justify-center shadow-lg`}
+            className={`w-10 h-10 rounded-lg bg-linear-to-br ${category.color} flex items-center justify-center shadow-lg`}
           >
             <Icon className="w-5 h-5 text-white" />
           </div>
-          <h3 className="text-lg font-semibold text-white">
+          <h3 className="text-lg font-semibold text-foreground">
             {category.title}
           </h3>
         </div>
@@ -231,10 +231,10 @@ export const TechStackSection = memo(function TechStackSection() {
   ];
 
   return (
-    <section className="relative py-20 px-4 overflow-hidden bg-gradient-to-b from-transparent via-purple-900/10 to-transparent">
+    <section className="relative py-20 px-4 overflow-hidden bg-linear-to-b from-transparent via-primary-900/10 to-transparent">
       <div className="absolute inset-0 pointer-events-none">
-        <div className="absolute top-1/3 left-0 w-96 h-96 bg-blue-600/10 rounded-full blur-3xl" />
-        <div className="absolute bottom-1/3 right-0 w-96 h-96 bg-purple-600/10 rounded-full blur-3xl" />
+        <div className="absolute top-1/3 left-0 w-96 h-96 bg-green-600/10 rounded-full blur-3xl" />
+        <div className="absolute bottom-1/3 right-0 w-96 h-96 bg-amber-500/10 rounded-full blur-3xl" />
 
         {bubbles.map((bubble, i) => (
           <FloatingBubble key={i} {...bubble} />
@@ -250,7 +250,7 @@ export const TechStackSection = memo(function TechStackSection() {
           transition={{ duration: 0.6 }}
         >
           <motion.span
-            className="inline-block px-4 py-1.5 rounded-full bg-blue-500/20 border border-blue-500/30 text-blue-400 text-sm font-medium mb-4"
+            className="inline-block px-4 py-1.5 rounded-full bg-primary/20 border border-primary/30 text-primary text-sm font-medium mb-4"
             initial={{ opacity: 0, scale: 0.8 }}
             whileInView={{ opacity: 1, scale: 1 }}
             viewport={{ once: true }}
@@ -259,16 +259,16 @@ export const TechStackSection = memo(function TechStackSection() {
             Technologies
           </motion.span>
 
-          <h2 className="text-3xl md:text-4xl lg:text-5xl font-bold text-white mb-4">
-            Propulsé par{" "}
-            <span className="bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
+          <h2 className="text-3xl md:text-4xl lg:text-5xl font-bold text-foreground mb-4">
+            Propulse par{" "}
+            <span className="bg-linear-to-r from-primary to-emerald-400 bg-clip-text text-transparent">
               l&apos;Open Source
             </span>
           </h2>
 
-          <p className="text-gray-400 text-lg max-w-2xl mx-auto">
+          <p className="text-muted-foreground text-lg max-w-2xl mx-auto">
             Des technologies de pointe, libres et open source, pour une analyse
-            vocale de qualité professionnelle.
+            vocale de qualite professionnelle.
           </p>
         </motion.div>
 
@@ -283,7 +283,7 @@ export const TechStackSection = memo(function TechStackSection() {
         </div>
 
         <motion.div
-          className="mt-16 p-6 rounded-2xl bg-gradient-to-r from-purple-500/10 via-blue-500/10 to-cyan-500/10 border border-white/10"
+          className="mt-16 p-6 rounded-2xl bg-linear-to-r from-primary/10 via-emerald-500/10 to-amber-500/10 border border-border"
           initial={{ opacity: 0, y: 20 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
@@ -292,9 +292,9 @@ export const TechStackSection = memo(function TechStackSection() {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-6 text-center">
             {[
               { value: "12+", label: "Projets Open Source" },
-              { value: "100%", label: "Privé & Local" },
+              { value: "100%", label: "Prive & Local" },
               { value: "<60s", label: "Temps d'analyse" },
-              { value: "GPU", label: "Accélération CUDA" },
+              { value: "GPU", label: "Acceleration CUDA" },
             ].map((stat, i) => (
               <motion.div
                 key={stat.label}
@@ -303,10 +303,10 @@ export const TechStackSection = memo(function TechStackSection() {
                 viewport={{ once: true }}
                 transition={{ delay: 0.4 + i * 0.1 }}
               >
-                <div className="text-2xl md:text-3xl font-bold text-white mb-1">
+                <div className="text-2xl md:text-3xl font-bold text-foreground mb-1">
                   {stat.value}
                 </div>
-                <div className="text-sm text-gray-400">{stat.label}</div>
+                <div className="text-sm text-muted-foreground">{stat.label}</div>
               </motion.div>
             ))}
           </div>

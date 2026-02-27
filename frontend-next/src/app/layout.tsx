@@ -12,7 +12,7 @@ const inter = Inter({
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#ef4444",
+  themeColor: "#22c55e",
 };
 
 export const metadata: Metadata = {
