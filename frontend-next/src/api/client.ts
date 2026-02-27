@@ -230,7 +230,15 @@ class ApiClient {
       throw new Error(error.detail || `HTTP ${response.status}`);
     }
 
-    return response.json();
+    const text = await response.text();
+    if (!text || !text.trim()) {
+      throw new Error(`Empty response from ${endpoint}`);
+    }
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      throw new Error(`Invalid JSON from ${endpoint}`);
+    }
   }
 
   async searchTracks(query: string, limit = 10): Promise<SearchResponse> {
@@ -304,7 +312,11 @@ class ApiClient {
       throw new Error(error.detail || `HTTP ${response.status}`);
     }
 
-    return response.json();
+    const text = await response.text();
+    if (!text || !text.trim()) {
+      throw new Error("Empty response from upload");
+    }
+    return JSON.parse(text);
   }
 
   async startAnalysis(sessionId: string): Promise<AnalysisResponse> {

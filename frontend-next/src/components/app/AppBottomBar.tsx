@@ -110,13 +110,16 @@ export const AppBottomBar = memo(function AppBottomBar({
   };
 
   return (
-    <div className="shrink-0 flex flex-col bg-card/90 backdrop-blur-md">
+    <div className={cn(
+      "flex flex-col bg-card/90 backdrop-blur-md",
+      mixerOpen ? "flex-1 min-h-0" : "shrink-0"
+    )}>
       {/* Panneau Mixer expandable — au-dessus du transport */}
       {sessionId && (
         <div
           className={cn(
             "overflow-hidden transition-all duration-300 ease-in-out",
-            mixerOpen ? "max-h-[280px] border-t border-border/50" : "max-h-0"
+            mixerOpen ? "flex-1 min-h-0 overflow-y-auto border-t border-border/50" : "max-h-0"
           )}
         >
           <div className="p-3">

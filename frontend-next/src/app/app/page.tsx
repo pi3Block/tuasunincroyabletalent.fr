@@ -311,12 +311,24 @@ export default function AppPage() {
   // Writing to audioStore.transport triggers useMultiTrack.syncPlayback which
   // moves/plays multi-track audio elements → double audio fighting with YouTube.
   // Instead, YouTube state is passed as override props to TransportBar.
+  const lastYtTimeRef = useRef(0);
   const handleYoutubeTimeUpdate = useCallback(
     (time: number) => {
-      setPlaybackTime(time);
+      // Detect YouTube manual seek: large jump between consecutive onTimeUpdate ticks
+      // (ticks fire every ~250ms, so normal delta is ~0.25s; a jump > 2s = manual seek)
+      const prev = lastYtTimeRef.current;
+      lastYtTimeRef.current = time;
+      if (Math.abs(time - prev) > 2 && studioControls && useMultiTrackAudio) {
+        studioControls.seek(time);
+      }
+      // When multi-track is active, 6g bridge handles playbackTime from audioStore.
+      // Only update playbackTime from YouTube when it's the sole audio source.
+      if (!useMultiTrackAudio) {
+        setPlaybackTime(time);
+      }
       // NOT calling setCurrentTime — that would trigger useMultiTrack.syncPlayback
     },
-    [setPlaybackTime],
+    [setPlaybackTime, studioControls, useMultiTrackAudio],
   );
 
   const handleYoutubeStateChange = useCallback(
@@ -433,23 +445,17 @@ export default function AppPage() {
   // ── 6f. Forward YouTube user interactions to multi-track ──
   // (already handled via handleYoutubeStateChange — enhanced below)
 
-  // ── 6g. Bridge multi-track time → sessionStore (for lyrics sync) + YouTube seek detection ──
+  // ── 6g. Bridge multi-track time → sessionStore (for lyrics sync) ──
+  // YouTube seek detection is handled in handleYoutubeTimeUpdate (jump > 2s).
+  // Drift correction (YouTube follows multi-track) is handled in 6h.
   useEffect(() => {
     if (!useMultiTrackAudio) return;
     const id = setInterval(() => {
       const mtTime = useAudioStore.getState().transport.currentTime;
       setPlaybackTime(mtTime);
-
-      // Detect YouTube manual seek (delta > 1.5s → sync multi-track)
-      if (youtubeControls && studioControls) {
-        const ytTime = youtubeControls.getCurrentTime();
-        if (Math.abs(ytTime - mtTime) > 1.5) {
-          studioControls.seek(ytTime);
-        }
-      }
     }, 250);
     return () => clearInterval(id);
-  }, [useMultiTrackAudio, setPlaybackTime, youtubeControls, studioControls]);
+  }, [useMultiTrackAudio, setPlaybackTime]);
 
   // ── 6h. Drift correction: sync YouTube video to multi-track every 5s ──
   useEffect(() => {
@@ -1059,10 +1065,7 @@ export default function AppPage() {
           )}
 
           {/* Center zone: left content + right lyrics */}
-          <div className={cn(
-            "flex min-h-0 overflow-hidden transition-all duration-300 ease-in-out",
-            mixerOpen ? "flex-none h-[200px]" : "flex-1"
-          )}>
+          <div className="flex flex-1 min-h-0 overflow-hidden">
             {/* LEFT — main content zone */}
             <div className="flex-1 min-w-0 overflow-y-auto p-4 flex flex-col gap-3">
               {/* Video (preparing / downloading / ready / recording) */}

@@ -115,11 +115,16 @@ export function useMultiTrack({
       const baseUrl = ''  // Next.js rewrites handle /api/* → api.kiaraoke.fr
       const response = await fetch(`${baseUrl}/api/audio/${sessionId}/tracks`)
       if (!response.ok) {
-        throw new Error('Failed to fetch tracks')
+        throw new Error(`Failed to fetch tracks: ${response.status}`)
       }
       const text = await response.text()
-      if (!text) return null
-      return JSON.parse(text) as AudioTracksResponse
+      if (!text || !text.trim()) return null
+      try {
+        return JSON.parse(text) as AudioTracksResponse
+      } catch {
+        console.warn('Invalid JSON from /api/audio/tracks:', text.slice(0, 100))
+        return null
+      }
     } catch (err) {
       console.error('Failed to fetch available tracks:', err)
       return null

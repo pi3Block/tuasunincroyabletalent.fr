@@ -29,6 +29,7 @@ interface UseYouTubePlayerReturn {
   unMute: () => void
   setVolume: (volume: number) => void
   getVolume: () => number
+  getCurrentTime: () => number
 }
 
 let apiLoaded = false
@@ -221,6 +222,10 @@ export function useYouTubePlayer({
     return playerRef.current?.getVolume() ?? 100
   }, [])
 
+  const getCurrentTime = useCallback(() => {
+    return playerRef.current?.getCurrentTime() ?? 0
+  }, [])
+
   return {
     containerRef,
     isReady,
@@ -234,5 +239,6 @@ export function useYouTubePlayer({
     unMute,
     setVolume,
     getVolume,
+    getCurrentTime,
   }
 }

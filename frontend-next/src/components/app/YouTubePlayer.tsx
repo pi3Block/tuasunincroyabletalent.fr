@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import type { YouTubeMatch } from '@/api/client'
 import { useYouTubePlayer } from '@/hooks/useYouTubePlayer'
 
@@ -33,7 +33,7 @@ export function YouTubePlayer({
   onDurationChange,
   onControlsReady,
 }: YouTubePlayerProps) {
-  const { containerRef, isReady, play, pause, seekTo, mute, unMute, setVolume, getVolume, currentTime } = useYouTubePlayer({
+  const { containerRef, isReady, play, pause, seekTo, mute, unMute, setVolume, getVolume, getCurrentTime } = useYouTubePlayer({
     videoId: video.id,
     autoplay,
     onReady,
@@ -46,13 +46,11 @@ export function YouTubePlayer({
   const onControlsReadyRef = useRef(onControlsReady)
   onControlsReadyRef.current = onControlsReady
 
-  const getCurrentTimeRef = useCallback(() => currentTime, [currentTime])
-
   useEffect(() => {
     if (isReady) {
-      onControlsReadyRef.current?.({ play, pause, seekTo, mute, unMute, setVolume, getVolume, getCurrentTime: getCurrentTimeRef })
+      onControlsReadyRef.current?.({ play, pause, seekTo, mute, unMute, setVolume, getVolume, getCurrentTime })
     }
-  }, [isReady, play, pause, seekTo, mute, unMute, setVolume, getVolume, getCurrentTimeRef])
+  }, [isReady, play, pause, seekTo, mute, unMute, setVolume, getVolume, getCurrentTime])
 
   return (
     <div className="w-full rounded-xl overflow-hidden bg-black shadow-lg">

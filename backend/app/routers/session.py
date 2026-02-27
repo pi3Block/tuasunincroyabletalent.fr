@@ -333,9 +333,10 @@ async def upload_recording(session_id: str, audio: UploadFile = File(...)):
             detail="Reference audio not ready yet"
         )
 
-    # Validate file type
+    # Validate file type (strip codec params like "audio/webm;codecs=opus" → "audio/webm")
     allowed_types = {"audio/webm", "audio/wav", "audio/wave", "audio/x-wav", "audio/ogg", "audio/mp4"}
-    if audio.content_type and audio.content_type not in allowed_types:
+    base_content_type = (audio.content_type or "").split(";")[0].strip().lower()
+    if base_content_type and base_content_type not in allowed_types:
         raise HTTPException(status_code=415, detail=f"Unsupported audio format: {audio.content_type}")
 
     content = await audio.read()
