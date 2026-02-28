@@ -53,29 +53,24 @@ except ValueError:
 
 def _notify_tracks_ready(session_id: str):
     """
-    Set tracks_ready_at timestamp in the session Redis hash.
-    The SSE router polls this field and emits a 'tracks_ready' event to the frontend.
+    Set tracks_ready_at timestamp as a dedicated Redis key (atomic, no race condition).
+    The SSE router polls this key and emits a 'tracks_ready' event to the frontend.
     """
     try:
         import redis
         import time
         client = redis.from_url(REDIS_URL, socket_timeout=2)
-        session_key = f"session:{session_id}"
-        # Update the session hash with a timestamp
-        session_data = client.get(session_key)
-        if session_data:
-            data = json.loads(session_data)
-            data["tracks_ready_at"] = str(time.time())
-            client.set(session_key, json.dumps(data))
-            logger.info("Notified tracks_ready for session %s", session_id)
+        # Atomic SET on a dedicated key — avoids read-modify-write race on session JSON
+        client.setex(f"session:{session_id}:tracks_ready_at", 3600, str(time.time()))
+        logger.info("Notified tracks_ready for session %s", session_id)
     except Exception as e:
         logger.warning("Failed to notify tracks_ready: %s", e)
 
 
 def _notify_user_tracks_ready(session_id: str):
     """
-    Set user_tracks_ready_at timestamp in the session Redis hash.
-    The SSE router polls this field and emits a 'user_tracks_ready' event to the frontend,
+    Set user_tracks_ready_at timestamp as a dedicated Redis key (atomic, no race condition).
+    The SSE router polls this key and emits a 'user_tracks_ready' event to the frontend,
     allowing the user to listen to their separated vocals before the jury finishes.
     Called from Thread A (upload thread) after user stems are uploaded to storage.
     """
@@ -83,13 +78,9 @@ def _notify_user_tracks_ready(session_id: str):
         import redis
         import time
         client = redis.from_url(REDIS_URL, socket_timeout=2)
-        session_key = f"session:{session_id}"
-        session_data = client.get(session_key)
-        if session_data:
-            data = json.loads(session_data)
-            data["user_tracks_ready_at"] = str(time.time())
-            client.set(session_key, json.dumps(data))
-            logger.info("Notified user_tracks_ready for session %s", session_id)
+        # Atomic SET on a dedicated key — avoids read-modify-write race on session JSON
+        client.setex(f"session:{session_id}:user_tracks_ready_at", 3600, str(time.time()))
+        logger.info("Notified user_tracks_ready for session %s", session_id)
     except Exception as e:
         logger.warning("Failed to notify user_tracks_ready: %s", e)
 

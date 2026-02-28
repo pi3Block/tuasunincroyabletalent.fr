@@ -55,6 +55,9 @@ async def _session_event_generator(session_id: str):
     last_tracks_ready = None
     last_user_tracks_ready = None
 
+    # Get raw Redis client for dedicated atomic keys (tracks_ready_at, user_tracks_ready_at)
+    raw_client = await redis_client.get_client()
+
     yield _format_sse("connected", {"session_id": session_id})
 
     while elapsed < MAX_DURATION:
@@ -79,7 +82,8 @@ async def _session_event_generator(session_id: str):
                 })
 
             # --- Tracks ready (ref stems from prepare_reference) ---
-            tracks_ready_at = session.get("tracks_ready_at")
+            # Read from dedicated atomic key (avoids race condition with session JSON)
+            tracks_ready_at = await raw_client.get(f"session:{session_id}:tracks_ready_at")
             if tracks_ready_at and tracks_ready_at != last_tracks_ready:
                 last_tracks_ready = tracks_ready_at
                 yield _format_sse("tracks_ready", {
@@ -89,7 +93,8 @@ async def _session_event_generator(session_id: str):
                 })
 
             # --- User tracks ready (user stems uploaded after Demucs, avant résultats jury) ---
-            user_tracks_ready_at = session.get("user_tracks_ready_at")
+            # Read from dedicated atomic key (avoids race condition with session JSON)
+            user_tracks_ready_at = await raw_client.get(f"session:{session_id}:user_tracks_ready_at")
             if user_tracks_ready_at and user_tracks_ready_at != last_user_tracks_ready:
                 last_user_tracks_ready = user_tracks_ready_at
                 yield _format_sse("user_tracks_ready", {
