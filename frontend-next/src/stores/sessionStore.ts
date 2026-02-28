@@ -33,6 +33,8 @@ interface SessionState {
   // Lyrics offset
   lyricsOffset: number
   lyricsOffsetStatus: 'idle' | 'loading' | 'loaded' | 'saving' | 'error'
+  // User stems ready during analysis (before jury verdict)
+  userTracksReady: boolean
 
   // Actions
   startSession: () => void
@@ -55,6 +57,7 @@ interface SessionState {
   setIsVideoPlaying: (isPlaying: boolean) => void
   setLyricsOffset: (offset: number) => void
   setLyricsOffsetStatus: (status: 'idle' | 'loading' | 'loaded' | 'saving' | 'error') => void
+  setUserTracksReady: (ready: boolean) => void
   reset: () => void
 }
 
@@ -77,6 +80,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   isVideoPlaying: false,
   lyricsOffset: 0,
   lyricsOffsetStatus: 'idle',
+  userTracksReady: false,
 
   // Actions
   startSession: () => {
@@ -159,6 +163,10 @@ export const useSessionStore = create<SessionState>((set) => ({
     set({ lyricsOffsetStatus })
   },
 
+  setUserTracksReady: (userTracksReady: boolean) => {
+    set({ userTracksReady })
+  },
+
   reset: () => {
     set({
       status: 'idle',
@@ -178,6 +186,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       isVideoPlaying: false,
       lyricsOffset: 0,
       lyricsOffsetStatus: 'idle',
+      userTracksReady: false,
     })
   },
 }))
@@ -225,3 +234,6 @@ export const useAnalysisProgress = () => useSessionStore((s) => s.analysisProgre
 
 /** Results - changes once after analysis */
 export const useResults = () => useSessionStore((s) => s.results)
+
+/** User stems ready during analysis (before jury verdict) */
+export const useUserTracksReady = () => useSessionStore((s) => s.userTracksReady)

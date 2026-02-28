@@ -53,6 +53,7 @@ async def _session_event_generator(session_id: str):
     last_analysis_status = None
     last_progress_step = None
     last_tracks_ready = None
+    last_user_tracks_ready = None
 
     yield _format_sse("connected", {"session_id": session_id})
 
@@ -84,6 +85,16 @@ async def _session_event_generator(session_id: str):
                 yield _format_sse("tracks_ready", {
                     "session_id": session_id,
                     "source": "ref",
+                    "tracks": ["vocals", "instrumentals"],
+                })
+
+            # --- User tracks ready (user stems uploaded after Demucs, avant résultats jury) ---
+            user_tracks_ready_at = session.get("user_tracks_ready_at")
+            if user_tracks_ready_at and user_tracks_ready_at != last_user_tracks_ready:
+                last_user_tracks_ready = user_tracks_ready_at
+                yield _format_sse("user_tracks_ready", {
+                    "session_id": session_id,
+                    "source": "user",
                     "tracks": ["vocals", "instrumentals"],
                 })
 
@@ -170,6 +181,7 @@ async def stream_session_events(session_id: str):
     - connected: Initial connection confirmation
     - session_status: Reference status changes
     - tracks_ready: Reference stems available for multi-track playback
+    - user_tracks_ready: User stems ready (~22s after analysis start, before jury verdict)
     - analysis_progress: Pipeline step updates
     - analysis_complete: Final results
     - analysis_error: Pipeline failure

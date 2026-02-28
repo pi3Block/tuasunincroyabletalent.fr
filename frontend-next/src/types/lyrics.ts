@@ -287,9 +287,7 @@ export const DEFAULT_ANIMATION_CONFIG: LyricsAnimationConfig = {
 export const OFFSET_CONFIG = {
   MIN: -300,
   MAX: 300,
-  FINE_STEP: 0.5,
-  QUICK_STEPS: [5, 30, 60],
-  DEBOUNCE_SAVE_MS: 1000,
+  FINE_STEP: 0.1,
 } as const
 
 /**

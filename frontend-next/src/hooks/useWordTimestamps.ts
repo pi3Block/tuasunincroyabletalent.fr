@@ -85,6 +85,7 @@ export function useWordTimestamps({
 
   const taskIdRef = useRef<string | null>(null)
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Refs to always have the latest functions (avoids stale closure issues in intervals)
   const fetchWordTimestampsRef = useRef<() => Promise<void>>(() => Promise.resolve())
   const triggerGenerationRef = useRef<() => Promise<void>>(() => Promise.resolve())
@@ -92,9 +93,8 @@ export function useWordTimestamps({
   // Cleanup polling on unmount
   useEffect(() => {
     return () => {
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current)
-      }
+      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current)
+      if (pollTimeoutRef.current) clearTimeout(pollTimeoutRef.current)
     }
   }, [])
 
@@ -136,6 +136,59 @@ export function useWordTimestamps({
   // Keep ref updated with latest fetchWordTimestamps
   fetchWordTimestampsRef.current = fetchWordTimestamps
 
+  // Shared polling logic: starts polling a task and stops when done (success or failure).
+  // Max timeout: 5 minutes — guards against Celery task hanging indefinitely.
+  const startPolling = useCallback((taskId: string, errorLabel: string) => {
+    // Clear any existing polling before starting a new one
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current)
+      pollIntervalRef.current = null
+    }
+    if (pollTimeoutRef.current) {
+      clearTimeout(pollTimeoutRef.current)
+      pollTimeoutRef.current = null
+    }
+
+    const stopPolling = () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current)
+        pollIntervalRef.current = null
+      }
+      if (pollTimeoutRef.current) {
+        clearTimeout(pollTimeoutRef.current)
+        pollTimeoutRef.current = null
+      }
+    }
+
+    pollIntervalRef.current = setInterval(async () => {
+      try {
+        const taskStatus = await api.getWordTimestampsTaskStatus(taskId)
+
+        if (taskStatus.ready) {
+          stopPolling()
+
+          if (taskStatus.successful) {
+            await fetchWordTimestampsRef.current()
+          } else {
+            setError(taskStatus.error || `${errorLabel} failed`)
+            setStatus('error')
+            setIsGenerating(false)
+          }
+        }
+      } catch (pollError) {
+        console.error('[useWordTimestamps] Poll error:', pollError)
+      }
+    }, pollInterval)
+
+    // Safety timeout: abort polling after 5 minutes
+    pollTimeoutRef.current = setTimeout(() => {
+      stopPolling()
+      setError(`${errorLabel} timed out after 5 minutes`)
+      setStatus('error')
+      setIsGenerating(false)
+    }, 5 * 60 * 1000)
+  }, [pollInterval])
+
   // Trigger generation (defined after fetchWordTimestamps so ref is updated below)
   const triggerGeneration = useCallback(async () => {
     if (!spotifyTrackId || !youtubeVideoId) {
@@ -157,45 +210,13 @@ export function useWordTimestamps({
       })
 
       if (response.status === 'cached') {
-        // Already cached, fetch it using ref to get latest function
         await fetchWordTimestampsRef.current()
         return
       }
 
       if (response.status === 'queued' && response.task_id) {
         taskIdRef.current = response.task_id
-
-        // Clear any existing polling before starting a new one
-        if (pollIntervalRef.current) {
-          clearInterval(pollIntervalRef.current)
-          pollIntervalRef.current = null
-        }
-
-        // Start polling for completion
-        pollIntervalRef.current = setInterval(async () => {
-          try {
-            const taskStatus = await api.getWordTimestampsTaskStatus(response.task_id!)
-
-            if (taskStatus.ready) {
-              // Stop polling
-              if (pollIntervalRef.current) {
-                clearInterval(pollIntervalRef.current)
-                pollIntervalRef.current = null
-              }
-
-              if (taskStatus.successful) {
-                // Fetch the new data using ref to get latest function
-                await fetchWordTimestampsRef.current()
-              } else {
-                setError(taskStatus.error || 'Generation failed')
-                setStatus('error')
-                setIsGenerating(false)
-              }
-            }
-          } catch (pollError) {
-            console.error('[useWordTimestamps] Poll error:', pollError)
-          }
-        }, pollInterval)
+        startPolling(response.task_id, 'Generation')
       } else {
         setError(response.message || 'Failed to start generation')
         setStatus('error')
@@ -207,7 +228,7 @@ export function useWordTimestamps({
       setStatus('error')
       setIsGenerating(false)
     }
-  }, [spotifyTrackId, youtubeVideoId, artistName, trackName, language, pollInterval])
+  }, [spotifyTrackId, youtubeVideoId, artistName, trackName, language, startPolling])
 
   // Keep ref updated with latest triggerGeneration
   triggerGenerationRef.current = triggerGeneration
@@ -240,11 +261,9 @@ export function useWordTimestamps({
     setError(null)
 
     try {
-      // First invalidate the cache
       await api.invalidateWordTimestamps(spotifyTrackId, youtubeVideoId)
       console.log('[useWordTimestamps] Cache invalidated, regenerating...')
 
-      // Then trigger generation with force_regenerate flag
       const response = await api.generateWordTimestamps({
         spotify_track_id: spotifyTrackId,
         youtube_video_id: youtubeVideoId,
@@ -256,39 +275,7 @@ export function useWordTimestamps({
 
       if (response.status === 'queued' && response.task_id) {
         taskIdRef.current = response.task_id
-
-        // Clear any existing polling before starting a new one
-        if (pollIntervalRef.current) {
-          clearInterval(pollIntervalRef.current)
-          pollIntervalRef.current = null
-        }
-
-        // Start polling for completion
-        pollIntervalRef.current = setInterval(async () => {
-          try {
-            const taskStatus = await api.getWordTimestampsTaskStatus(response.task_id!)
-
-            if (taskStatus.ready) {
-              // Stop polling
-              if (pollIntervalRef.current) {
-                clearInterval(pollIntervalRef.current)
-                pollIntervalRef.current = null
-              }
-
-              if (taskStatus.successful) {
-                // Fetch the new data using ref to get latest function
-                console.log('[useWordTimestamps] Task successful, fetching new data...')
-                await fetchWordTimestampsRef.current()
-              } else {
-                setError(taskStatus.error || 'Regeneration failed')
-                setStatus('error')
-                setIsGenerating(false)
-              }
-            }
-          } catch (pollError) {
-            console.error('[useWordTimestamps] Poll error:', pollError)
-          }
-        }, pollInterval)
+        startPolling(response.task_id, 'Regeneration')
       } else {
         setError(response.message || 'Failed to start regeneration')
         setStatus('error')
@@ -300,7 +287,7 @@ export function useWordTimestamps({
       setStatus('error')
       setIsGenerating(false)
     }
-  }, [spotifyTrackId, youtubeVideoId, artistName, trackName, language, pollInterval])
+  }, [spotifyTrackId, youtubeVideoId, artistName, trackName, language, startPolling])
 
   // Initial fetch when IDs change
   // Also cleans up any active polling from the previous track to prevent
@@ -310,6 +297,10 @@ export function useWordTimestamps({
     if (pollIntervalRef.current) {
       clearInterval(pollIntervalRef.current)
       pollIntervalRef.current = null
+    }
+    if (pollTimeoutRef.current) {
+      clearTimeout(pollTimeoutRef.current)
+      pollTimeoutRef.current = null
     }
     taskIdRef.current = null
     setIsGenerating(false)

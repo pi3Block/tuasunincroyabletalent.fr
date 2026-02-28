@@ -126,6 +126,8 @@ services:
       # Sentry error tracking (optional)
       - SENTRY_DSN=${SENTRY_DSN:-}
       - SENTRY_ENVIRONMENT=${SENTRY_ENVIRONMENT:-production}
+      # Disable TorchCodec backend (ignores backend= param, may conflict with CUDA init)
+      - TORCHAUDIO_USE_TORCHCODEC=0
     extra_hosts:
       - "host.docker.internal:host-gateway"
     deploy:

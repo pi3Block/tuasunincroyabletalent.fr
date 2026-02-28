@@ -61,7 +61,7 @@ interface UseLyricsSyncReturn extends LyricsSyncState {
  *
  * @param lines - Array of lyric lines (must be sorted by startTime)
  * @param time - Time in seconds to find
- * @returns Index of the line containing the time, or -1 if before first line
+ * @returns Index of the line containing the time, or -1 if before first line or in instrumental gap (>2s)
  */
 function binarySearchLineIndex(lines: LyricLine[], time: number): number {
   if (lines.length === 0) return -1
@@ -90,15 +90,28 @@ function binarySearchLineIndex(lines: LyricLine[], time: number): number {
     }
   }
 
-  // Fallback: return closest line
-  return Math.min(low, lines.length - 1)
+  // Fallback: time is between two lines.
+  // If the gap to the next line is > 2s, treat as instrumental — return -1.
+  // Otherwise return the closest preceding line.
+  const prevIndex = Math.min(low - 1, lines.length - 1)
+  if (prevIndex >= 0 && prevIndex < lines.length - 1) {
+    const prevLine = lines[prevIndex]
+    const nextLine = lines[prevIndex + 1]
+    const prevEnd = prevLine.endTime ?? prevLine.startTime + 4
+    const gap = nextLine.startTime - prevEnd
+    if (gap > 2) return -1
+  }
+
+  return Math.max(0, prevIndex)
 }
 
 /**
  * Linear search for small arrays (faster due to cache locality).
+ * Returns -1 for instrumental gaps (>2s between lines).
  */
 function linearSearchLineIndex(lines: LyricLine[], time: number): number {
   if (lines.length === 0) return -1
+  if (time < lines[0].startTime) return -1
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
@@ -107,6 +120,12 @@ function linearSearchLineIndex(lines: LyricLine[], time: number): number {
 
     if (time >= lineStart && time < lineEnd) {
       return i
+    }
+
+    // Time is past this line — check if we're in a gap before the next one
+    if (i < lines.length - 1 && time >= lineEnd && time < lines[i + 1].startTime) {
+      const gap = lines[i + 1].startTime - lineEnd
+      return gap > 2 ? -1 : i
     }
   }
 

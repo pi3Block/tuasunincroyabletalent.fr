@@ -18,6 +18,8 @@ interface UseSSEOptions {
 const EVENT_TYPES = [
   "connected",
   "session_status",
+  "tracks_ready",
+  "user_tracks_ready",
   "analysis_progress",
   "analysis_complete",
   "analysis_error",

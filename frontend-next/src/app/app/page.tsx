@@ -46,15 +46,19 @@ function getProgressLabel(step: string): string {
     loading_model: "Préparation du studio d'analyse...",
     separating_user: "Isolation de ta voix en cours...",
     separating_user_done: "Ta voix a été isolée !",
+    analyzing_parallel: "Analyse approfondie en cours...",
     separating_reference: "Préparation de la version originale...",
     separating_reference_done: "Référence prête !",
     separating_reference_cached: "Référence déjà prête !",
+    user_tracks_ready: "Ta voix est prête à écouter !",
+    sync_and_pitch_ref: "Synchronisation et analyse des tonalités...",
     computing_sync: "Synchronisation automatique...",
     extracting_pitch_user: "Analyse de ta justesse...",
     extracting_pitch_ref: "Analyse de la référence...",
     extracting_pitch_done: "Justesse analysée !",
     transcribing: "Transcription de tes paroles...",
     transcribing_done: "Paroles transcrites !",
+    analysis_done: "Analyse terminée !",
     calculating_scores: "Calcul de tes scores...",
     jury_deliberation: "Le jury se réunit en coulisses...",
     jury_voting: "Les jurés votent...",
@@ -179,6 +183,8 @@ export default function AppPage() {
     lyricsOffsetStatus,
     setLyricsOffset,
     setLyricsOffsetStatus,
+    userTracksReady,
+    setUserTracksReady,
     reset,
   } = useSessionStore();
 
@@ -529,6 +535,15 @@ export default function AppPage() {
           }
           break;
 
+        case "user_tracks_ready":
+          // User stems (vocals + instrumentals) are uploaded and accessible.
+          // Auto-open the mixer so the user can listen immediately.
+          if (event.data.source === "user") {
+            setUserTracksReady(true);
+            setMixerOpen(true);
+          }
+          break;
+
         case "analysis_progress":
           setAnalysisProgress({
             step: event.data.step as string,
@@ -553,7 +568,7 @@ export default function AppPage() {
           break;
       }
     },
-    [setReferenceStatus, setStatus, setError, setAnalysisProgress, setResults],
+    [setReferenceStatus, setStatus, setError, setAnalysisProgress, setResults, setUserTracksReady],
   );
 
   // SSE connection — active during preparing/downloading/analyzing
@@ -1134,20 +1149,36 @@ export default function AppPage() {
 
                     {status === "analyzing" && (
                       <div className="flex-1 flex flex-col items-center justify-center gap-3 py-4">
-                        <div className="relative">
-                          <div className="w-14 h-14 border-3 border-primary/30 border-t-primary rounded-full animate-spin" />
-                          <div className="absolute inset-0 flex items-center justify-center">
-                            <span className="text-xl">👨‍⚖️</span>
+                        {userTracksReady ? (
+                          /* Voix prête — invitation à ouvrir le mixer */
+                          <div className="text-center space-y-2">
+                            <div className="text-3xl">🎤</div>
+                            <p className="font-bold text-green-400 text-sm">
+                              Ta voix est isolée !
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              Écoute dans le mixer pendant que le jury délibère...
+                            </p>
                           </div>
-                        </div>
-                        <div className="text-center">
-                          <p className="font-bold text-primary text-sm">
-                            Le jury délibère...
-                          </p>
-                          <p className="text-xs text-muted-foreground mt-1">
-                            Analyse en cours
-                          </p>
-                        </div>
+                        ) : (
+                          /* Toujours en cours de séparation */
+                          <div className="relative">
+                            <div className="w-14 h-14 border-3 border-primary/30 border-t-primary rounded-full animate-spin" />
+                            <div className="absolute inset-0 flex items-center justify-center">
+                              <span className="text-xl">👨‍⚖️</span>
+                            </div>
+                          </div>
+                        )}
+                        {!userTracksReady && (
+                          <div className="text-center">
+                            <p className="font-bold text-primary text-sm">
+                              Le jury délibère...
+                            </p>
+                            <p className="text-xs text-muted-foreground mt-1">
+                              Analyse en cours
+                            </p>
+                          </div>
+                        )}
                         {analysisProgress && (
                           <div className="w-full space-y-1">
                             <div className="h-2 bg-muted rounded-full overflow-hidden">
@@ -1548,20 +1579,38 @@ export default function AppPage() {
               )}
               <div className="bg-primary/5 border border-primary/20 rounded-lg p-4 text-center space-y-3">
                 <div className="flex items-center justify-center gap-2">
-                  <div className="relative">
-                    <div className="w-10 h-10 border-3 border-primary/30 border-t-primary rounded-full animate-spin" />
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <span className="text-sm">👨‍⚖️</span>
-                    </div>
-                  </div>
-                  <div className="text-left">
-                    <p className="font-bold text-primary text-sm">
-                      Le jury délibère...
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      Analyse en cours
-                    </p>
-                  </div>
+                  {userTracksReady ? (
+                    /* Voix prête — invitation à ouvrir le mixer */
+                    <>
+                      <span className="text-2xl">🎤</span>
+                      <div className="text-left">
+                        <p className="font-bold text-green-400 text-sm">
+                          Ta voix est isolée !
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Ouvre le mixer pour écouter
+                        </p>
+                      </div>
+                    </>
+                  ) : (
+                    /* Toujours en séparation */
+                    <>
+                      <div className="relative">
+                        <div className="w-10 h-10 border-3 border-primary/30 border-t-primary rounded-full animate-spin" />
+                        <div className="absolute inset-0 flex items-center justify-center">
+                          <span className="text-sm">👨‍⚖️</span>
+                        </div>
+                      </div>
+                      <div className="text-left">
+                        <p className="font-bold text-primary text-sm">
+                          Le jury délibère...
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Analyse en cours
+                        </p>
+                      </div>
+                    </>
+                  )}
                 </div>
 
                 {analysisProgress && (

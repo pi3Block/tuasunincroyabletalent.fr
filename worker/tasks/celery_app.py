@@ -6,9 +6,10 @@ Improvements (2026-02-11):
 - Langfuse flush + httpx client cleanup on worker shutdown
 """
 import os
+import signal
 import logging
 from celery import Celery
-from celery.signals import worker_process_init, worker_shutdown
+from celery.signals import worker_process_init, worker_shutdown, task_failure
 
 # Structured logging config
 logging.basicConfig(
@@ -59,6 +60,23 @@ def _log_gpu_on_worker_init(**kwargs):
         )
     except Exception as e:
         logger.error("GPU check failed: %s", e)
+
+
+@task_failure.connect
+def _handle_cuda_failure(task_id, exception, sender, **kwargs):
+    """Force worker restart when CUDA context is unrecoverable (cudaErrorDevicesUnavailable).
+
+    After this error, any subsequent CUDA call in the same process will also fail.
+    Sending SIGTERM triggers Celery's warm shutdown so the process supervisor restarts it.
+    """
+    exc_str = str(exception)
+    if "busy or unavailable" in exc_str or "cudaErrorDevicesUnavailable" in exc_str:
+        logger.critical(
+            "Unrecoverable CUDA error in task %s — forcing worker restart: %s",
+            task_id,
+            exc_str,
+        )
+        os.kill(os.getpid(), signal.SIGTERM)
 
 
 @worker_shutdown.connect

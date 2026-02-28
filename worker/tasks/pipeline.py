@@ -64,6 +64,28 @@ def _notify_tracks_ready(session_id: str):
         logger.warning("Failed to notify tracks_ready: %s", e)
 
 
+def _notify_user_tracks_ready(session_id: str):
+    """
+    Set user_tracks_ready_at timestamp in the session Redis hash.
+    The SSE router polls this field and emits a 'user_tracks_ready' event to the frontend,
+    allowing the user to listen to their separated vocals before the jury finishes.
+    Called from Thread A (upload thread) after user stems are uploaded to storage.
+    """
+    try:
+        import redis
+        import time
+        client = redis.from_url(REDIS_URL, socket_timeout=2)
+        session_key = f"session:{session_id}"
+        session_data = client.get(session_key)
+        if session_data:
+            data = json.loads(session_data)
+            data["user_tracks_ready_at"] = str(time.time())
+            client.set(session_key, json.dumps(data))
+            logger.info("Notified user_tracks_ready for session %s", session_id)
+    except Exception as e:
+        logger.warning("Failed to notify user_tracks_ready: %s", e)
+
+
 def _is_storage_url(path: str) -> bool:
     return path.startswith("http://") or path.startswith("https://")
 
@@ -254,7 +276,7 @@ def analyze_performance(
         ) as pipeline_span:
 
             # ========================================================
-            # STEP 1: Download user audio from storage (if URL)
+            # PHASE 1 — Download + Demucs user (séquentiel, cuda:0)
             # ========================================================
             update_progress(self, "loading_model", 5, "Chargement du modele Demucs...")
 
@@ -267,14 +289,10 @@ def analyze_performance(
                 session_temp / f"user_recording{ext_guess}",
             )
 
-            # ========================================================
-            # STEP 2: Separate user audio (Demucs)
-            # AUDIO_OUTPUT_DIR=/tmp/kiaraoke -> outputs to /tmp/kiaraoke/{session_id}_user/
-            # ========================================================
             update_progress(self, "separating_user", 10, "Isolation de ta voix...")
             user_separation = do_separate_audio(local_user_path, f"{session_id}_user")
 
-            # Free GPU cache after Demucs
+            # Free GPU cache after Demucs user
             try:
                 import torch
                 if torch.cuda.is_available():
@@ -282,146 +300,159 @@ def analyze_performance(
             except Exception:
                 pass
 
-            # Upload user vocals/instrumentals to storage — parallel (StudioMode access)
-            # Non-fatal: pipeline continues even if storage is unavailable (tracks won't be in StudioMode)
             user_vocals_local = Path(user_separation["vocals_path"])
             user_instru_local = Path(user_separation["instrumentals_path"])
-            with ThreadPoolExecutor(max_workers=2) as pool:
-                pool.submit(
-                    _safe_upload, storage,
-                    user_vocals_local,
-                    f"sessions/{session_id}_user/vocals.wav",
-                )
-                pool.submit(
-                    _safe_upload, storage,
-                    user_instru_local,
-                    f"sessions/{session_id}_user/instrumentals.wav",
-                )
 
             update_progress(self, "separating_user_done", 20, "Voix isolee !")
 
             # ========================================================
-            # STEP 3: Reference separation (with STORAGE CACHE)
+            # PHASE 2 — 4 threads parallèles lancés simultanément :
+            #
+            #   Thread A (upload_notify) : upload user stems → notifie le frontend
+            #   Thread B (separate_ref)  : Demucs ref / cache (cuda:0)
+            #   Thread C (crepe_user)    : CREPE user pitch (cuda:1)
+            #   Thread D (whisper_lyrics): Whisper HTTP (GPU 3) + Genius API
+            #
+            # Thread A et Thread B utilisent le réseau / storage (I/O).
+            # Thread B utilise cuda:0, Thread C utilise cuda:1 → pas de contention GPU.
+            # update_progress() N'est PAS appelé depuis les threads (non thread-safe avec Celery).
+            # _notify_user_tracks_ready() écrit directement dans la session Redis (clé distincte).
             # ========================================================
-            ref_vocals_path = None
-            ref_instrumentals_path = None
+            update_progress(self, "analyzing_parallel", 25, "Analyse approfondie en cours...")
 
-            if youtube_id and is_ref_separation_in_storage(youtube_id):
-                # CACHE HIT: download from storage to temp
-                logger.info("Reference separation found in storage cache for %s", youtube_id)
-                update_progress(self, "separating_reference_cached", 35, "Reference en cache !")
-                ref_vocals_local = storage.download_to_file(
-                    f"cache/{youtube_id}/vocals.wav",
-                    ref_temp / "vocals.wav",
+            def _upload_and_notify():
+                """
+                Thread A: upload user stems puis notifie le frontend.
+
+                Appelé uniquement depuis Phase 2. N'appelle pas update_progress() (Celery).
+                Écrit user_tracks_ready_at dans Redis session → SSE router émet user_tracks_ready.
+                """
+                _upload_pair(
+                    storage,
+                    (user_vocals_local, f"sessions/{session_id}_user/vocals.wav"),
+                    (user_instru_local, f"sessions/{session_id}_user/instrumentals.wav"),
                 )
-                ref_instru_local = storage.download_to_file(
-                    f"cache/{youtube_id}/instrumentals.wav",
-                    ref_temp / "instrumentals.wav",
-                )
-                ref_vocals_path = str(ref_vocals_local)
-                ref_instrumentals_path = str(ref_instru_local)
-                # Ensure session_ref tracks exist in storage for StudioMode — parallel
-                # Non-fatal: StudioMode degrades but analysis completes
-                if not storage.exists(f"sessions/{session_id}_ref/vocals.wav"):
-                    with ThreadPoolExecutor(max_workers=2) as pool:
-                        pool.submit(
-                            _safe_upload, storage,
-                            ref_vocals_local,
-                            f"sessions/{session_id}_ref/vocals.wav",
-                        )
-                        pool.submit(
-                            _safe_upload, storage,
-                            ref_instru_local,
-                            f"sessions/{session_id}_ref/instrumentals.wav",
-                        )
-            else:
-                # CACHE MISS: download reference audio, separate, upload to cache + session_ref
-                logger.info("No storage cache for %s, separating reference...", youtube_id)
-                update_progress(self, "separating_reference", 25, "Preparation de la reference...")
+                _notify_user_tracks_ready(session_id)
 
-                # Preserve extension from URL (.flac or .wav)
-                ref_ext = ".flac" if reference_audio_path.endswith(".flac") else ".wav"
-                local_ref = _resolve_audio(
-                    reference_audio_path,
-                    ref_temp / f"reference{ref_ext}",
-                )
-                ref_separation = do_separate_audio(local_ref, f"{session_id}_ref")
+            def _separate_ref() -> tuple:
+                """
+                Thread B: séparation référence (cuda:0) avec cache storage.
 
-                # Free GPU cache after 2nd Demucs pass
-                try:
-                    import torch
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-                except Exception:
-                    pass
-
-                ref_vocals_path = ref_separation["vocals_path"]
-                ref_instrumentals_path = ref_separation["instrumentals_path"]
-                ref_vocals_local = Path(ref_vocals_path)
-                ref_instru_local = Path(ref_instrumentals_path)
-
-                # Upload to permanent cache + session_ref — all in parallel
-                # Non-fatal: analysis uses local files, uploads are for StudioMode + future cache
-                with ThreadPoolExecutor(max_workers=4) as pool:
-                    pool.submit(
-                        _safe_upload, storage,
-                        ref_vocals_local,
-                        f"sessions/{session_id}_ref/vocals.wav",
+                CACHE HIT  → download 2 fichiers depuis storage (~2s).
+                CACHE MISS → yt-dlp + Demucs htdemucs (~25s) + upload cache + session_ref.
+                Retourne (ref_vocals_path: str, ref_instru_path: str).
+                """
+                if youtube_id and is_ref_separation_in_storage(youtube_id):
+                    logger.info("Reference separation cache HIT for %s", youtube_id)
+                    rv_local = storage.download_to_file(
+                        f"cache/{youtube_id}/vocals.wav",
+                        ref_temp / "vocals.wav",
                     )
-                    pool.submit(
-                        _safe_upload, storage,
-                        ref_instru_local,
-                        f"sessions/{session_id}_ref/instrumentals.wav",
+                    ri_local = storage.download_to_file(
+                        f"cache/{youtube_id}/instrumentals.wav",
+                        ref_temp / "instrumentals.wav",
                     )
-                    if youtube_id:
-                        pool.submit(
-                            _safe_upload, storage,
-                            ref_vocals_local,
-                            f"cache/{youtube_id}/vocals.wav",
+                    rv_path = str(rv_local)
+                    ri_path = str(ri_local)
+                    # Ensure session_ref tracks exist for StudioMode (non-fatal if missing)
+                    if not storage.exists(f"sessions/{session_id}_ref/vocals.wav"):
+                        _upload_pair(
+                            storage,
+                            (Path(rv_path), f"sessions/{session_id}_ref/vocals.wav"),
+                            (Path(ri_path), f"sessions/{session_id}_ref/instrumentals.wav"),
                         )
-                        pool.submit(
+                else:
+                    logger.info("Reference separation cache MISS for %s — running Demucs", youtube_id)
+                    ref_ext = ".flac" if reference_audio_path.endswith(".flac") else ".wav"
+                    local_ref = _resolve_audio(
+                        reference_audio_path,
+                        ref_temp / f"reference{ref_ext}",
+                    )
+                    ref_sep = do_separate_audio(local_ref, f"{session_id}_ref")
+                    # Free GPU cache after 2nd Demucs pass
+                    try:
+                        import torch
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                    except Exception:
+                        pass
+                    rv_path = ref_sep["vocals_path"]
+                    ri_path = ref_sep["instrumentals_path"]
+                    # Upload to permanent cache + session_ref — all in parallel
+                    with ThreadPoolExecutor(max_workers=4) as up_pool:
+                        up_pool.submit(
                             _safe_upload, storage,
-                            ref_instru_local,
-                            f"cache/{youtube_id}/instrumentals.wav",
+                            Path(rv_path), f"sessions/{session_id}_ref/vocals.wav",
                         )
+                        up_pool.submit(
+                            _safe_upload, storage,
+                            Path(ri_path), f"sessions/{session_id}_ref/instrumentals.wav",
+                        )
+                        if youtube_id:
+                            up_pool.submit(
+                                _safe_upload, storage,
+                                Path(rv_path), f"cache/{youtube_id}/vocals.wav",
+                            )
+                            up_pool.submit(
+                                _safe_upload, storage,
+                                Path(ri_path), f"cache/{youtube_id}/instrumentals.wav",
+                            )
+                return rv_path, ri_path
 
-                update_progress(self, "separating_reference_done", 35, "Reference prete !")
-
-            # ========================================================
-            # STEP 3.5: Cross-correlation sync (auto offset detection)
-            # ========================================================
-            update_progress(self, "computing_sync", 37, "Synchronisation automatique...")
-
-            from tasks.sync import compute_sync_offset
-            try:
-                sync_result = compute_sync_offset(
-                    user_vocals_path=user_separation["vocals_path"],
-                    ref_vocals_path=str(ref_vocals_path),
-                )
-                auto_offset = sync_result["offset_seconds"]
-                sync_confidence = sync_result["confidence"]
-                logger.info(
-                    "Auto sync offset: %.3fs (confidence: %.2f)", auto_offset, sync_confidence,
-                )
-            except Exception as e:
-                logger.warning("Cross-correlation sync failed: %s, using offset=0", e)
-                auto_offset = 0.0
-                sync_confidence = 0.0
-                sync_result = {"offset_seconds": 0.0, "confidence": 0.0, "method": "fallback"}
-
-            # ========================================================
-            # STEPS 4-6: PARALLEL — CREPE (cuda:1 GPU 4) || Whisper+Lyrics (GPU 3 HTTP)
-            # Dedicated GPUs: no contention, no locks.
-            # ========================================================
-            update_progress(self, "analyzing_parallel", 40, "Analyse en cours...")
-
-            def _do_crepe():
-                """Thread A: CREPE pitch extraction on cuda:1 (GPU 4)."""
-                up = do_extract_pitch(
+            def _crepe_user() -> dict:
+                """Thread C: CREPE user pitch (cuda:1, full model pour précision max)."""
+                return do_extract_pitch(
                     user_separation["vocals_path"], f"{session_id}_user",
                     fast_mode=False, device=CREPE_DEVICE,
                 )
-                # Reference pitch: check cache first
+
+            def _whisper_lyrics() -> tuple:
+                """Thread D: Whisper HTTP (GPU 3) + Genius API (HTTP)."""
+                trans = do_transcribe_audio(user_separation["vocals_path"], session_id, "fr")
+                lr = get_lyrics(artist_name, song_title)
+                return trans, lr
+
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                fut_upload     = pool.submit(_upload_and_notify)
+                fut_ref        = pool.submit(_separate_ref)
+                fut_crepe_user = pool.submit(_crepe_user)
+                fut_whisper    = pool.submit(_whisper_lyrics)
+            # pool.__exit__ (shutdown wait=True) attend la fin des 4 threads.
+            # Appeler .result() pour propager les exceptions éventuelles.
+            ref_vocals_path, ref_instru_path = fut_ref.result()
+            user_pitch = fut_crepe_user.result()
+            transcription, lyrics_result = fut_whisper.result()
+            fut_upload.result()  # propage toute exception du Thread A
+
+            # ========================================================
+            # PHASE 3 — 2 threads parallèles après Phase 2 :
+            #
+            #   Thread E (sync)      : cross-correlation offset (CPU, ~1s)
+            #   Thread F (crepe_ref) : CREPE ref pitch (cuda:1, tiny, ~1.5s ou 0s cache)
+            #
+            # Les deux ne dépendent que de ref_vocals_path (disponible après Phase 2).
+            # ========================================================
+            update_progress(self, "sync_and_pitch_ref", 65, "Synchronisation et pitch ref...")
+
+            def _sync() -> dict:
+                """Thread E: cross-correlation sync offset (CPU)."""
+                from tasks.sync import compute_sync_offset
+                try:
+                    result = compute_sync_offset(
+                        user_vocals_path=user_separation["vocals_path"],
+                        ref_vocals_path=str(ref_vocals_path),
+                    )
+                    logger.info(
+                        "Auto sync offset: %.3fs (confidence: %.2f)",
+                        result["offset_seconds"], result["confidence"],
+                    )
+                    return result
+                except Exception as e:
+                    logger.warning("Cross-correlation sync failed: %s, using offset=0", e)
+                    return {"offset_seconds": 0.0, "confidence": 0.0, "method": "fallback"}
+
+            def _crepe_ref() -> dict:
+                """Thread F: CREPE ref pitch (cuda:1, tiny model) avec cache pitch NPZ."""
                 ref_pitch_cache_key = (
                     f"cache/{youtube_id}/pitch_data.npz" if youtube_id else None
                 )
@@ -429,32 +460,28 @@ def analyze_performance(
                     logger.info("Pitch cache HIT for reference %s — skipping CREPE", youtube_id)
                     cached_npz = ref_temp / "pitch_data_cached.npz"
                     storage.download_to_file(ref_pitch_cache_key, cached_npz)
-                    rp = {"pitch_path": str(cached_npz), "stats": {}, "status": "cached"}
-                else:
-                    rp = do_extract_pitch(
-                        str(ref_vocals_path), f"{session_id}_ref",
-                        fast_mode=True, device=CREPE_DEVICE,
+                    return {"pitch_path": str(cached_npz), "stats": {}, "status": "cached"}
+                rp = do_extract_pitch(
+                    str(ref_vocals_path), f"{session_id}_ref",
+                    fast_mode=True, device=CREPE_DEVICE,
+                )
+                if ref_pitch_cache_key and rp.get("pitch_path"):
+                    _safe_upload(
+                        storage,
+                        Path(rp["pitch_path"]),
+                        ref_pitch_cache_key,
+                        content_type="application/octet-stream",
                     )
-                    if ref_pitch_cache_key and rp.get("pitch_path"):
-                        _safe_upload(
-                            storage,
-                            Path(rp["pitch_path"]),
-                            ref_pitch_cache_key,
-                            content_type="application/octet-stream",
-                        )
-                return up, rp
-
-            def _do_whisper_lyrics():
-                """Thread B: Whisper transcription (GPU 3 HTTP) + Lyrics (Genius HTTP)."""
-                trans = do_transcribe_audio(user_separation["vocals_path"], session_id, "fr")
-                lr = get_lyrics(artist_name, song_title)
-                return trans, lr
+                return rp
 
             with ThreadPoolExecutor(max_workers=2) as pool:
-                crepe_future = pool.submit(_do_crepe)
-                whisper_future = pool.submit(_do_whisper_lyrics)
-                user_pitch, ref_pitch = crepe_future.result()
-                transcription, lyrics_result = whisper_future.result()
+                fut_sync      = pool.submit(_sync)
+                fut_crepe_ref = pool.submit(_crepe_ref)
+            sync_result = fut_sync.result()
+            ref_pitch   = fut_crepe_ref.result()
+
+            auto_offset = sync_result["offset_seconds"]
+            sync_confidence = sync_result["confidence"]
 
             reference_lyrics = lyrics_result.get("text", "")
 
@@ -465,7 +492,7 @@ def analyze_performance(
                 update_progress(self, "analysis_done", 78, "Analyse terminee (paroles non trouvees)")
 
             # ========================================================
-            # STEP 7: Score + Jury feedback (parallel x3 personas)
+            # PHASE 4 — Scoring + Jury (séquentiel, CPU + LiteLLM)
             # ========================================================
             update_progress(self, "calculating_scores", 80, "Calcul des scores...")
             update_progress(self, "jury_deliberation", 85, "Le jury se reunit...")
