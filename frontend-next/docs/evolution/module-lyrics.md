@@ -3,7 +3,7 @@
 > **Objectif** : Rendre la lecture des paroles absolument fluide pour le chanteur, que ce soit en mode karaoke (word-level) ou en mode lyrics (line-level).
 >
 > **Date** : 2026-02-27
-> **Derniere revision** : 2026-02-28 (v3 — implementation complete)
+> **Derniere revision** : 2026-02-28 (v4 — audit complet + corrections residuelles)
 > **Statut** : TERMINE — Toutes les phases implementees (sauf #14 syllable-level sync)
 
 ---
@@ -812,11 +812,34 @@ const containerStyle = useMemo(() => {
 | 17 | Nettoyage dead code | FAIT | Suppression `blurAmount`, `LyricsControlsMobile`, `DEBOUNCE_SAVE_MS`, animations CSS mortes |
 | 18 | prefers-reduced-motion | FAIT | `usePrefersReducedMotion.ts` hook + fallback dans scroll, blur, clip-path, glow |
 
+### Phase 4 — Audit & Nettoyage residuel : COMPLETE
+
+| # | Fix | Statut | Implementation |
+|---|-----|--------|----------------|
+| 19 | `LyricsDisplayFullscreen` forward `wordLines` | FAIT | Props + destructuring + passage a `LyricsDisplayPro` — le fullscreen a maintenant le karaoke word-level |
+| 20 | `LyricsDisplayCompact` accepte `wordLines` | FAIT | Props + `parseLyrics(lyrics, syncedLines, wordLines)` pour un parsing correct |
+| 21 | Interlude dots `aria-label` + `aria-hidden` conflit | FAIT | Remplace `aria-hidden="true"` par `role="status"` — l'element est maintenant visible aux screen readers |
+| 22 | Inconsistance `endTime` fallback binary/linear search | FAIT | `useLyricsSync.ts:100` — unifie a `Math.min(startTime + 10, nextLine.startTime)` |
+| 23 | Dead code `LyricLineVariants` type | FAIT | Supprime de `types/lyrics.ts` (variantes Framer Motion jamais utilisees) |
+| 24 | Dead code `LyricsDisplayProps` interface | FAIT | Supprime de `types/lyrics.ts` (remplacee par props locales dans LyricsDisplayPro) |
+| 25 | Params voided dans `useLyricsScroll` | FAIT | Supprime `totalLines`, `behavior`, `block` de l'interface et du destructuring |
+| 26 | Default export inutile `LandscapeRecordingLayout` | FAIT | Supprime (seul le named export est utilise) |
+| 27 | Type cast `displayMode` avec `"word"` inatteignable | FAIT | `page.tsx` — cast reduit a `"karaoke" \| "line" \| "teleprompter"` |
+| 28 | `formatSeconds` duplique | FAIT | Extrait dans `src/lib/utils.ts`, importe dans `page.tsx` et `LandscapeRecordingLayout.tsx` |
+| 29 | Toggle karaoke/teleprompter manquant sur mobile | FAIT | `lyricsModeToggle` JSX partage, rendu dans les 3 etats mobile (preparing, ready, recording) + desktop |
+| 30 | Hydration mismatch `usePrefersReducedMotion` | FAIT | Initialisation fixe `false` + sync en `useEffect` post-mount (evite server=false/client=true) |
+
 ### Fichier nouveau
 
 | Fichier | Role |
 |---------|------|
-| `src/hooks/usePrefersReducedMotion.ts` | Hook a11y SSR-safe — detecte `prefers-reduced-motion: reduce` |
+| `src/hooks/usePrefersReducedMotion.ts` | Hook a11y SSR-safe + hydration-safe — detecte `prefers-reduced-motion: reduce` |
+
+### Fichier modifie (utilitaire partage)
+
+| Fichier | Modification |
+|---------|-------------|
+| `src/lib/utils.ts` | Ajout `formatSeconds(seconds: number): string` — extrait des duplications page.tsx / LandscapeRecordingLayout |
 
 ---
 

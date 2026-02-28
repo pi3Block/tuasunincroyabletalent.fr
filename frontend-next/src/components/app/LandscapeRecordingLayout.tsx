@@ -6,6 +6,7 @@
 import { memo } from 'react'
 import { YouTubePlayer, type YouTubePlayerControls } from '@/components/app/YouTubePlayer'
 import { LyricsDisplayPro } from '@/components/lyrics/LyricsDisplayPro'
+import { formatSeconds } from '@/lib/utils'
 import type { YouTubeMatch, SyncedLyricLine, WordLine } from '@/api/client'
 
 interface LandscapeRecordingLayoutProps {
@@ -65,12 +66,6 @@ export const LandscapeRecordingLayout = memo(function LandscapeRecordingLayout({
   onControlsReady,
   onDurationChange,
 }: LandscapeRecordingLayoutProps) {
-  const formatSeconds = (seconds: number): string => {
-    const mins = Math.floor(seconds / 60)
-    const secs = Math.floor(seconds % 60)
-    return `${mins}:${secs.toString().padStart(2, '0')}`
-  }
-
   return (
     <div className="fixed inset-0 bg-gray-900 flex flex-row z-50">
       {/* Left side: Video + Controls (50%) */}
@@ -133,5 +128,3 @@ export const LandscapeRecordingLayout = memo(function LandscapeRecordingLayout({
     </div>
   )
 })
-
-export default LandscapeRecordingLayout

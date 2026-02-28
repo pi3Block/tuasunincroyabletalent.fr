@@ -405,10 +405,8 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
   // Scrolls current line to 'start' position - CSS padding handles vertical offset
   const { currentLineRef, scrollTargetRef, scrollTargetIndex, enableAutoScroll, autoScrollEnabled } = useLyricsScroll({
     currentLineIndex,
-    totalLines: lines.length,
     isPlaying,
     containerRef: containerRef as React.RefObject<HTMLElement | null>,
-    block: 'start',
     scrollPosition,
     reducedMotion,
   })
@@ -638,8 +636,8 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
                 {isActive && isInInterlude && (
                   <div
                     className="flex justify-center items-center gap-3 py-8"
-                    aria-label="Interlude"
-                    aria-hidden="true"
+                    role="status"
+                    aria-label="Interlude instrumental"
                   >
                     {[0, 1, 2].map(i => (
                       <span
@@ -698,6 +696,8 @@ interface LyricsDisplayCompactProps {
   lyrics: string
   /** Synced lines */
   syncedLines?: SyncedLyricLine[] | null
+  /** Word-level timestamps (used for correct line parsing when available) */
+  wordLines?: WordLine[] | null
   /** Current line index */
   currentLineIndex?: number
   /** Custom class name */
@@ -711,12 +711,13 @@ interface LyricsDisplayCompactProps {
 export const LyricsDisplayCompact = memo(function LyricsDisplayCompact({
   lyrics,
   syncedLines,
+  wordLines,
   currentLineIndex = 0,
   className,
 }: LyricsDisplayCompactProps) {
   const lines = useMemo(
-    () => parseLyrics(lyrics, syncedLines),
-    [lyrics, syncedLines]
+    () => parseLyrics(lyrics, syncedLines, wordLines),
+    [lyrics, syncedLines, wordLines]
   )
 
   if (lines.length === 0) return null
@@ -747,6 +748,8 @@ interface LyricsDisplayFullscreenProps {
   lyrics: string
   /** Synced lines */
   syncedLines?: SyncedLyricLine[] | null
+  /** Word-level timestamps for karaoke mode */
+  wordLines?: WordLine[] | null
   /** Current playback time */
   currentTime: number
   /** Whether playing */
@@ -772,6 +775,7 @@ export const LyricsDisplayFullscreen = memo(function LyricsDisplayFullscreen({
   className,
   lyrics,
   syncedLines,
+  wordLines,
   currentTime,
   isPlaying,
   displayMode,
@@ -804,6 +808,7 @@ export const LyricsDisplayFullscreen = memo(function LyricsDisplayFullscreen({
         <LyricsDisplayPro
           lyrics={lyrics}
           syncedLines={syncedLines}
+          wordLines={wordLines}
           currentTime={currentTime}
           isPlaying={isPlaying}
           displayMode={displayMode}

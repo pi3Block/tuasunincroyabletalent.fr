@@ -141,40 +141,6 @@ export interface LyricsOffsetState {
 // ============================================================================
 
 /**
- * Props for the main LyricsDisplay component.
- */
-export interface LyricsDisplayProps {
-  /** Plain text lyrics (fallback) */
-  lyrics: string
-  /** Synced lyrics with timestamps */
-  syncedLines?: LyricLine[] | null
-  /** Current playback time in seconds */
-  currentTime: number
-  /** Whether audio is playing */
-  isPlaying: boolean
-  /** Display mode */
-  displayMode?: LyricsDisplayMode
-  /** Manual offset in seconds */
-  offset?: number
-  /** Callback when offset changes */
-  onOffsetChange?: (offset: number) => void
-  /** Show offset controls */
-  showOffsetControls?: boolean
-  /** Callback when line changes */
-  onLineChange?: (lineIndex: number) => void
-  /** Callback when user taps a line (tap-to-sync) */
-  onLineTap?: (lineIndex: number, lineStartTime: number) => void
-  /** Auto-sync handler */
-  onAutoSync?: () => Promise<{ offset: number; confidence: number } | null>
-  /** Whether auto-sync is in progress */
-  isAutoSyncing?: boolean
-  /** Auto-sync confidence after calculation */
-  autoSyncConfidence?: number | null
-  /** Custom class name */
-  className?: string
-}
-
-/**
  * Props for individual lyric line component.
  */
 export interface LyricLineProps {
@@ -221,30 +187,6 @@ export interface KaraokeWordProps {
 // ============================================================================
 // ANIMATION TYPES
 // ============================================================================
-
-/**
- * Animation variants for Framer Motion.
- */
-export interface LyricLineVariants {
-  inactive: {
-    scale: number
-    opacity: number
-    filter?: string
-    y?: number
-  }
-  active: {
-    scale: number
-    opacity: number
-    filter?: string
-    y?: number
-  }
-  past: {
-    scale: number
-    opacity: number
-    filter?: string
-    y?: number
-  }
-}
 
 /**
  * Configuration for lyrics animations.

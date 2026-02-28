@@ -18,18 +18,12 @@ import { PERFORMANCE_CONFIG } from '@/types/lyrics'
 interface UseLyricsScrollOptions {
   /** Current line index to scroll to */
   currentLineIndex: number
-  /** Total number of lines (reserved for future use) */
-  totalLines?: number
   /** Whether playback is active */
   isPlaying: boolean
   /** Container element ref */
   containerRef: React.RefObject<HTMLElement | null>
   /** Whether auto-scroll is enabled */
   enabled?: boolean
-  /** Scroll behavior */
-  behavior?: ScrollBehavior
-  /** Block position - where to align current line ('start' recommended for karaoke) */
-  block?: ScrollLogicalPosition
   /** Debounce delay in ms */
   debounceMs?: number
   /** Scroll position as fraction of viewport height (0-1). Default 0.30 (30% from top). */
@@ -87,19 +81,13 @@ interface UseLyricsScrollReturn {
  */
 export function useLyricsScroll({
   currentLineIndex,
-  totalLines: _totalLines = 0,
   isPlaying,
   containerRef,
   enabled = true,
-  behavior: _behavior = 'smooth',
-  block: _block = 'start',
   debounceMs = PERFORMANCE_CONFIG.SCROLL_DEBOUNCE_MS,
   scrollPosition = 0.30,
   reducedMotion = false,
 }: UseLyricsScrollOptions): UseLyricsScrollReturn {
-  // Reserved for future use
-  void _totalLines
-  void _block
   const currentLineRef = useRef<HTMLDivElement>(null)
   const scrollTargetRef = useRef<HTMLDivElement>(null)
   const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)

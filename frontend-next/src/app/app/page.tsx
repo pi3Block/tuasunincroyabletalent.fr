@@ -23,7 +23,7 @@ import { useOrientation } from "@/hooks/useOrientation";
 import { useSSE, type SSEEvent } from "@/hooks/useSSE";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useAudioStore, useTransport, useMasterVolume } from "@/stores/audioStore";
-import { cn } from "@/lib/utils";
+import { cn, formatSeconds } from "@/lib/utils";
 import type { StudioTransportControls, StudioContext } from "@/audio/types";
 import Image from "next/image";
 import Link from "next/link";
@@ -33,12 +33,6 @@ function formatDuration(ms: number): string {
   const minutes = Math.floor(ms / 60000);
   const seconds = Math.floor((ms % 60000) / 1000);
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
-}
-
-function formatSeconds(seconds: number): string {
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.floor(seconds % 60);
-  return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
 
 function getProgressLabel(step: string): string {
@@ -967,11 +961,53 @@ export default function AppPage() {
     wordLines: karaokeMode && !teleprompterMode ? wordLines : null,
     currentTime: playbackTime,
     isPlaying: isVideoPlaying,
-    displayMode: displayMode as "karaoke" | "line" | "word" | "teleprompter",
+    displayMode: displayMode as "karaoke" | "line" | "teleprompter",
     offset: lyricsOffset,
     onOffsetChange: handleOffsetChange,
     showOffsetControls: true,
   };
+
+  // Reusable lyrics mode toggle (karaoke / line / teleprompter)
+  const lyricsModeToggle = wordTimestampsStatus === "found" && wordLines ? (
+    <div className="flex items-center justify-center gap-2 px-3 py-1.5">
+      <button
+        onClick={() => {
+          setKaraokeMode(!karaokeMode);
+          if (teleprompterMode) setTeleprompterMode(false);
+        }}
+        className={cn(
+          "flex items-center gap-1.5 text-xs px-3 py-1 rounded-full transition-colors",
+          karaokeMode && !teleprompterMode
+            ? "bg-purple-500/20 text-purple-400 hover:bg-purple-500/30"
+            : "bg-muted/50 text-muted-foreground hover:bg-muted",
+        )}
+      >
+        <span>{karaokeMode && !teleprompterMode ? "🎤" : "📝"}</span>
+        <span>{karaokeMode && !teleprompterMode ? "Karaoké" : "Ligne"}</span>
+      </button>
+      <button
+        onClick={() => setTeleprompterMode(!teleprompterMode)}
+        className={cn(
+          "flex items-center gap-1.5 text-xs px-3 py-1 rounded-full transition-colors",
+          teleprompterMode
+            ? "bg-blue-500/20 text-blue-400 hover:bg-blue-500/30"
+            : "bg-muted/50 text-muted-foreground hover:bg-muted",
+        )}
+        title="Mode téléprompeur : texte uniforme, sans effets"
+      >
+        <span>📜</span>
+        <span>Prompteur</span>
+      </button>
+      <button
+        onClick={regenerateWordTimestamps}
+        disabled={isGeneratingWordTimestamps}
+        className="flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-orange-500/20 text-orange-400 hover:bg-orange-500/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        title="Régénérer les timestamps karaoké"
+      >
+        <span>🔄</span>
+      </button>
+    </div>
+  ) : null;
 
   // ─── NON-UNIFIED STATES (selecting / needs_fallback) ────────────────────────
   // "preparing" and "downloading" are now unified: show full UI immediately with
@@ -1344,44 +1380,9 @@ export default function AppPage() {
                     />
                   </div>
                   {/* Karaoke mode controls */}
-                  {wordTimestampsStatus === "found" && wordLines && (
-                    <div className="shrink-0 flex items-center justify-center gap-2 px-3 py-1.5 border-t border-border/30">
-                      <button
-                        onClick={() => {
-                          setKaraokeMode(!karaokeMode);
-                          if (teleprompterMode) setTeleprompterMode(false);
-                        }}
-                        className={cn(
-                          "flex items-center gap-1.5 text-xs px-3 py-1 rounded-full transition-colors",
-                          karaokeMode && !teleprompterMode
-                            ? "bg-purple-500/20 text-purple-400 hover:bg-purple-500/30"
-                            : "bg-muted/50 text-muted-foreground hover:bg-muted",
-                        )}
-                      >
-                        <span>{karaokeMode && !teleprompterMode ? "🎤" : "📝"}</span>
-                        <span>{karaokeMode && !teleprompterMode ? "Karaoké" : "Ligne"}</span>
-                      </button>
-                      <button
-                        onClick={() => setTeleprompterMode(!teleprompterMode)}
-                        className={cn(
-                          "flex items-center gap-1.5 text-xs px-3 py-1 rounded-full transition-colors",
-                          teleprompterMode
-                            ? "bg-blue-500/20 text-blue-400 hover:bg-blue-500/30"
-                            : "bg-muted/50 text-muted-foreground hover:bg-muted",
-                        )}
-                        title="Mode téléprompeur : texte uniforme, sans effets"
-                      >
-                        <span>📜</span>
-                        <span>Prompteur</span>
-                      </button>
-                      <button
-                        onClick={regenerateWordTimestamps}
-                        disabled={isGeneratingWordTimestamps}
-                        className="flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-orange-500/20 text-orange-400 hover:bg-orange-500/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                        title="Régénérer les timestamps karaoké"
-                      >
-                        <span>🔄</span>
-                      </button>
+                  {lyricsModeToggle && (
+                    <div className="shrink-0 border-t border-border/30">
+                      {lyricsModeToggle}
                     </div>
                   )}
                   {isGeneratingWordTimestamps && (
@@ -1469,7 +1470,10 @@ export default function AppPage() {
               </button>
 
               {lyrics && lyricsStatus === "found" && (
-                <LyricsDisplayPro {...lyricsDisplayProps} />
+                <>
+                  {lyricsModeToggle}
+                  <LyricsDisplayPro {...lyricsDisplayProps} />
+                </>
               )}
 
               <button
@@ -1512,7 +1516,10 @@ export default function AppPage() {
               </button>
 
               {lyrics && lyricsStatus === "found" && (
-                <LyricsDisplayPro {...lyricsDisplayProps} />
+                <>
+                  {lyricsModeToggle}
+                  <LyricsDisplayPro {...lyricsDisplayProps} />
+                </>
               )}
 
               <button
@@ -1555,7 +1562,10 @@ export default function AppPage() {
               </button>
 
               {lyrics && (
-                <LyricsDisplayPro {...lyricsDisplayProps} />
+                <>
+                  {lyricsModeToggle}
+                  <LyricsDisplayPro {...lyricsDisplayProps} />
+                </>
               )}
             </div>
           )}

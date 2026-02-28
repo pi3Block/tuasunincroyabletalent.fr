@@ -93,11 +93,12 @@ function binarySearchLineIndex(lines: LyricLine[], time: number): number {
   // Fallback: time is between two lines.
   // If the gap to the next line is > 2s, treat as instrumental — return -1.
   // Otherwise return the closest preceding line.
+  // Uses same endTime fallback logic as the main loop (startTime + 10) for consistency.
   const prevIndex = Math.min(low - 1, lines.length - 1)
   if (prevIndex >= 0 && prevIndex < lines.length - 1) {
     const prevLine = lines[prevIndex]
     const nextLine = lines[prevIndex + 1]
-    const prevEnd = prevLine.endTime ?? prevLine.startTime + 4
+    const prevEnd = prevLine.endTime ?? Math.min(prevLine.startTime + 10, nextLine.startTime)
     const gap = nextLine.startTime - prevEnd
     if (gap > 2) return -1
   }
