@@ -525,7 +525,12 @@ export default function AppPage() {
         case "session_status":
           setReferenceStatus(event.data.reference_status as string);
           if (event.data.reference_status === "ready") {
-            setStatus("ready");
+            // Only transition to "ready" if we're still preparing/downloading.
+            // Do NOT overwrite "recording", "uploading", "analyzing", or "results".
+            const currentStatus = useSessionStore.getState().status;
+            if (currentStatus === "preparing" || currentStatus === "downloading") {
+              setStatus("ready");
+            }
           } else if (event.data.reference_status === "needs_fallback") {
             setStatus("needs_fallback");
           } else if (event.data.reference_status === "error") {
@@ -562,6 +567,7 @@ export default function AppPage() {
 
         case "analysis_error":
           setError((event.data.error as string) || "Analyse échouée");
+          setAnalysisProgress(null);
           setStatus("ready");
           setAnalysisTaskId(null);
           break;
@@ -738,16 +744,29 @@ export default function AppPage() {
   // Safety-net polling: ALWAYS poll during "analyzing" regardless of SSE.
   // SSE may silently lose events (proxy buffering, Traefik, connection drops).
   // Poll at 3s when SSE is active (safety net), 2s when SSE failed (primary).
+  // Timeout: give up after 120s and show error.
   useEffect(() => {
     if (!sessionId || status !== "analyzing") {
       return;
     }
 
     const pollInterval = usePollingFallback ? 2000 : 3000;
+    const analysisStartTime = Date.now();
+    const ANALYSIS_TIMEOUT_MS = 120_000; // 2 minutes max
+    let consecutiveErrors = 0;
 
     const pollAnalysis = async () => {
+      // Timeout — analysis has been running too long
+      if (Date.now() - analysisStartTime > ANALYSIS_TIMEOUT_MS) {
+        setError("L'analyse a pris trop de temps. Réessaie !");
+        setStatus("ready");
+        setAnalysisTaskId(null);
+        return;
+      }
+
       try {
         const analysisStatus = await api.getAnalysisStatus(sessionId);
+        consecutiveErrors = 0; // Reset on success
 
         if (analysisStatus.progress) {
           setAnalysisProgress(analysisStatus.progress);
@@ -765,7 +784,13 @@ export default function AppPage() {
           setAnalysisTaskId(null);
         }
       } catch (err) {
-        console.error("Failed to poll analysis:", err);
+        consecutiveErrors++;
+        console.error(`Failed to poll analysis (${consecutiveErrors}/5):`, err);
+        if (consecutiveErrors >= 5) {
+          setError("Impossible de joindre le serveur. Réessaie !");
+          setStatus("ready");
+          setAnalysisTaskId(null);
+        }
       }
     };
 
@@ -886,6 +911,7 @@ export default function AppPage() {
       }
 
       await api.uploadRecording(sessionId, audioBlob);
+      setAnalysisProgress(null);
       setStatus("analyzing");
 
       // Start analysis — if the response is lost (proxy timeout),
@@ -1297,6 +1323,7 @@ export default function AppPage() {
                       onStateChange={handleYoutubeStateChange}
                       onDurationChange={handleYoutubeDurationChange}
                       onControlsReady={handleYoutubeControlsReady}
+                      disableInteraction={status === "recording"}
                     />
                     {flowBar}
                     {status === "recording" && (
@@ -1622,6 +1649,7 @@ export default function AppPage() {
                     onStateChange={handleYoutubeStateChange}
                     onDurationChange={handleYoutubeDurationChange}
                     onControlsReady={handleYoutubeControlsReady}
+                    disableInteraction
                   />
                   {flowBar}
                 </>

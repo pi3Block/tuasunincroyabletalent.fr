@@ -3,6 +3,23 @@ import { useShallow } from 'zustand/react/shallow'
 import type { Track, YouTubeMatch, AnalysisResults, SyncedLyricLine } from '@/api/client'
 
 type SessionStatus = 'idle' | 'selecting' | 'preparing' | 'needs_fallback' | 'downloading' | 'ready' | 'recording' | 'uploading' | 'analyzing' | 'results'
+
+/**
+ * Valid status transitions. Any transition not listed here is blocked.
+ * This prevents SSE events or stale callbacks from corrupting the flow.
+ */
+const VALID_TRANSITIONS: Record<SessionStatus, SessionStatus[]> = {
+  idle:           ['selecting'],
+  selecting:      ['preparing', 'idle'],
+  preparing:      ['downloading', 'ready', 'needs_fallback', 'selecting'],
+  needs_fallback: ['preparing', 'downloading', 'selecting'],
+  downloading:    ['ready', 'needs_fallback', 'selecting'],
+  ready:          ['recording', 'selecting', 'idle'],
+  recording:      ['uploading', 'ready'],
+  uploading:      ['analyzing', 'ready'],
+  analyzing:      ['results', 'ready'],  // ready only on error/timeout
+  results:        ['ready', 'selecting', 'idle'],
+}
 type LyricsSyncType = 'synced' | 'unsynced' | 'none'
 type LyricsSource = 'spotify' | 'genius' | 'none'
 
@@ -61,7 +78,7 @@ interface SessionState {
   reset: () => void
 }
 
-export const useSessionStore = create<SessionState>((set) => ({
+export const useSessionStore = create<SessionState>((set, get) => ({
   // Initial state
   status: 'idle',
   sessionId: null,
@@ -103,8 +120,14 @@ export const useSessionStore = create<SessionState>((set) => ({
     set({ referenceStatus: status })
   },
 
-  setStatus: (status: SessionStatus) => {
-    set({ status })
+  setStatus: (next: SessionStatus) => {
+    const current = get().status
+    const allowed = VALID_TRANSITIONS[current]
+    if (!allowed?.includes(next)) {
+      console.warn(`[State] Blocked transition: ${current} → ${next}`)
+      return
+    }
+    set({ status: next })
   },
 
   startRecording: () => {

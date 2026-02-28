@@ -1,9 +1,18 @@
 /**
  * Hook for real-time pitch detection using Web Audio API.
- * Uses autocorrelation algorithm for fundamental frequency detection.
  *
- * Performance: Throttled to ~12fps to avoid blocking the main thread
- * during recording (autocorrelation is O(n²) on buffer size).
+ * The expensive O(n²) autocorrelation runs in a **Web Worker** so the main
+ * thread is never blocked — no more audio stuttering during recording.
+ *
+ * Main thread only does:
+ *  - rAF loop (throttled ~12fps)
+ *  - getFloatTimeDomainData  (fast WebAudio copy)
+ *  - RMS check               (O(n), < 0.1 ms)
+ *  - postMessage to worker    (structured clone of Float32Array)
+ *
+ * Worker thread does:
+ *  - Full autocorrelation + parabolic interpolation
+ *  - Posts back { frequency }
  */
 import { useState, useRef, useCallback, useEffect } from 'react'
 
@@ -16,9 +25,9 @@ export interface PitchData {
 }
 
 export interface UsePitchDetectionOptions {
-  minFrequency?: number   // Minimum voice frequency (default 80Hz)
-  maxFrequency?: number   // Maximum voice frequency (default 1000Hz)
-  smoothingFactor?: number // Smoothing for less jittery display (0-1)
+  minFrequency?: number
+  maxFrequency?: number
+  smoothingFactor?: number
 }
 
 export interface UsePitchDetectionReturn {
@@ -28,98 +37,94 @@ export interface UsePitchDetectionReturn {
   stopAnalysis: () => void
 }
 
-// Note names for display
+// ── Note helpers (main thread, cheap) ───────────────────────────────────────
+
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 
-// Target ~12fps for pitch detection (enough for visual feedback, easy on main thread)
-const PITCH_FRAME_INTERVAL = 80 // ms
-
-// Convert frequency to note name and cents deviation
 function frequencyToNote(frequency: number): { note: string; cents: number } {
   if (frequency <= 0) return { note: '-', cents: 0 }
-
-  // A4 = 440Hz as reference
   const A4 = 440
   const semitonesFromA4 = 12 * Math.log2(frequency / A4)
   const roundedSemitones = Math.round(semitonesFromA4)
   const cents = Math.round((semitonesFromA4 - roundedSemitones) * 100)
-
-  // Calculate note index (A4 is index 9 in octave 4)
   const noteIndex = ((roundedSemitones % 12) + 12 + 9) % 12
   const octave = Math.floor((roundedSemitones + 9) / 12) + 4
-
-  const note = `${NOTE_NAMES[noteIndex]}${octave}`
-  return { note, cents }
+  return { note: `${NOTE_NAMES[noteIndex]}${octave}`, cents }
 }
 
-// Autocorrelation-based pitch detection
-function autoCorrelate(
-  buffer: Float32Array,
-  sampleRate: number,
-  minFreq: number,
-  maxFreq: number
-): number {
-  const SIZE = buffer.length
-  const maxSamples = Math.floor(sampleRate / minFreq)
-  const minSamples = Math.floor(sampleRate / maxFreq)
+// ── Inline Web Worker (autocorrelation off main thread) ─────────────────────
 
-  // Check if there's enough signal (reuse same buffer, no extra alloc)
-  let rms = 0
-  for (let i = 0; i < SIZE; i++) {
-    rms += buffer[i] * buffer[i]
-  }
-  rms = Math.sqrt(rms / SIZE)
+const WORKER_CODE = /* js */ `
+'use strict';
 
-  if (rms < 0.01) return 0 // Too quiet
-
-  // Autocorrelation
-  let bestOffset = -1
-  let bestCorrelation = 0
-  let foundGoodCorrelation = false
-
-  for (let offset = minSamples; offset < maxSamples && offset < SIZE; offset++) {
-    let correlation = 0
-
-    for (let i = 0; i < SIZE - offset; i++) {
-      correlation += buffer[i] * buffer[i + offset]
-    }
-
-    correlation = correlation / (SIZE - offset)
-
-    if (correlation > 0.9) {
-      foundGoodCorrelation = true
-    }
-
-    if (correlation > bestCorrelation) {
-      bestCorrelation = correlation
-      bestOffset = offset
-    }
-  }
-
-  if (!foundGoodCorrelation || bestCorrelation < 0.5 || bestOffset === -1) {
-    return 0
-  }
-
-  // Parabolic interpolation for more precision
-  const prev = autoCorrelateAt(buffer, bestOffset - 1)
-  const curr = autoCorrelateAt(buffer, bestOffset)
-  const next = autoCorrelateAt(buffer, bestOffset + 1)
-
-  const shift = (prev - next) / (2 * (prev - 2 * curr + next))
-  const refinedOffset = bestOffset + shift
-
-  return sampleRate / refinedOffset
+function autoCorrelateAt(buffer, offset) {
+  if (offset < 0 || offset >= buffer.length) return 0;
+  var c = 0, SIZE = buffer.length;
+  for (var i = 0; i < SIZE - offset; i++) c += buffer[i] * buffer[i + offset];
+  return c / (SIZE - offset);
 }
 
-function autoCorrelateAt(buffer: Float32Array, offset: number): number {
-  if (offset < 0 || offset >= buffer.length) return 0
-  let correlation = 0
-  const SIZE = buffer.length
-  for (let i = 0; i < SIZE - offset; i++) {
-    correlation += buffer[i] * buffer[i + offset]
+function autoCorrelate(buffer, sampleRate, minFreq, maxFreq) {
+  var SIZE = buffer.length;
+  var maxSamples = Math.floor(sampleRate / minFreq);
+  var minSamples = Math.floor(sampleRate / maxFreq);
+
+  var rms = 0;
+  for (var i = 0; i < SIZE; i++) rms += buffer[i] * buffer[i];
+  rms = Math.sqrt(rms / SIZE);
+  if (rms < 0.01) return 0;
+
+  var bestOffset = -1, bestCorrelation = 0, foundGood = false;
+
+  for (var offset = minSamples; offset < maxSamples && offset < SIZE; offset++) {
+    var correlation = 0;
+    for (var j = 0; j < SIZE - offset; j++) correlation += buffer[j] * buffer[j + offset];
+    correlation /= (SIZE - offset);
+    if (correlation > 0.9) foundGood = true;
+    if (correlation > bestCorrelation) { bestCorrelation = correlation; bestOffset = offset; }
   }
-  return correlation / (SIZE - offset)
+
+  if (!foundGood || bestCorrelation < 0.5 || bestOffset === -1) return 0;
+
+  var prev = autoCorrelateAt(buffer, bestOffset - 1);
+  var curr = autoCorrelateAt(buffer, bestOffset);
+  var next = autoCorrelateAt(buffer, bestOffset + 1);
+  var shift = (prev - next) / (2 * (prev - 2 * curr + next));
+  return sampleRate / (bestOffset + shift);
 }
+
+self.onmessage = function(e) {
+  var d = e.data;
+  var freq = autoCorrelate(d.buffer, d.sampleRate, d.minFreq, d.maxFreq);
+  self.postMessage({ frequency: freq, id: d.id });
+};
+`
+
+let sharedWorker: Worker | null = null
+let workerRefCount = 0
+
+function getSharedWorker(): Worker {
+  if (!sharedWorker) {
+    const blob = new Blob([WORKER_CODE], { type: 'application/javascript' })
+    sharedWorker = new Worker(URL.createObjectURL(blob))
+  }
+  workerRefCount++
+  return sharedWorker
+}
+
+function releaseSharedWorker() {
+  workerRefCount--
+  if (workerRefCount <= 0 && sharedWorker) {
+    sharedWorker.terminate()
+    sharedWorker = null
+    workerRefCount = 0
+  }
+}
+
+// ── Constants ───────────────────────────────────────────────────────────────
+
+const PITCH_FRAME_INTERVAL = 80 // ~12fps
+const WARMUP_DELAY = 800 // ms — let MediaRecorder stabilize before starting pitch analysis
 
 const DEFAULT_PITCH: PitchData = {
   frequency: 0,
@@ -128,6 +133,8 @@ const DEFAULT_PITCH: PitchData = {
   volume: 0,
   isVoiced: false,
 }
+
+// ── Hook ────────────────────────────────────────────────────────────────────
 
 export function usePitchDetection(
   options: UsePitchDetectionOptions = {}
@@ -146,59 +153,21 @@ export function usePitchDetection(
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
   const animationFrameRef = useRef<number | null>(null)
   const previousFrequencyRef = useRef<number>(0)
-  // Reuse buffer across frames to avoid GC pressure
   const bufferRef = useRef<Float32Array<ArrayBuffer> | null>(null)
-  // Timestamp of last actual analysis (for throttling)
   const lastAnalysisRef = useRef<number>(0)
+  const workerRef = useRef<Worker | null>(null)
+  const pendingRef = useRef(false) // true while waiting for worker response
+  const msgIdRef = useRef(0)
+  const startTimeRef = useRef(0)
+  // Store volume from main thread so we can use it when worker responds
+  const lastVolumeRef = useRef(0)
 
-  const analyze = useCallback((timestamp: number) => {
-    if (!analyserRef.current) return
+  // Worker message handler — receives { frequency, id }
+  const handleWorkerMessage = useCallback((e: MessageEvent) => {
+    pendingRef.current = false
+    const { frequency } = e.data as { frequency: number; id: number }
+    const volume = lastVolumeRef.current
 
-    // Schedule next frame first (keeps loop alive even if we skip this frame)
-    animationFrameRef.current = requestAnimationFrame(analyze)
-
-    // Throttle: skip frame if not enough time has passed
-    const elapsed = timestamp - lastAnalysisRef.current
-    if (elapsed < PITCH_FRAME_INTERVAL) return
-    lastAnalysisRef.current = timestamp
-
-    const analyser = analyserRef.current
-    const bufferLength = analyser.fftSize
-
-    // Reuse Float32Array buffer
-    if (!bufferRef.current || bufferRef.current.length !== bufferLength) {
-      bufferRef.current = new Float32Array(bufferLength)
-    }
-    const buffer = bufferRef.current
-
-    analyser.getFloatTimeDomainData(buffer)
-
-    // Fast volume check — skip expensive autocorrelation if silent
-    let rms = 0
-    for (let i = 0; i < bufferLength; i++) {
-      rms += buffer[i] * buffer[i]
-    }
-    rms = Math.sqrt(rms / bufferLength)
-    const volume = Math.min(1, rms * 10)
-
-    if (rms < 0.01) {
-      // Silent — skip autocorrelation entirely, just update volume
-      if (previousFrequencyRef.current !== 0) {
-        previousFrequencyRef.current = 0
-        setPitchData({ frequency: 0, note: '-', cents: 0, volume, isVoiced: false })
-      }
-      return
-    }
-
-    // Detect pitch (expensive O(n²) autocorrelation)
-    const frequency = autoCorrelate(
-      buffer,
-      audioContextRef.current!.sampleRate,
-      minFrequency,
-      maxFrequency
-    )
-
-    // Apply smoothing
     const smoothedFrequency = frequency > 0
       ? previousFrequencyRef.current > 0
         ? previousFrequencyRef.current * smoothingFactor + frequency * (1 - smoothingFactor)
@@ -206,7 +175,6 @@ export function usePitchDetection(
       : 0
 
     previousFrequencyRef.current = smoothedFrequency
-
     const { note, cents } = frequencyToNote(smoothedFrequency)
 
     setPitchData({
@@ -216,28 +184,83 @@ export function usePitchDetection(
       volume,
       isVoiced: smoothedFrequency > 0 && volume > 0.05,
     })
-  }, [minFrequency, maxFrequency, smoothingFactor])
+  }, [smoothingFactor])
+
+  // rAF loop — only reads audio data + sends to worker (zero heavy computation)
+  const analyze = useCallback((timestamp: number) => {
+    if (!analyserRef.current) return
+    animationFrameRef.current = requestAnimationFrame(analyze)
+
+    // Warmup: skip first N ms to let MediaRecorder stabilize
+    if (timestamp - startTimeRef.current < WARMUP_DELAY) return
+
+    // Throttle to ~12fps
+    if (timestamp - lastAnalysisRef.current < PITCH_FRAME_INTERVAL) return
+    lastAnalysisRef.current = timestamp
+
+    // Don't send if worker is still processing previous frame
+    if (pendingRef.current) return
+
+    const analyser = analyserRef.current
+    const bufferLength = analyser.fftSize
+
+    if (!bufferRef.current || bufferRef.current.length !== bufferLength) {
+      bufferRef.current = new Float32Array(bufferLength)
+    }
+    const buffer = bufferRef.current
+    analyser.getFloatTimeDomainData(buffer)
+
+    // Fast RMS check on main thread (O(n), ~0.05ms for 2048 samples)
+    let rms = 0
+    for (let i = 0; i < bufferLength; i++) rms += buffer[i] * buffer[i]
+    rms = Math.sqrt(rms / bufferLength)
+    const volume = Math.min(1, rms * 10)
+    lastVolumeRef.current = volume
+
+    if (rms < 0.01) {
+      // Silent — no need to send to worker
+      if (previousFrequencyRef.current !== 0) {
+        previousFrequencyRef.current = 0
+        setPitchData({ frequency: 0, note: '-', cents: 0, volume, isVoiced: false })
+      }
+      return
+    }
+
+    // Send buffer copy to worker (structured clone = off main thread)
+    if (workerRef.current) {
+      pendingRef.current = true
+      const copy = new Float32Array(buffer)
+      workerRef.current.postMessage({
+        buffer: copy,
+        sampleRate: audioContextRef.current!.sampleRate,
+        minFreq: minFrequency,
+        maxFreq: maxFrequency,
+        id: ++msgIdRef.current,
+      }, [copy.buffer]) // Transfer buffer (zero-copy)
+    }
+  }, [minFrequency, maxFrequency])
 
   const startAnalysis = useCallback((stream: MediaStream) => {
     try {
-      // Create audio context
       const audioContext = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)()
       audioContextRef.current = audioContext
 
-      // Create analyser node
       const analyser = audioContext.createAnalyser()
       analyser.fftSize = 2048
       analyser.smoothingTimeConstant = 0.8
       analyserRef.current = analyser
 
-      // Connect stream to analyser
       const source = audioContext.createMediaStreamSource(stream)
       source.connect(analyser)
       sourceRef.current = source
 
+      // Spin up shared worker
+      const worker = getSharedWorker()
+      worker.onmessage = handleWorkerMessage
+      workerRef.current = worker
+
       setIsAnalyzing(true)
     } catch (err) {
-      // Clean up AudioContext if setup failed partway through
       if (audioContextRef.current) {
         audioContextRef.current.close()
         audioContextRef.current = null
@@ -246,7 +269,7 @@ export function usePitchDetection(
       sourceRef.current = null
       throw err
     }
-  }, [])
+  }, [handleWorkerMessage])
 
   const stopAnalysis = useCallback(() => {
     setIsAnalyzing(false)
@@ -266,21 +289,29 @@ export function usePitchDetection(
       audioContextRef.current = null
     }
 
+    if (workerRef.current) {
+      workerRef.current.onmessage = null
+      releaseSharedWorker()
+      workerRef.current = null
+    }
+
     analyserRef.current = null
     previousFrequencyRef.current = 0
     bufferRef.current = null
     lastAnalysisRef.current = 0
+    pendingRef.current = false
+    msgIdRef.current = 0
+    lastVolumeRef.current = 0
 
     setPitchData(DEFAULT_PITCH)
   }, [])
 
-  // Start analysis loop when isAnalyzing changes
   useEffect(() => {
     if (isAnalyzing) {
+      startTimeRef.current = performance.now()
       lastAnalysisRef.current = 0
       animationFrameRef.current = requestAnimationFrame(analyze)
     }
-
     return () => {
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current)
@@ -288,17 +319,9 @@ export function usePitchDetection(
     }
   }, [isAnalyzing, analyze])
 
-  // Cleanup on unmount
   useEffect(() => {
-    return () => {
-      stopAnalysis()
-    }
+    return () => { stopAnalysis() }
   }, [stopAnalysis])
 
-  return {
-    pitchData,
-    isAnalyzing,
-    startAnalysis,
-    stopAnalysis,
-  }
+  return { pitchData, isAnalyzing, startAnalysis, stopAnalysis }
 }

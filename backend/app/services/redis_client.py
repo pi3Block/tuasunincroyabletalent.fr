@@ -52,20 +52,31 @@ class RedisClient:
             return json.loads(data)
         return None
 
+    # Lua script for atomic JSON merge — runs entirely inside Redis (no race window)
+    _UPDATE_LUA = """
+    local key = KEYS[1]
+    local updates_json = ARGV[1]
+    local fallback_ttl = tonumber(ARGV[2])
+    local current = redis.call('GET', key)
+    if not current then return 0 end
+    local data = cjson.decode(current)
+    local updates = cjson.decode(updates_json)
+    for k, v in pairs(updates) do data[k] = v end
+    local ttl = redis.call('TTL', key)
+    if ttl < 1 then ttl = fallback_ttl end
+    redis.call('SETEX', key, ttl, cjson.encode(data))
+    return 1
+    """
+
     async def update_session(self, session_id: str, updates: dict[str, Any]) -> bool:
-        """Update existing session data, preserving the current TTL."""
+        """Atomically merge updates into session JSON, preserving TTL."""
         client = await self.get_client()
         key = f"session:{session_id}"
-        current = await self.get_session(session_id)
-        if current is None:
-            return False
-        # Preserve remaining TTL (avoid resetting 3h → 1h on every update)
-        remaining_ttl = await client.ttl(key)
-        if remaining_ttl < 0:
-            remaining_ttl = 3600  # fallback 1h if no TTL set
-        current.update(updates)
-        await client.setex(key, remaining_ttl, json.dumps(current))
-        return True
+        result = await client.eval(
+            self._UPDATE_LUA, 1, key,
+            json.dumps(updates, ensure_ascii=False), 3600,
+        )
+        return result == 1
 
     async def delete_session(self, session_id: str) -> None:
         """Delete session data."""

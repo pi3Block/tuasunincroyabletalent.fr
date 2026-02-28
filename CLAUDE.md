@@ -466,6 +466,12 @@ NEXT_PUBLIC_API_URL=https://api.kiaraoke.fr
 
 Tables creees via Alembic migrations (`alembic upgrade head`), fallback `create_all()` si Alembic echoue.
 
+## Git / Deploy Policy
+
+- **NEVER** run git add, git commit, git push, or any git write command. The user handles all git operations and deployments himself.
+- **NEVER** waste tokens on git status, git diff, git log or other git read commands unless explicitly asked.
+- When done coding, just say what files were changed and stop. No commit, no push, no deploy steps.
+
 ## Critical Don'ts
 
 - **Never** store audio files permanently (clean after session)

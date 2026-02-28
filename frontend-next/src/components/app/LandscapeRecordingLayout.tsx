@@ -90,6 +90,7 @@ export const LandscapeRecordingLayout = memo(function LandscapeRecordingLayout({
                 onStateChange={onStateChange}
                 onControlsReady={onControlsReady}
                 onDurationChange={onDurationChange}
+                disableInteraction={isRecording}
               />
             </div>
           ) : (

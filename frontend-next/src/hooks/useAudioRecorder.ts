@@ -84,11 +84,16 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}): UseAudi
       pausedDurationRef.current = 0
 
       // Request microphone access
+      // Disable all browser audio processing — echo cancellation is designed
+      // for video calls and aggressively gates the mic signal when it detects
+      // the music playing from speakers, causing the voice to sound choppy.
+      // Noise suppression can also gate quiet singing as "noise".
+      // The backend (Demucs) handles vocal separation properly.
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
         },
       })
 

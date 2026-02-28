@@ -117,7 +117,7 @@ def _upload_pair(storage, first: tuple[Path, str], second: tuple[Path, str]) -> 
     with ThreadPoolExecutor(max_workers=2) as pool:
         f1 = pool.submit(_safe_upload, storage, first[0], first[1])
         f2 = pool.submit(_safe_upload, storage, second[0], second[1])
-        return f1.result(), f2.result()
+        return f1.result(timeout=120), f2.result(timeout=120)
 
 
 def _temp_dir(name: str) -> Path:
@@ -128,6 +128,9 @@ def _temp_dir(name: str) -> Path:
     return d
 
 
+_ollama_unload_ok = True  # Tracks whether Ollama unload succeeded (for Demucs OOM fallback)
+
+
 def _unload_ollama_for_demucs():
     """Unload Ollama Heavy model from GPU 1 to free VRAM for Demucs.
 
@@ -136,7 +139,9 @@ def _unload_ollama_for_demucs():
     Ollama reloads automatically on next request (~2-3s cold start).
 
     Non-fatal: if Ollama is unreachable or already unloaded, Demucs proceeds anyway.
+    Sets _ollama_unload_ok = False on failure so Demucs can adapt (e.g. reduce batch).
     """
+    global _ollama_unload_ok
     import httpx
 
     try:
@@ -147,10 +152,13 @@ def _unload_ollama_for_demucs():
         )
         if resp.status_code == 200:
             logger.info("Ollama Heavy unloaded from GPU 1 (keep_alive:0)")
+            _ollama_unload_ok = True
         else:
-            logger.warning("Ollama Heavy unload returned %d", resp.status_code)
+            logger.warning("Ollama Heavy unload returned %d — Demucs may OOM!", resp.status_code)
+            _ollama_unload_ok = False
     except Exception as e:
-        logger.info("Ollama Heavy not reachable (may be idle): %s", e)
+        logger.warning("Ollama Heavy not reachable: %s — Demucs may OOM if Ollama is loaded!", e)
+        _ollama_unload_ok = False
 
 
 def _resolve_audio(url_or_path: str, dest: Path) -> str:
@@ -322,8 +330,8 @@ def analyze_performance(
                 import torch
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
-            except Exception:
-                pass
+            except Exception as cuda_err:
+                logger.warning("CUDA empty_cache failed: %s", cuda_err)
 
             user_vocals_local = Path(user_separation["vocals_path"])
             user_instru_local = Path(user_separation["instrumentals_path"])
@@ -447,11 +455,23 @@ def analyze_performance(
                 fut_crepe_user = pool.submit(_crepe_user)
                 fut_whisper    = pool.submit(_whisper_lyrics)
             # pool.__exit__ (shutdown wait=True) attend la fin des 4 threads.
-            # Appeler .result() pour propager les exceptions éventuelles.
-            ref_vocals_path, ref_instru_path = fut_ref.result()
-            user_pitch = fut_crepe_user.result()
-            transcription, lyrics_result = fut_whisper.result()
-            fut_upload.result()  # propage toute exception du Thread A
+
+            # Critical threads — pipeline cannot continue without these (5 min timeout)
+            ref_vocals_path, ref_instru_path = fut_ref.result(timeout=300)
+            user_pitch = fut_crepe_user.result(timeout=300)
+
+            # Non-critical threads — degrade gracefully instead of crashing
+            try:
+                transcription, lyrics_result = fut_whisper.result(timeout=120)
+            except Exception as whisper_err:
+                logger.error("Whisper/Lyrics thread failed, using fallback: %s", whisper_err)
+                transcription = {"text": "", "words": []}
+                lyrics_result = {"text": "", "source": "none", "status": "error"}
+
+            try:
+                fut_upload.result(timeout=120)
+            except Exception as upload_err:
+                logger.error("Upload thread failed (non-fatal): %s", upload_err)
 
             # ========================================================
             # PHASE 3 — 2 threads parallèles après Phase 2 :
@@ -489,7 +509,15 @@ def analyze_performance(
                     logger.info("Pitch cache HIT for reference %s — skipping CREPE", youtube_id)
                     cached_npz = ref_temp / "pitch_data_cached.npz"
                     storage.download_to_file(ref_pitch_cache_key, cached_npz)
-                    return {"pitch_path": str(cached_npz), "stats": {}, "status": "cached"}
+                    # Validate NPZ integrity — re-run CREPE if corrupt
+                    try:
+                        import numpy as _np
+                        with _np.load(str(cached_npz)) as npz:
+                            if "frequency" not in npz or "time" not in npz:
+                                raise ValueError("Missing keys in cached NPZ")
+                        return {"pitch_path": str(cached_npz), "stats": {}, "status": "cached"}
+                    except Exception as npz_err:
+                        logger.warning("Cached pitch NPZ invalid for %s, re-running CREPE: %s", youtube_id, npz_err)
                 rp = do_extract_pitch(
                     str(ref_vocals_path), f"{session_id}_ref",
                     fast_mode=True, device=CREPE_DEVICE,
@@ -506,8 +534,8 @@ def analyze_performance(
             with ThreadPoolExecutor(max_workers=2) as pool:
                 fut_sync      = pool.submit(_sync)
                 fut_crepe_ref = pool.submit(_crepe_ref)
-            sync_result = fut_sync.result()
-            ref_pitch   = fut_crepe_ref.result()
+            sync_result = fut_sync.result(timeout=60)
+            ref_pitch   = fut_crepe_ref.result(timeout=300)
 
             auto_offset = sync_result["offset_seconds"]
             sync_confidence = sync_result["confidence"]
@@ -546,6 +574,23 @@ def analyze_performance(
             update_progress(self, "completed", 100, "Verdict rendu !")
 
             flush_traces()
+
+    except Exception as exc:
+        # Pipeline failed — update Redis session so frontend stops waiting
+        logger.error("Pipeline FAILED for session %s: %s", session_id, exc, exc_info=True)
+        try:
+            import redis as _redis
+            _r = _redis.from_url(REDIS_URL, socket_timeout=2)
+            raw = _r.get(f"session:{session_id}")
+            if raw:
+                session_data = json.loads(raw)
+                session_data["status"] = "error"
+                session_data["error"] = f"Analyse échouée : {type(exc).__name__}"
+                _r.setex(f"session:{session_id}", 3600, json.dumps(session_data, ensure_ascii=False))
+                logger.info("Session %s marked as error in Redis", session_id)
+        except Exception as redis_err:
+            logger.warning("Failed to update session error state: %s", redis_err)
+        raise  # Re-raise so Celery marks the task as FAILURE
 
     finally:
         for temp_path in [session_temp, user_temp, ref_temp]:
@@ -662,8 +707,8 @@ def prepare_reference(
                 import torch
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
-            except Exception:
-                pass
+            except Exception as cuda_err:
+                logger.warning("CUDA empty_cache failed: %s", cuda_err)
 
             vocals_local = Path(result["vocals_path"])
             instrumentals_local = Path(result["instrumentals_path"])
@@ -764,8 +809,8 @@ def prepare_reference(
                 import torch
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
-            except Exception:
-                pass
+            except Exception as cuda_err:
+                logger.warning("CUDA empty_cache failed: %s", cuda_err)
 
             pitch_path = pitch_result.get("pitch_path", "")
             # Cache pitch for future sessions with same video — non-fatal

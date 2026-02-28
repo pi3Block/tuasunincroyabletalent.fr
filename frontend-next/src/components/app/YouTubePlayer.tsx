@@ -22,6 +22,8 @@ interface YouTubePlayerProps {
   onDurationChange?: (duration: number) => void
   /** Called when the player is ready with imperative controls */
   onControlsReady?: (controls: YouTubePlayerControls) => void
+  /** Block mouse interactions on the iframe (e.g. during recording to avoid stutter) */
+  disableInteraction?: boolean
 }
 
 export function YouTubePlayer({
@@ -32,6 +34,7 @@ export function YouTubePlayer({
   onTimeUpdate,
   onDurationChange,
   onControlsReady,
+  disableInteraction = false,
 }: YouTubePlayerProps) {
   const { containerRef, isReady, play, pause, seekTo, mute, unMute, setVolume, getVolume, getCurrentTime } = useYouTubePlayer({
     videoId: video.id,
@@ -59,6 +62,10 @@ export function YouTubePlayer({
           ref={containerRef}
           className="absolute inset-0 w-full h-full"
         />
+        {/* Transparent overlay blocks iframe hover/click during recording */}
+        {disableInteraction && (
+          <div className="absolute inset-0 z-10 cursor-default" />
+        )}
         {!isReady && (
           <div className="absolute inset-0 flex items-center justify-center bg-gray-900">
             <div className="animate-spin rounded-full h-8 w-8 border-2 border-white border-t-transparent" />
