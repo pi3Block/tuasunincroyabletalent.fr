@@ -340,6 +340,82 @@ async def get_flow_envelope(youtube_video_id: str):
     except Exception:
         pass
 
+    # Tier 3: On-demand generation — download vocals.wav from cache, compute envelope
+    # CPU-bound numpy work runs in a thread to avoid blocking the event loop.
+    # First request is slow (~2-3s for download + compute), subsequent ones hit Redis.
+    vocals_path = f"cache/{youtube_video_id}/vocals.wav"
+    try:
+        if await storage_client.exists(vocals_path):
+            import asyncio
+
+            raw_wav = await storage_client.download(vocals_path)
+
+            def _compute_envelope(raw_wav_bytes: bytes) -> dict:
+                import io
+                import numpy as np
+                from scipy.io import wavfile
+
+                sr, wav_data = wavfile.read(io.BytesIO(raw_wav_bytes))
+
+                # Convert to float mono
+                if wav_data.dtype != np.float32 and wav_data.dtype != np.float64:
+                    wav_data = wav_data.astype(np.float32) / np.iinfo(wav_data.dtype).max
+                if wav_data.ndim > 1:
+                    wav_data = wav_data.mean(axis=1)
+
+                # Downsample to 8kHz via simple decimation (good enough for envelope)
+                target_sr = 8000
+                if sr != target_sr:
+                    factor = sr // target_sr
+                    if factor > 1:
+                        wav_data = wav_data[::factor]
+                        sr = sr // factor
+
+                # RMS envelope (50ms windows)
+                window_size = max(1, int(sr * 0.05))
+                kernel = np.ones(window_size) / window_size
+                envelope = np.convolve(np.abs(wav_data), kernel, mode="same")
+
+                # Downsample to one value per window
+                downsampled = envelope[::window_size]
+                peak = downsampled.max()
+                if peak > 1e-8:
+                    downsampled = downsampled / peak
+
+                sample_rate_hz = sr // window_size
+                duration_seconds = round(len(wav_data) / sr, 2)
+                values = [round(float(v), 4) for v in downsampled]
+
+                return {
+                    "sample_rate_hz": sample_rate_hz,
+                    "values": values,
+                    "duration_seconds": duration_seconds,
+                }
+
+            envelope_data = await asyncio.to_thread(_compute_envelope, raw_wav)
+
+            # Upload to storage + Redis for future requests (non-fatal)
+            try:
+                json_bytes = json.dumps(envelope_data, separators=(",", ":")).encode("utf-8")
+                await storage_client.upload(
+                    json_bytes,
+                    f"cache/{youtube_video_id}/flow_envelope.json",
+                    "application/json",
+                )
+                client = await redis_client.get_client()
+                await client.setex(redis_key, 3600, json_bytes.decode("utf-8"))
+            except Exception:
+                pass
+
+            return FlowEnvelopeResponse(
+                status="found",
+                sample_rate_hz=envelope_data["sample_rate_hz"],
+                values=envelope_data["values"],
+                duration_seconds=envelope_data["duration_seconds"],
+            )
+    except Exception:
+        pass
+
     return FlowEnvelopeResponse(status="not_found")
 
 

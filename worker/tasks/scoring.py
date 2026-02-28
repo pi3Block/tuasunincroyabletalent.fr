@@ -528,7 +528,8 @@ CONTEXTE:
 - Points forts: {', '.join(strengths) if strengths else 'À développer'}
 
 TÂCHE: Écris UN commentaire de 2-3 phrases pour le candidat. Sois fidèle à ton personnage.
-Réponds UNIQUEMENT avec le commentaire, sans préfixe."""
+Réponds UNIQUEMENT avec le commentaire, sans préfixe, sans balises.
+/no_think"""
 
 
 def _get_vote(persona_name: str, overall_score: int) -> str:
@@ -581,7 +582,7 @@ async def _litellm_call(
                 json={
                     "model": model,
                     "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 300,
+                    "max_tokens": 500,
                     "temperature": 0.8,
                 },
                 timeout=15.0,
@@ -590,7 +591,11 @@ async def _litellm_call(
             data = response.json()
             comment = data["choices"][0]["message"]["content"].strip()
             # Strip Qwen3 thinking blocks (<think>...</think>)
-            comment = re.sub(r"<think>[\s\S]*?</think>", "", comment).strip()
+            # Also handle unclosed <think> (truncated by max_tokens)
+            comment = re.sub(
+                r"<think>[\s\S]*?</think>", "", comment,
+            ).strip()
+            comment = re.sub(r"<think>[\s\S]*", "", comment).strip()
             actual_model = data.get("model", model)
             if not comment:
                 raise ValueError("Empty response from LiteLLM")
