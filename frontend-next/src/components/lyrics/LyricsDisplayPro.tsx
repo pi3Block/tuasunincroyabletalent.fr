@@ -32,6 +32,8 @@ import { cn } from '@/lib/utils'
 import type { LyricLine as LyricLineType, LyricWord } from '@/types/lyrics'
 import { OFFSET_CONFIG } from '@/types/lyrics'
 import type { WordLine } from '@/api/client'
+import { usePrefersReducedMotion } from '@/hooks/usePrefersReducedMotion'
+import { useOrientation } from '@/hooks/useOrientation'
 
 // Local props type to avoid type conflicts with SyncedLyricLine
 interface LyricsDisplayProProps {
@@ -46,7 +48,7 @@ interface LyricsDisplayProProps {
   /** Whether audio is playing */
   isPlaying?: boolean
   /** Display mode */
-  displayMode?: 'line' | 'word' | 'karaoke' | 'compact'
+  displayMode?: 'line' | 'word' | 'karaoke' | 'compact' | 'teleprompter'
   /** Manual offset in seconds */
   offset?: number
   /** Callback when offset changes */
@@ -287,7 +289,9 @@ function parseLyrics(
     }))
   }
 
-  // Fallback: Plain text parsing
+  // Fallback: Plain text parsing — no timestamps available.
+  // startTime: Infinity ensures binarySearchLineIndex always returns -1,
+  // so no line is highlighted as "active" (static display, no sync).
   if (!lyrics) return []
 
   return lyrics
@@ -297,7 +301,7 @@ function parseLyrics(
     .map((text, index) => ({
       id: `line-${index}`,
       text,
-      startTime: 0, // Unknown timing
+      startTime: Infinity,
       endTime: undefined,
       words: undefined,
     }))
@@ -341,6 +345,8 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
   scrollAreaClassName,
 }: LyricsDisplayProProps) {
   const containerRef = useRef<HTMLDivElement>(null)
+  const reducedMotion = usePrefersReducedMotion()
+  const { useLandscapeMobileLayout, width } = useOrientation()
 
   // Parse lyrics into structured format (wordLines take priority for karaoke mode)
   const lines = useMemo(
@@ -356,12 +362,15 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
     [lines]
   )
 
-  // Auto-switch display mode to karaoke when word data is available
-  const effectiveDisplayMode = hasWordData && displayMode === 'line' ? 'karaoke' : displayMode
+  // Effective display mode: teleprompter overrides auto-switch,
+  // otherwise auto-switch to karaoke when word data is available
+  const effectiveDisplayMode = displayMode === 'teleprompter'
+    ? 'teleprompter'
+    : hasWordData && displayMode === 'line' ? 'karaoke' : displayMode
 
-  // Determine if we have timestamps
+  // Determine if we have timestamps (Infinity = plain text fallback, no sync)
   const hasSyncedTimestamps = useMemo(
-    () => lines.length > 0 && lines[0].startTime > 0,
+    () => lines.length > 0 && lines[0].startTime > 0 && isFinite(lines[0].startTime),
     [lines]
   )
 
@@ -380,6 +389,18 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
     enableWordTracking: effectiveDisplayMode === 'karaoke' || effectiveDisplayMode === 'word',
   })
 
+  // Responsive scroll position:
+  // - Mobile landscape: 40% (half screen, center more)
+  // - Desktop (>=1024px): 35% (more space, comfortable reading)
+  // - Teleprompter: 45% (near center, pro feel)
+  // - Default (mobile portrait): 30%
+  const scrollPosition = useMemo(() => {
+    if (effectiveDisplayMode === 'teleprompter') return 0.45
+    if (useLandscapeMobileLayout) return 0.40
+    if (width >= 1024) return 0.35
+    return 0.30
+  }, [effectiveDisplayMode, useLandscapeMobileLayout, width])
+
   // Use scroll hook for smart auto-scrolling
   // Scrolls current line to 'start' position - CSS padding handles vertical offset
   const { currentLineRef, scrollTargetRef, scrollTargetIndex, enableAutoScroll, autoScrollEnabled } = useLyricsScroll({
@@ -388,6 +409,8 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
     isPlaying,
     containerRef: containerRef as React.RefObject<HTMLElement | null>,
     block: 'start',
+    scrollPosition,
+    reducedMotion,
   })
 
   // Pre-roll: time remaining until the next line activates (null if no next line)
@@ -507,7 +530,7 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
         <TimelineDebug
           currentTime={currentTime}
           offset={offset}
-          firstLineStartTime={lines[0]?.startTime ?? 0}
+          firstLineStartTime={isFinite(lines[0]?.startTime ?? 0) ? (lines[0]?.startTime ?? 0) : 0}
           currentLineStartTime={lines[currentLineIndex]?.startTime ?? 0}
           currentLineIndex={currentLineIndex}
           totalLines={lines.length}
@@ -608,6 +631,7 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
                   currentWordIndex={currentWordIndex}
                   wordProgress={wordProgress}
                   isPreRoll={lineIsPreRoll}
+                  reducedMotion={reducedMotion}
                   onClick={() => handleLineTap(index)}
                 />
                 {/* Interlude dots: shown after the active line during gaps >5s */}
@@ -728,7 +752,7 @@ interface LyricsDisplayFullscreenProps {
   /** Whether playing */
   isPlaying: boolean
   /** Display mode */
-  displayMode?: 'line' | 'word' | 'karaoke' | 'compact'
+  displayMode?: 'line' | 'word' | 'karaoke' | 'compact' | 'teleprompter'
   /** Offset */
   offset?: number
   /** Offset change handler */

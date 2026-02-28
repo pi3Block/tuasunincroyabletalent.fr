@@ -3,8 +3,8 @@
 > **Objectif** : Rendre la lecture des paroles absolument fluide pour le chanteur, que ce soit en mode karaoke (word-level) ou en mode lyrics (line-level).
 >
 > **Date** : 2026-02-27
-> **Derniere revision** : 2026-02-27 (v2 — audit code + corrections)
-> **Statut** : Recherche & Analyse terminee — En attente d'implementation
+> **Derniere revision** : 2026-02-28 (v3 — implementation complete)
+> **Statut** : TERMINE — Toutes les phases implementees (sauf #14 syllable-level sync)
 
 ---
 
@@ -29,14 +29,16 @@
 
 ```
 LyricsDisplayPro (orchestrateur)
-├── useLyricsSync()         → Sync ligne/mot (binary search O(log n))
-├── useLyricsScroll()       → Auto-scroll + detection user scroll
-├── useWordTimestamps()     → Lifecycle word timestamps (Whisper/Celery)
-├── LyricLine              → Ligne individuelle avec animations
-│   └── KaraokeWordGroup   → Groupe de mots karaoke
-│       └── KaraokeWord    → Mot individuel (couleur active/past/inactive)
-├── LyricsControls         → UI offset adjustment
-└── TimelineDebug          → Debug visuel (optionnel)
+├── useLyricsSync()              → Sync ligne/mot (binary search O(log n))
+├── useLyricsScroll()            → Spring auto-scroll + detection user scroll
+├── usePrefersReducedMotion()    → Detecte prefers-reduced-motion systeme
+├── useOrientation()             → Responsive scroll position (mobile/desktop/landscape)
+├── useWordTimestamps()          → Lifecycle word timestamps (Whisper/Celery)
+├── LyricLine                    → Ligne : opacity, scale, blur, glow, pre-roll, teleprompter
+│   └── KaraokeWordGroup         → Groupe de mots karaoke
+│       └── KaraokeWord          → Mot : clip-path fill progressif (GPU Tier S)
+├── LyricsControls               → UI offset adjustment
+└── TimelineDebug                → Debug visuel (optionnel)
 ```
 
 ### Fichiers concernes
@@ -45,13 +47,14 @@ LyricsDisplayPro (orchestrateur)
 |---------|------|
 | `src/components/lyrics/LyricsDisplayPro.tsx` | Orchestrateur principal, parsing 3-tiers, virtualisation, tap-to-sync |
 | `src/components/lyrics/LyricLine.tsx` | Ligne : opacity, scale, text size, glow, word rendering |
-| `src/components/lyrics/KaraokeWord.tsx` | Mot : couleur (active=pink, past=white, inactive=gray) + KaraokeWordGroup |
+| `src/components/lyrics/KaraokeWord.tsx` | Mot : clip-path fill progressif (active=primary, past=foreground, inactive=muted) + KaraokeWordGroup |
 | `src/components/lyrics/LyricsControls.tsx` | UI : offset +-0.5s, quick offset +-5s/30s, manual sync |
 | `src/components/lyrics/TimelineDebug.tsx` | Debug : video time, lyrics time, offset, ideal offset |
 | `src/hooks/useLyricsSync.ts` | Binary search ligne, word tracking avec hysteresis 80ms, EMA smoothing |
 | `src/hooks/useLyricsScroll.ts` | Auto-scroll 30% from top, user scroll detection, 3s re-enable |
 | `src/hooks/useWordTimestamps.ts` | Fetch/generate word timestamps lifecycle (Celery polling) |
-| `src/types/lyrics.ts` | Types + config animation (DEFAULT_ANIMATION_CONFIG, PERFORMANCE_CONFIG) |
+| `src/types/lyrics.ts` | Types + config animation (DEFAULT_ANIMATION_CONFIG, PERFORMANCE_CONFIG, OFFSET_CONFIG) |
+| `src/hooks/usePrefersReducedMotion.ts` | Hook a11y : detecte prefers-reduced-motion systeme |
 | `src/stores/sessionStore.ts` | State lyrics : lines, syncType, offset, playbackTime |
 | `src/app/globals.css` | Animations karaoke (pulse-subtle, word-bounce, line-glow, karaoke-fill) |
 
@@ -73,9 +76,10 @@ Priorite 4 (Dernier): texte brut              → split par \n, pas de timing
 **Tracking de mot** :
 - Recherche lineaire O(n) dans la ligne active
 - **Forward-only** : les mots ne reculent jamais (protection contre jitter Whisper)
-- **Cap +1** : avancement maximum de 1 mot par cycle de rendu
-- **Hysteresis 80ms** : changement de mot confirme seulement apres 80ms stable
+- **Multi-word jump** : autorise si `timeMs > currentWord.endTimeMs` (corrige stutter chansons rapides)
+- **Hysteresis adaptative** : `min(0.15 * avgWordDuration, 150ms)` au lieu de 80ms fixe
 - **EMA smoothing** : `PROGRESS_SMOOTHING = 0.3` → 70% poids sur valeur precedente
+- **Seek detection** : si `abs(adjustedTime - prevAdjustedTime) > 1s`, saut direct au bon mot (bypass forward-only)
 
 **Calcul du progress** :
 ```typescript
@@ -83,19 +87,21 @@ wordProgress = (currentTime - wordStart) / (wordEnd - wordStart)  // 0 → 1
 smoothed = 0.3 * rawProgress + 0.7 * previousSmoothed              // EMA
 ```
 
-**Probleme de purete** : les refs (`prevWordIndexRef`, `smoothedProgressRef`, etc.) sont mutes **a l'interieur de `useMemo`** (lignes 274-335). Cela viole le contrat de purete de React — en Strict Mode (dev), `useMemo` est appele 2x, causant des doubles mutations. Fonctionne en production mais est une bombe a retardement.
+**Purete React** : Les refs sont mutees dans `useMemo` mais protegees par des **idempotency guards** (`wordGuardTime`, `progressGuardTime`) — en Strict Mode, la double invocation retourne le resultat cache sans re-muter.
 
 ### Comportement du scroll (useLyricsScroll)
 
-- **Position cible** : ligne active a 30% du haut du viewport
-- **Methode** : `scrollTo({ top: target, behavior: 'smooth' })` → delegue au navigateur
-- **Debounce** : 100ms entre les commandes de scroll
+- **Position cible** : responsive — 30% mobile portrait, 35% desktop, 40% landscape, 45% teleprompter
+- **Methode** : Spring physics custom (rAF + `performance.now()` delta)
+  - Config : `stiffness=120, damping=26, mass=1`
+  - Interruptible : carry-over velocity sur nouveau scroll
+  - Fallback `prefers-reduced-motion` : `scrollTo({ behavior: 'smooth' })` natif
+- **Debounce** : 50ms entre les commandes de scroll
 - **Scroll programmatique** : cible correctement le viewport Radix via `container.querySelector('[data-radix-scroll-area-viewport]')`
-- **Detection user scroll** : event listener `scroll` attache au **conteneur externe** (pas au viewport Radix)
+- **Detection user scroll** : event listener `scroll` attache au **viewport Radix** (corrige — `scroll` ne bubble pas)
+- **Fenetre programmatique** : 500ms (evite les faux positifs sur chansons rapides)
 - **Re-activation** : 3 secondes apres le dernier scroll utilisateur
 - **Padding** : 30% top + 70% bottom pour permettre au scroll d'atteindre la bonne position
-
-> **BUG CRITIQUE** : L'evenement `scroll` ne bubble pas. Le listener est sur le conteneur externe, mais le scroll reel se fait dans le viewport Radix interne (`[data-radix-scroll-area-viewport]`). La detection de scroll utilisateur est donc **probablement cassee**, ce qui peut desactiver l'auto-scroll de maniere erratique.
 
 ### Rendu des lignes (LyricLine)
 
@@ -127,46 +133,37 @@ Next   → text-lg sm:text-xl md:text-xl lg:text-2xl font-semibold
 Others → text-base md:text-lg lg:text-xl
 ```
 
-**Glow** : **Deux effets simultanes** sur la ligne active :
-1. `textShadow` ambre/gold (`rgba(251, 191, 36, 0.6)`, 20px) via `containerStyle`
-2. `drop-shadow-[0_0_8px_rgba(255,255,255,0.4)]` blanc via les classes CSS `textClasses`
+**Glow** : Un seul effet sur la ligne active — `textShadow` vert theme (`rgba(34, 197, 94, 0.6)`, 20px).
+Pre-roll glow (0.3 opacity) sur la prochaine ligne quand <2s de l'activation.
+Desactive en mode `prefers-reduced-motion` et teleprompter.
 
-Les deux effets se superposent, creant un halo double (ambre + blanc) non intentionnel.
+**Transition** : `transition-[transform,opacity,filter] duration-300 ease-out` — uniquement proprietes compositor.
+Mode teleprompter : `transition-opacity duration-300`.
+Mode `prefers-reduced-motion` : `transition-none`.
 
-**Transition** : `transition-all duration-300 ease-out` — anime **toutes** les proprietes CSS, y compris `color`, `font-size`, `text-shadow` qui declenchent des repaints main thread. Devrait etre `transition-[transform,opacity] duration-300`.
-
-**will-change** : `will-change-transform` applique sur **toutes** les lignes rendues (~200), pas seulement ±10 autour de l'active. Surconsommation memoire GPU.
+**will-change** : Dynamique via `containerStyle` — `distance <= 10 ? 'transform, opacity, filter' : 'auto'`.
 
 ### Rendu des mots (KaraokeWord)
 
-**Couleurs** :
+**Couleurs** (theme-aware via tokens CSS) :
 ```
-Active   → #f472b6 (pink/magenta) + font-bold
-Past     → #ffffff (white) + font-semibold
-Inactive → #9ca3af (gray) + font-normal
+Active   → text-primary (clip-path fill progressif) + font-bold
+Past     → text-foreground + font-semibold
+Inactive → text-muted-foreground + font-normal
 ```
 
-**Transition** : `transition-colors duration-75 ease-out`
+**Fill progressif** : `clip-path: inset(0 X% 0 0)` sur overlay (GPU Tier S)
+- 2 DOM nodes uniquement sur le mot actif (base muted + overlay primary)
+- 1 DOM node pour past et inactive
+- `willChange: 'clip-path'` sur l'overlay actif
+- Fallback `prefers-reduced-motion` : couleur instantanee (1 seul node, text-primary)
 
-**Progress** : parametre `progress` passe mais **JAMAIS UTILISE** (void _progress)
-- Le gradient fill progressif etait prevu mais abandonne
-- Commentaire dans le code (ligne 60) : *"We avoid background-clip:text as it has rendering issues"*
-- Actuellement : changement de couleur instantane (pink → white), pas de remplissage graduel
+**Historique** : L'approche `background-clip: text` a ete tentee puis abandonnee
+(incompatible `text-shadow`, `text-fill-color: transparent`). Remplacee par `clip-path: inset()`.
 
-### Animations CSS (globals.css) — DEAD CODE
+### Animations CSS (globals.css)
 
-```css
-/* Definis mais JAMAIS appliques a aucun composant */
-@keyframes pulse-subtle   { ... }  /* scale 1.05→1.08 + green glow */
-@keyframes word-bounce    { ... }  /* translateY(-3px) + scale(1.02) */
-@keyframes line-glow      { ... }  /* green text-shadow pulse */
-
-.karaoke-fill::after {              /* Gradient fill via CSS custom property */
-  content: attr(data-text);         /* Duplique le texte — probleme accessibilite (double lecture screen reader) */
-  width: var(--fill-progress, 0%);  /* JAMAIS instancie dans le JSX */
-  position: absolute;               /* Necessite parent relative + inline-block */
-}
-```
+Dead code nettoye : `pulse-subtle`, `word-bounce`, `line-glow`, `karaoke-fill` supprimes.
 
 ### Ce qui fonctionne bien
 
@@ -175,9 +172,22 @@ Inactive → #9ca3af (gray) + font-normal
 - Memoisation complete (React.memo, useMemo, useCallback)
 - 3-tiers de donnees avec merge intelligent
 - Tap-to-sync (clic sur ligne recalcule offset)
-- Forward-only word tracking (protection jitter Whisper)
+- Forward-only word tracking (protection jitter Whisper) + multi-word jump si past endTime
+- Seek detection (>1s) : saut direct au bon mot
+- Hysteresis adaptative (proportionnelle a la duree moyenne des mots)
 - Granular Zustand selectors (pas de re-render cascade)
-- Scroll programmatique cible correctement le viewport Radix (`querySelector('[data-radix-scroll-area-viewport]')`)
+- Scroll programmatique cible correctement le viewport Radix
+- Spring scroll physics (stiffness=120, damping=26, mass=1) — interruptible, velocity carry-over
+- Blur depth-of-field progressif par distance (will-change dynamique ±10 lignes)
+- Gradient fill clip-path: inset() GPU Tier S (2 DOM nodes actif, 1 sinon)
+- Pre-roll glow (2s avant activation), interlude dots (gap >5s)
+- Couleurs 100% theme-aware (tokens CSS, dark/light mode)
+- Scroll position responsive (30% mobile, 35% desktop, 40% landscape, 45% teleprompter)
+- Mode teleprompeur (texte uniforme, pas scale/blur/glow, line-level only)
+- prefers-reduced-motion (disable spring, blur, clip-path, glow)
+- Idempotency guards pour React Strict Mode (double-invocation safe)
+- Auto-scroll indicator ("Reprendre le defilement")
+- Gestion instrumentaux (retourne -1 pour gaps >2s)
 
 ---
 
@@ -758,100 +768,55 @@ const containerStyle = useMemo(() => {
 
 ## 9. Plan d'action
 
-### Phase 0 — Bugfixes critiques (prerequis)
+### Phase 0 — Bugfixes critiques : COMPLETE
 
-**Objectif** : Corriger les bugs qui rendent le systeme instable AVANT d'ajouter des features.
+| # | Fix | Statut | Implementation |
+|---|-----|--------|----------------|
+| 0a | Scroll listener sur viewport Radix | FAIT | `useLyricsScroll.ts:124` — `querySelector('[data-radix-scroll-area-viewport]')` |
+| 0b | Mutations hors useMemo (Strict Mode) | FAIT | `useLyricsSync.ts:244-258` — Idempotency guards |
+| 0c | Polling nettoye au changement de track | FAIT | `useWordTimestamps.ts:295-306` — cleanup dans useEffect des IDs |
+| 0d | `transition-[transform,opacity,filter]` | FAIT | `LyricLine.tsx:214` |
+| 0e | will-change dynamique ±10 lignes | FAIT | `LyricLine.tsx:131` — `distance <= 10 ? 'transform, opacity, filter' : 'auto'` |
+| 0f | Double glow supprime | FAIT | Un seul glow vert theme dans containerStyle |
 
-```
-0a. Fix scroll listener target (useLyricsScroll)
-    - Attacher le listener `scroll` sur le viewport Radix
-    - querySelector('[data-radix-scroll-area-viewport]') dans le useEffect
-    - Tester : scroller manuellement → l'auto-scroll doit se desactiver
-    - Tester : attendre 3s → l'auto-scroll doit se re-activer
+### Phase 1 — Le "Wow" : COMPLETE
 
-0b. Extraire mutations hors de useMemo (useLyricsSync)
-    - Deplacer prevWordIndexRef/wordIndexChangeTimeRef/smoothedProgressRef
-      dans un useEffect synchronise avec les deps du memo
-    - OU utiliser un useRef pour stocker le resultat du calcul pur
-    - Tester en React Strict Mode (npm run dev) : pas de double-step
+| # | Feature | Statut | Implementation |
+|---|---------|--------|----------------|
+| 1 | Gradient fill `clip-path: inset()` | FAIT | `KaraokeWord.tsx:71-88` — Approche 3 (Tier S GPU), 2 DOM nodes actif, 1 sinon |
+| 2 | Spring scroll (rAF + physics) | FAIT | `useLyricsScroll.ts:180-228` — stiffness=120, damping=26, mass=1, interruptible |
+| 3 | Blur depth-of-field | FAIT | `LyricLine.tsx:115-118` — blur progressif par distance |
+| 4 | Fix word advancement | FAIT | `useLyricsSync.ts:354-369` — multi-word jump + hysteresis adaptative L315-319 |
 
-0c. Nettoyer polling au changement de track (useWordTimestamps)
-    - Ajouter useEffect cleanup sur [spotifyTrackId, youtubeVideoId]
-    - Tester : changer de chanson pendant une generation → pas de stale data
+### Phase 2 — Le Polish : COMPLETE
 
-0d. transition-[transform,opacity] (LyricLine)
-    - Remplacer 'transition-all duration-300 ease-out' par
-      'transition-[transform,opacity] duration-300 ease-out'
-    - Ajouter 'transition-colors duration-300' sur le <p> textClasses (deja present)
+| # | Feature | Statut | Implementation |
+|---|---------|--------|----------------|
+| 5 | Pre-roll visual | FAIT | `LyricsDisplayPro.tsx:394-402` + `LyricLine.tsx:122-124` |
+| 6 | Countdown dots (interludes >5s) | FAIT | `LyricsDisplayPro.tsx:407-428` — 3 dots `animate-pulse` |
+| 7 | Scale differencie | FAIT | `LyricLine.tsx:55-58` — active=1.0, next=0.98, others=0.85 |
+| 8 | Couleurs 100% theme-aware | FAIT | `text-foreground`, `text-muted-foreground`, `text-primary` partout |
+| 9 | Debounce 50ms + fenetre 500ms | FAIT | `types/lyrics.ts:300` + `useLyricsScroll.ts:132` |
+| 10 | Auto-scroll indicator badge | FAIT | `LyricsDisplayPro.tsx:639-654` — "Reprendre le defilement" |
+| 11 | Seek → word jump | FAIT | `useLyricsSync.ts:302-303` — detection + saut direct |
 
-0e. will-change dynamique (LyricLine)
-    - Retirer 'will-change-transform' du className
-    - Ajouter willChange dans containerStyle : distance <= 10 ? 'transform, opacity' : 'auto'
+### Phase 3 — Premium : COMPLETE (sauf #14)
 
-0f. Fix double glow (LyricLine)
-    - Retirer drop-shadow de textClasses ligne active
-    - Garder uniquement textShadow amber/gold dans containerStyle
-    - OU unifier en un seul glow theme-aware
-```
+| # | Feature | Statut | Implementation |
+|---|---------|--------|----------------|
+| 12 | Scroll position responsive | FAIT | `LyricsDisplayPro.tsx` — 30% mobile, 35% desktop, 40% landscape, 45% teleprompter via `useOrientation` |
+| 13 | Fine offset 0.1s | FAIT | `OFFSET_CONFIG.FINE_STEP = 0.1` |
+| 14 | Syllable-level sync | NON FAIT | Necessite backend phoneme splitting + TTML data — hors scope |
+| 15 | Mode teleprompeur | FAIT | `LyricLine.tsx` mode teleprompter (texte uniforme, pas scale/blur/glow), toggle UI dans `app/page.tsx` |
+| 16 | Gestion instrumentaux (-1) | FAIT | `useLyricsSync.ts:94-103` — gap >2s retourne -1 |
+| 17 | Nettoyage dead code | FAIT | Suppression `blurAmount`, `LyricsControlsMobile`, `DEBOUNCE_SAVE_MS`, animations CSS mortes |
+| 18 | prefers-reduced-motion | FAIT | `usePrefersReducedMotion.ts` hook + fallback dans scroll, blur, clip-path, glow |
 
-### Phase 1 — Le "Wow" (4 ameliorations cles)
+### Fichier nouveau
 
-**Objectif** : Transformer le karaoke d'un "affichage de texte synchronise" en une experience Apple Music-like.
-
-```
-1. Gradient fill progressif (KaraokeWord)
-   - Activer le parametre `progress` (actuellement void)
-   - Implementer clip-path: inset() sur overlay (Tier S GPU)
-   - 2 DOM nodes uniquement sur le mot actif, 1 node pour past/inactive
-   - Tester la compatibilite text-shadow + clip-path
-   - Fallback pour prefers-reduced-motion : couleur instantanee (comportement actuel)
-
-2. Spring scroll (useLyricsScroll)
-   - Remplacer scrollTo({behavior:'smooth'}) par rAF + spring physics
-   - Config: stiffness=120, damping=26, mass=1
-   - Utiliser performance.now() pour le delta temps (support 120Hz)
-   - Interruptible par user scroll
-   - PREREQUIS : bug #0a doit etre corrige (scroll listener sur bon element)
-
-3. Blur depth-of-field (LyricLine)
-   - Ajouter filter: blur() progressif par distance dans containerStyle
-   - will-change dynamique ±10 lignes (deja fait en 0e)
-   - Transition specifique : transition-[transform,opacity,filter]
-   - Tester le scroll performance (c'etait le probleme original)
-   - Fallback pour prefers-reduced-motion : pas de blur
-
-4. Fix word advancement (useLyricsSync)
-   - Supprimer le cap +1 mot
-   - Permettre sauts si deltaTime > wordDuration * 0.8
-   - Hysteresis adaptative : min(0.15 * avgWordDuration, 150ms)
-   - Couleurs theme-aware (remplacer pink/white/gray hardcode)
-   - Seek detection : si abs(currentTime - prevTime) > 1s, desactiver
-     forward-only pour 1 frame et sauter directement au bon mot
-```
-
-### Phase 2 — Le Polish
-
-```
-5. Pre-roll visual (prochaine ligne pulse 2s avant)
-6. Countdown dots (interludes > 5s)
-7. Scale differencie (delta plus marque)
-8. Couleurs 100% theme-aware
-9. Debounce 50ms + fenetre 500ms
-10. Auto-scroll indicator badge
-11. Seek → word jump (detection + saut direct)
-```
-
-### Phase 3 — Premium
-
-```
-12. Scroll position responsive
-13. Fine offset 0.1s
-14. Syllable-level sync
-15. Mode teleprompeur
-16. Gestion instrumentaux (retourner -1)
-17. Nettoyage dead code
-18. prefers-reduced-motion
-```
+| Fichier | Role |
+|---------|------|
+| `src/hooks/usePrefersReducedMotion.ts` | Hook a11y SSR-safe — detecte `prefers-reduced-motion: reduce` |
 
 ---
 

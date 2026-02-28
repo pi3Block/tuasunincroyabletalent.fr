@@ -32,6 +32,10 @@ interface UseLyricsScrollOptions {
   block?: ScrollLogicalPosition
   /** Debounce delay in ms */
   debounceMs?: number
+  /** Scroll position as fraction of viewport height (0-1). Default 0.30 (30% from top). */
+  scrollPosition?: number
+  /** When true, fall back to native smooth scroll instead of spring physics. */
+  reducedMotion?: boolean
 }
 
 interface UseLyricsScrollReturn {
@@ -90,6 +94,8 @@ export function useLyricsScroll({
   behavior: _behavior = 'smooth',
   block: _block = 'start',
   debounceMs = PERFORMANCE_CONFIG.SCROLL_DEBOUNCE_MS,
+  scrollPosition = 0.30,
+  reducedMotion = false,
 }: UseLyricsScrollOptions): UseLyricsScrollReturn {
   // Reserved for future use
   void _totalLines
@@ -254,18 +260,22 @@ export function useLyricsScroll({
       const viewport = container.querySelector('[data-radix-scroll-area-viewport]') as HTMLElement
       const scrollContainer = viewport || container
 
-      // Calculate position to place line at ~30% from top of visible area
+      // Calculate position to place line at the configured fraction from top
       const containerRect = scrollContainer.getBoundingClientRect()
       const elementRect = element.getBoundingClientRect()
 
-      // Target offset: 30% from top of container
-      const targetOffset = containerRect.height * 0.30
+      const targetOffset = containerRect.height * scrollPosition
 
       // Calculate the scroll position needed
       const elementTopRelativeToContainer = elementRect.top - containerRect.top + scrollContainer.scrollTop
-      const targetScrollTop = elementTopRelativeToContainer - targetOffset
+      const targetScrollTop = Math.max(0, elementTopRelativeToContainer - targetOffset)
 
-      springScrollTo(scrollContainer, Math.max(0, targetScrollTop))
+      if (reducedMotion) {
+        // Native smooth scroll — browser respects prefers-reduced-motion natively
+        scrollContainer.scrollTo({ top: targetScrollTop, behavior: 'smooth' })
+      } else {
+        springScrollTo(scrollContainer, targetScrollTop)
+      }
     }, debounceMs)
 
     return () => {
@@ -273,7 +283,7 @@ export function useLyricsScroll({
         clearTimeout(scrollTimeoutRef.current)
       }
     }
-  }, [currentLineIndex, scrollTargetIndex, autoScrollEnabled, enabled, debounceMs, containerRef, springScrollTo])
+  }, [currentLineIndex, scrollTargetIndex, autoScrollEnabled, enabled, debounceMs, containerRef, springScrollTo, scrollPosition, reducedMotion])
 
   // Manual controls
   const enableAutoScroll = useCallback(() => {

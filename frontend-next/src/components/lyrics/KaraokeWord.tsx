@@ -46,6 +46,7 @@ export const KaraokeWord = memo(function KaraokeWord({
   isActive,
   isPast,
   progress,
+  reducedMotion = false,
 }: KaraokeWordProps) {
   if (!isActive && !isPast) {
     // Inactive: single node, no GPU overhead, muted foreground
@@ -60,6 +61,15 @@ export const KaraokeWord = memo(function KaraokeWord({
     // Past (sung): single node, full foreground color
     return (
       <span className="font-semibold text-foreground">
+        {word.text}
+      </span>
+    )
+  }
+
+  // Reduced motion: instant color change (no clip-path animation, single DOM node)
+  if (reducedMotion) {
+    return (
+      <span className="font-bold text-primary">
         {word.text}
       </span>
     )
@@ -101,6 +111,8 @@ interface KaraokeWordGroupProps {
   currentWordIndex: number
   /** Progress through current word (0-1) */
   wordProgress: number
+  /** Whether prefers-reduced-motion is active */
+  reducedMotion?: boolean
   /** Custom class name */
   className?: string
 }
@@ -112,6 +124,7 @@ export const KaraokeWordGroup = memo(function KaraokeWordGroup({
   words,
   currentWordIndex,
   wordProgress,
+  reducedMotion = false,
   className,
 }: KaraokeWordGroupProps) {
   return (
@@ -130,6 +143,7 @@ export const KaraokeWordGroup = memo(function KaraokeWordGroup({
               isActive={isCurrentWord && !isLastWordFinished}
               isPast={index < currentWordIndex || isLastWordFinished}
               progress={isCurrentWord ? wordProgress : 0}
+              reducedMotion={reducedMotion}
             />
             {index < words.length - 1 && ' '}
           </React.Fragment>

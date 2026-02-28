@@ -48,6 +48,15 @@ function getOpacity(distance: number, isActive: boolean, isNext: boolean, isPast
 }
 
 /**
+ * Teleprompter opacity: simplified, all text highly visible.
+ */
+function getTeleprompterOpacity(distance: number, isActive: boolean): number {
+  if (isActive) return 1
+  if (distance <= 1) return 0.7
+  return 0.4
+}
+
+/**
  * Get scale based on active state.
  * Strong hierarchy: active=1.0, next=0.98, others=0.85
  * The large gap (0.85 vs 0.98) creates clear visual focus on active+next.
@@ -97,15 +106,32 @@ export const LyricLine = memo(forwardRef<HTMLDivElement, LyricLineProps>(
       currentWordIndex,
       wordProgress,
       isPreRoll = false,
+      reducedMotion = false,
       onClick,
     },
     ref
   ) {
     // Check if this is the next line (distance 1, not past)
     const isNext = distance === 1 && !isPast
+    const isTeleprompter = displayMode === 'teleprompter'
 
     // Compute styles based on state
     const containerStyle = useMemo(() => {
+      // Teleprompter: uniform scale, no blur, no glow — just opacity
+      if (isTeleprompter) {
+        const opacity = getTeleprompterOpacity(distance, isActive)
+        return {
+          opacity,
+          willChange: distance <= 10 ? 'opacity' : 'auto',
+        } as React.CSSProperties
+      }
+
+      // Reduced motion: no blur, no glow, no scale transform
+      if (reducedMotion) {
+        const opacity = getOpacity(distance, isActive, isNext, isPast)
+        return { opacity } as React.CSSProperties
+      }
+
       const scale = getScale(isActive, isNext)
       const opacity = getOpacity(distance, isActive, isNext, isPast)
 
@@ -136,12 +162,20 @@ export const LyricLine = memo(forwardRef<HTMLDivElement, LyricLineProps>(
             }
           : preRollGlow),
       } as React.CSSProperties
-    }, [isActive, isNext, isPast, distance, isPreRoll])
+    }, [isActive, isNext, isPast, distance, isPreRoll, isTeleprompter, reducedMotion])
 
     // Determine text classes based on state
     // Reduced sizes for better readability and more lines visible
     // Colors: foreground tokens (theme-aware dark/light), muted for past
     const textClasses = useMemo(() => {
+      // Teleprompter: uniform large text, bold only on active
+      if (isTeleprompter) {
+        if (isActive) {
+          return 'text-xl md:text-2xl lg:text-3xl font-bold text-foreground'
+        }
+        return 'text-xl md:text-2xl lg:text-3xl font-normal text-foreground'
+      }
+
       if (isActive) {
         return 'text-xl sm:text-2xl md:text-2xl lg:text-3xl xl:text-4xl font-bold text-foreground'
       }
@@ -155,10 +189,13 @@ export const LyricLine = memo(forwardRef<HTMLDivElement, LyricLineProps>(
       }
       // Past lines: muted foreground
       return 'text-base md:text-lg lg:text-xl text-muted-foreground'
-    }, [isActive, isNext, isPast])
+    }, [isActive, isNext, isPast, isTeleprompter])
 
     // Render content based on display mode
     const content = useMemo(() => {
+      // Teleprompter: always line-level, no word rendering
+      if (isTeleprompter) return line.text
+
       // Use karaoke word rendering if we have word data and mode supports it
       const hasWords = line.words && line.words.length > 0
       const useWordMode = hasWords && (displayMode === 'karaoke' || displayMode === 'word')
@@ -184,13 +221,14 @@ export const LyricLine = memo(forwardRef<HTMLDivElement, LyricLineProps>(
             words={line.words}
             currentWordIndex={effectiveWordIndex}
             wordProgress={isActive ? wordProgress : 0}
+            reducedMotion={reducedMotion}
           />
         )
       }
 
       // Standard text rendering
       return line.text
-    }, [line, displayMode, isActive, isPast, currentWordIndex, wordProgress])
+    }, [line, displayMode, isActive, isPast, currentWordIndex, wordProgress, isTeleprompter, reducedMotion])
 
     return (
       <div
@@ -210,10 +248,14 @@ export const LyricLine = memo(forwardRef<HTMLDivElement, LyricLineProps>(
         className={cn(
           // Base styles
           'cursor-pointer select-none',
-          // Transition — only compositor-friendly properties (avoids main thread repaints)
-          'transition-[transform,opacity,filter] duration-300 ease-out',
-          // Hover effect (only on non-active)
-          !isActive && 'hover:scale-[0.96] hover:opacity-80'
+          // Transition — adapted for motion preferences and display mode
+          reducedMotion
+            ? 'transition-none'
+            : isTeleprompter
+              ? 'transition-opacity duration-300 ease-out'
+              : 'transition-[transform,opacity,filter] duration-300 ease-out',
+          // Hover effect (only on non-active, disabled for teleprompter)
+          !isActive && !isTeleprompter && 'hover:scale-[0.96] hover:opacity-80'
         )}
         style={containerStyle}
       >

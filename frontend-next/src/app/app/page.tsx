@@ -194,6 +194,7 @@ export default function AppPage() {
     useState<StudioTransportControls | null>(null);
   const [multiTrackReady, setMultiTrackReady] = useState(false);
   const [karaokeMode, setKaraokeMode] = useState(true);
+  const [teleprompterMode, setTeleprompterMode] = useState(false);
   const [usePollingFallback, setUsePollingFallback] = useState(false);
   const [mixerOpen, setMixerOpen] = useState(false);
 
@@ -955,14 +956,18 @@ export default function AppPage() {
   }, []);
 
   // Shared lyrics display props
-  const displayMode = karaokeMode && wordLines ? "karaoke" : "line";
+  const displayMode = teleprompterMode
+    ? "teleprompter"
+    : karaokeMode && wordLines
+      ? "karaoke"
+      : "line";
   const lyricsDisplayProps = {
     lyrics: lyrics || "",
     syncedLines: lyricsLines,
-    wordLines: karaokeMode ? wordLines : null,
+    wordLines: karaokeMode && !teleprompterMode ? wordLines : null,
     currentTime: playbackTime,
     isPlaying: isVideoPlaying,
-    displayMode: displayMode as "karaoke" | "line" | "word",
+    displayMode: displayMode as "karaoke" | "line" | "word" | "teleprompter",
     offset: lyricsOffset,
     onOffsetChange: handleOffsetChange,
     showOffsetControls: true,
@@ -1063,10 +1068,10 @@ export default function AppPage() {
             youtubeMatch={youtubeMatch}
             lyrics={lyrics}
             lyricsLines={lyricsLines}
-            wordLines={karaokeMode ? wordLines : null}
+            wordLines={karaokeMode && !teleprompterMode ? wordLines : null}
             playbackTime={playbackTime}
             isVideoPlaying={isVideoPlaying}
-            displayMode={karaokeMode && wordLines ? "karaoke" : "line"}
+            displayMode={displayMode as "karaoke" | "line" | "teleprompter"}
             lyricsOffset={lyricsOffset}
             onOffsetChange={handleOffsetChange}
             onTimeUpdate={handleYoutubeTimeUpdate}
@@ -1342,16 +1347,32 @@ export default function AppPage() {
                   {wordTimestampsStatus === "found" && wordLines && (
                     <div className="shrink-0 flex items-center justify-center gap-2 px-3 py-1.5 border-t border-border/30">
                       <button
-                        onClick={() => setKaraokeMode(!karaokeMode)}
+                        onClick={() => {
+                          setKaraokeMode(!karaokeMode);
+                          if (teleprompterMode) setTeleprompterMode(false);
+                        }}
                         className={cn(
                           "flex items-center gap-1.5 text-xs px-3 py-1 rounded-full transition-colors",
-                          karaokeMode
+                          karaokeMode && !teleprompterMode
                             ? "bg-purple-500/20 text-purple-400 hover:bg-purple-500/30"
                             : "bg-muted/50 text-muted-foreground hover:bg-muted",
                         )}
                       >
-                        <span>{karaokeMode ? "🎤" : "📝"}</span>
-                        <span>{karaokeMode ? "Karaoké" : "Ligne"}</span>
+                        <span>{karaokeMode && !teleprompterMode ? "🎤" : "📝"}</span>
+                        <span>{karaokeMode && !teleprompterMode ? "Karaoké" : "Ligne"}</span>
+                      </button>
+                      <button
+                        onClick={() => setTeleprompterMode(!teleprompterMode)}
+                        className={cn(
+                          "flex items-center gap-1.5 text-xs px-3 py-1 rounded-full transition-colors",
+                          teleprompterMode
+                            ? "bg-blue-500/20 text-blue-400 hover:bg-blue-500/30"
+                            : "bg-muted/50 text-muted-foreground hover:bg-muted",
+                        )}
+                        title="Mode téléprompeur : texte uniforme, sans effets"
+                      >
+                        <span>📜</span>
+                        <span>Prompteur</span>
                       </button>
                       <button
                         onClick={regenerateWordTimestamps}

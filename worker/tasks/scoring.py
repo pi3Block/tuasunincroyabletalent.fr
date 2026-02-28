@@ -18,6 +18,7 @@ Improvements (2026-02-25):
 - Removed litellm SDK import (heavy, synchronous) — pure httpx async
 """
 import os
+import re
 import asyncio
 import json
 import time
@@ -588,6 +589,8 @@ async def _litellm_call(
             response.raise_for_status()
             data = response.json()
             comment = data["choices"][0]["message"]["content"].strip()
+            # Strip Qwen3 thinking blocks (<think>...</think>)
+            comment = re.sub(r"<think>[\s\S]*?</think>", "", comment).strip()
             actual_model = data.get("model", model)
             if not comment:
                 raise ValueError("Empty response from LiteLLM")

@@ -22,7 +22,7 @@ interface LandscapeRecordingLayoutProps {
   /** Whether video is playing */
   isVideoPlaying: boolean
   /** Display mode for lyrics */
-  displayMode: 'line' | 'karaoke'
+  displayMode: 'line' | 'karaoke' | 'teleprompter'
   /** Lyrics offset in seconds */
   lyricsOffset: number
   /** Callback when offset changes */

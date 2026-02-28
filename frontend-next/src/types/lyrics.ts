@@ -67,10 +67,11 @@ export interface SyncedLyrics {
  * Display modes for the lyrics component.
  */
 export type LyricsDisplayMode =
-  | 'line'     // Standard line-by-line (Spotify-style)
-  | 'word'     // Word-by-word highlight (Apple Music-style)
-  | 'karaoke'  // Full karaoke with gradient fill
-  | 'compact'  // Single line display
+  | 'line'          // Standard line-by-line (Spotify-style)
+  | 'word'          // Word-by-word highlight (Apple Music-style)
+  | 'karaoke'       // Full karaoke with gradient fill
+  | 'compact'       // Single line display
+  | 'teleprompter'  // Pro teleprompter: uniform large text, center scroll, line-level only
 
 /**
  * Sync format of the lyrics.
@@ -195,6 +196,8 @@ export interface LyricLineProps {
   wordProgress: number
   /** Whether this line is about to become active (<2s away) — triggers pre-roll glow */
   isPreRoll?: boolean
+  /** Whether prefers-reduced-motion is active (disables blur, glow, scale transitions) */
+  reducedMotion?: boolean
   /** Callback when line is clicked */
   onClick?: () => void
 }
@@ -211,6 +214,8 @@ export interface KaraokeWordProps {
   isPast: boolean
   /** Progress through the word (0-1) */
   progress: number
+  /** Whether prefers-reduced-motion is active (disables clip-path animation) */
+  reducedMotion?: boolean
 }
 
 // ============================================================================
@@ -253,8 +258,6 @@ export interface LyricsAnimationConfig {
   activeScale: number
   /** Scale factor for inactive lines */
   inactiveScale: number
-  /** Blur amount for distant lines (px) */
-  blurAmount: number
   /** Enable glow effect on active line */
   enableGlow: boolean
   /** Glow color */
@@ -275,7 +278,6 @@ export const DEFAULT_ANIMATION_CONFIG: LyricsAnimationConfig = {
   easing: 'cubic-bezier(0.4, 0, 0.2, 1)',
   activeScale: 1.0,
   inactiveScale: 0.85, // stronger recession for clear visual hierarchy
-  blurAmount: 1.5,
   enableGlow: true,
   glowColor: 'rgba(34, 197, 94, 0.6)', // primary green (#22c55e), matches theme
   glowIntensity: 20,
