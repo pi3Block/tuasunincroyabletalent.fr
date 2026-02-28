@@ -637,8 +637,37 @@ def prepare_reference(
             (vocals_local, vocals_rel),
             (instrumentals_local, instru_rel),
         )
-        vocals_url = v_url or storage.public_url(vocals_rel)
-        instru_url = i_url or storage.public_url(instru_rel)
+        if v_url:
+            vocals_url = v_url
+        elif youtube_id and demucs_cached:
+            # Session copy failed: fallback to known-good cache URL.
+            vocals_url = storage.public_url(f"cache/{youtube_id}/vocals.wav")
+            logger.warning(
+                "Session vocals upload failed for %s; using cache fallback URL",
+                session_id,
+            )
+        else:
+            vocals_url = storage.public_url(vocals_rel)
+            logger.warning(
+                "Session vocals upload failed for %s; using expected session URL fallback",
+                session_id,
+            )
+
+        if i_url:
+            instru_url = i_url
+        elif youtube_id and demucs_cached:
+            # Session copy failed: fallback to known-good cache URL.
+            instru_url = storage.public_url(f"cache/{youtube_id}/instrumentals.wav")
+            logger.warning(
+                "Session instrumentals upload failed for %s; using cache fallback URL",
+                session_id,
+            )
+        else:
+            instru_url = storage.public_url(instru_rel)
+            logger.warning(
+                "Session instrumentals upload failed for %s; using expected session URL fallback",
+                session_id,
+            )
 
         # Notify frontend that ref tracks are available for multi-track playback
         _notify_tracks_ready(session_id)

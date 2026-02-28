@@ -128,7 +128,8 @@ export function useLyricsScroll({
       const now = Date.now()
 
       // Ignore programmatic scrolls (spring animation keeps lastScrollTimeRef fresh)
-      if (now - lastScrollTimeRef.current < 200) return
+      // 500ms window prevents fast line changes from falsely triggering user-scroll detection
+      if (now - lastScrollTimeRef.current < 500) return
 
       // Cancel any ongoing spring animation when user takes manual control
       if (springStateRef.current?.rafId != null) {

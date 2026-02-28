@@ -88,9 +88,6 @@ export function useMultiTrack({
           audio.load()
         })
 
-        // Ensure AudioContext is running
-        await ensureAudioContextRunning()
-
         // Connect to processor
         processor.connectAudioElement(audio)
 
@@ -334,3 +331,4 @@ export function useMultiTrack({
     isReady,
   }
 }
+

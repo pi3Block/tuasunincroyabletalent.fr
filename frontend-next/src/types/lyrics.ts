@@ -193,10 +193,10 @@ export interface LyricLineProps {
   currentWordIndex: number
   /** Word progress (0-1) for gradient fill */
   wordProgress: number
+  /** Whether this line is about to become active (<2s away) — triggers pre-roll glow */
+  isPreRoll?: boolean
   /** Callback when line is clicked */
   onClick?: () => void
-  /** Ref for the active line */
-  innerRef?: React.Ref<HTMLDivElement>
 }
 
 /**
@@ -274,10 +274,10 @@ export const DEFAULT_ANIMATION_CONFIG: LyricsAnimationConfig = {
   transitionDuration: 300,
   easing: 'cubic-bezier(0.4, 0, 0.2, 1)',
   activeScale: 1.0,
-  inactiveScale: 0.92,
+  inactiveScale: 0.85, // stronger recession for clear visual hierarchy
   blurAmount: 1.5,
   enableGlow: true,
-  glowColor: 'rgba(251, 191, 36, 0.6)',
+  glowColor: 'rgba(34, 197, 94, 0.6)', // primary green (#22c55e), matches theme
   glowIntensity: 20,
 }
 
@@ -298,8 +298,8 @@ export const OFFSET_CONFIG = {
 export const PERFORMANCE_CONFIG = {
   /** Max lines to render (virtualization window) - high value to allow scrolling all lyrics */
   RENDER_WINDOW: 100,
-  /** Scroll debounce in ms */
-  SCROLL_DEBOUNCE_MS: 100,
+  /** Scroll debounce in ms — 50ms for snappier response at line changes */
+  SCROLL_DEBOUNCE_MS: 50,
   /** Binary search threshold for line lookup */
   BINARY_SEARCH_THRESHOLD: 20,
 } as const

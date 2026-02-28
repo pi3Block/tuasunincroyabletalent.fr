@@ -349,8 +349,10 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
   )
 
   // Check if we have word-level data (for automatic mode switching)
+  // Use lines.some() to handle cases where the first line has no words
+  // (e.g. instrumental intro) but subsequent lines do
   const hasWordData = useMemo(
-    () => lines.length > 0 && lines[0].words && lines[0].words.length > 0,
+    () => lines.some(line => line.words && line.words.length > 0),
     [lines]
   )
 
@@ -369,6 +371,7 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
     currentWordIndex,
     wordProgress,
     isLineVisible,
+    adjustedTime,
   } = useLyricsSync({
     lines,
     currentTime,
@@ -379,13 +382,41 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
 
   // Use scroll hook for smart auto-scrolling
   // Scrolls current line to 'start' position - CSS padding handles vertical offset
-  const { currentLineRef, scrollTargetRef, scrollTargetIndex, enableAutoScroll } = useLyricsScroll({
+  const { currentLineRef, scrollTargetRef, scrollTargetIndex, enableAutoScroll, autoScrollEnabled } = useLyricsScroll({
     currentLineIndex,
     totalLines: lines.length,
     isPlaying,
     containerRef: containerRef as React.RefObject<HTMLElement | null>,
     block: 'start',
   })
+
+  // Pre-roll: time remaining until the next line activates (null if no next line)
+  const timeToNextLine = useMemo(() => {
+    if (currentLineIndex < 0 || currentLineIndex >= lines.length - 1) return null
+    const nextStart = lines[currentLineIndex + 1]?.startTime
+    if (nextStart === undefined) return null
+    return nextStart - adjustedTime
+  }, [lines, currentLineIndex, adjustedTime])
+
+  // Pre-roll flag: next line is <2s away — triggers anticipatory glow
+  const isPreRoll = timeToNextLine !== null && timeToNextLine > 0 && timeToNextLine < 2
+
+  // Interlude detection: gap >5s between current line end and next line start.
+  // Uses endTime if available, otherwise assumes line lasts up to 4s.
+  // When true, interlude dots are shown between current and next lines.
+  const isInInterlude = useMemo(() => {
+    if (currentLineIndex < 0 || currentLineIndex >= lines.length - 1) return false
+    const currentLine = lines[currentLineIndex]
+    const nextLine = lines[currentLineIndex + 1]
+    if (!currentLine || !nextLine) return false
+    // Estimate line end: use stored endTime, or cap at 4s after start (won't exceed next start)
+    const lineEnd = currentLine.endTime ?? Math.min(
+      currentLine.startTime + 4,
+      nextLine.startTime - 0.1
+    )
+    const gap = nextLine.startTime - lineEnd
+    return gap > 5 && adjustedTime > lineEnd
+  }, [lines, currentLineIndex, adjustedTime])
 
   // Notify parent of line changes
   React.useEffect(() => {
@@ -511,7 +542,7 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
             <ChevronLeft className="h-5 w-5" />
           </Button>
 
-          <span className="text-sm text-muted-foreground font-medium min-w-[4.5rem] text-center tabular-nums">
+          <span className="text-sm text-muted-foreground font-medium min-w-18 text-center tabular-nums">
             {currentLineIndex + 1} / {lines.length}
           </span>
 
@@ -547,6 +578,8 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
             const isPast = index < currentLineIndex
             const distance = Math.abs(index - currentLineIndex)
             const isScrollTarget = index === scrollTargetIndex
+            // Pre-roll applies only to the immediate next line
+            const lineIsPreRoll = isPreRoll && index === currentLineIndex + 1
 
             // Virtualization: only render nearby lines
             if (!isLineVisible(index)) {
@@ -563,19 +596,37 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
                 : undefined
 
             return (
-              <LyricLine
-                key={line.id}
-                ref={lineRef}
-                line={line}
-                index={index}
-                isActive={isActive}
-                isPast={isPast}
-                distance={distance}
-                displayMode={effectiveDisplayMode}
-                currentWordIndex={currentWordIndex}
-                wordProgress={wordProgress}
-                onClick={() => handleLineTap(index)}
-              />
+              <React.Fragment key={line.id}>
+                <LyricLine
+                  ref={lineRef}
+                  line={line}
+                  index={index}
+                  isActive={isActive}
+                  isPast={isPast}
+                  distance={distance}
+                  displayMode={effectiveDisplayMode}
+                  currentWordIndex={currentWordIndex}
+                  wordProgress={wordProgress}
+                  isPreRoll={lineIsPreRoll}
+                  onClick={() => handleLineTap(index)}
+                />
+                {/* Interlude dots: shown after the active line during gaps >5s */}
+                {isActive && isInInterlude && (
+                  <div
+                    className="flex justify-center items-center gap-3 py-8"
+                    aria-label="Interlude"
+                    aria-hidden="true"
+                  >
+                    {[0, 1, 2].map(i => (
+                      <span
+                        key={i}
+                        className="block w-2 h-2 rounded-full bg-muted-foreground/40 animate-pulse"
+                        style={{ animationDelay: `${i * 0.25}s` }}
+                      />
+                    ))}
+                  </div>
+                )}
+              </React.Fragment>
             )
           })}
 
@@ -583,6 +634,24 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
           <div className="h-[70%] min-h-[200px]" aria-hidden="true" />
         </div>
       </ScrollArea>
+
+      {/* Auto-scroll indicator — shown when user has manually scrolled and disabled auto-scroll */}
+      {!autoScrollEnabled && (
+        <div className="flex justify-end px-4 py-1.5 border-t border-border/20 bg-muted/5">
+          <button
+            onClick={enableAutoScroll}
+            className={cn(
+              'flex items-center gap-1.5 rounded-full px-3 py-1 text-xs',
+              'text-muted-foreground hover:text-foreground transition-colors',
+              'bg-muted/60 hover:bg-muted border border-border/50',
+            )}
+            aria-label="Réactiver le défilement automatique"
+          >
+            <span aria-hidden="true">↺</span>
+            <span>Reprendre le défilement</span>
+          </button>
+        </div>
+      )}
 
       {/* Progress bar */}
       <div className="px-4 py-3 border-t border-border/30 bg-muted/10">

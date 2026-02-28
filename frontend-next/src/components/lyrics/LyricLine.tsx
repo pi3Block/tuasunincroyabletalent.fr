@@ -49,13 +49,13 @@ function getOpacity(distance: number, isActive: boolean, isNext: boolean, isPast
 
 /**
  * Get scale based on active state.
- * Next line gets slightly larger scale to help singers read ahead.
+ * Strong hierarchy: active=1.0, next=0.98, others=0.85
+ * The large gap (0.85 vs 0.98) creates clear visual focus on active+next.
  */
 function getScale(isActive: boolean, isNext: boolean, config = DEFAULT_ANIMATION_CONFIG): number {
-  if (isActive) return config.activeScale
-  // Next line slightly larger than other inactive lines
-  if (isNext) return config.inactiveScale + 0.02
-  return config.inactiveScale
+  if (isActive) return config.activeScale  // 1.0
+  if (isNext) return 0.98                  // clearly distinct from others
+  return config.inactiveScale              // 0.85 — strong recession
 }
 
 // ============================================================================
@@ -96,6 +96,7 @@ export const LyricLine = memo(forwardRef<HTMLDivElement, LyricLineProps>(
       displayMode,
       currentWordIndex,
       wordProgress,
+      isPreRoll = false,
       onClick,
     },
     ref
@@ -116,39 +117,44 @@ export const LyricLine = memo(forwardRef<HTMLDivElement, LyricLineProps>(
         : distance <= 3 ? Math.min(distance * 0.4, 1.5)
         : Math.min(2 + (distance - 4) * 0.2, 3)
 
+      // Pre-roll: subtle anticipatory glow on the next line when <2s from activation.
+      // Half the intensity of the active glow — visible but not distracting.
+      const preRollGlow = isPreRoll && !isActive
+        ? { textShadow: '0 0 12px rgba(34, 197, 94, 0.3)' }
+        : {}
+
       return {
         transform: `scale(${scale})`,
         opacity,
         filter: blurAmount > 0 ? `blur(${blurAmount}px)` : undefined,
         // Dynamic will-change: promote ±10 lines to GPU layers (includes filter for blur)
         willChange: distance <= 10 ? 'transform, opacity, filter' : 'auto',
-        // Glow effect for active line
+        // Glow effect for active line — overrides pre-roll if both somehow true
         ...(isActive && DEFAULT_ANIMATION_CONFIG.enableGlow
           ? {
               textShadow: `0 0 ${DEFAULT_ANIMATION_CONFIG.glowIntensity}px ${DEFAULT_ANIMATION_CONFIG.glowColor}`,
             }
-          : {}),
+          : preRollGlow),
       } as React.CSSProperties
-    }, [isActive, isNext, isPast, distance])
+    }, [isActive, isNext, isPast, distance, isPreRoll])
 
     // Determine text classes based on state
     // Reduced sizes for better readability and more lines visible
-    // Colors: white/light for current and upcoming, darker for past
-    // Next line is larger and white to help singers read ahead
+    // Colors: foreground tokens (theme-aware dark/light), muted for past
     const textClasses = useMemo(() => {
       if (isActive) {
-        return 'text-xl sm:text-2xl md:text-2xl lg:text-3xl xl:text-4xl font-bold text-white'
+        return 'text-xl sm:text-2xl md:text-2xl lg:text-3xl xl:text-4xl font-bold text-foreground'
       }
-      // Next line: larger and WHITE for maximum readability
+      // Next line: larger, full foreground for maximum readability
       if (isNext) {
-        return 'text-lg sm:text-xl md:text-xl lg:text-2xl font-semibold text-white'
+        return 'text-lg sm:text-xl md:text-xl lg:text-2xl font-semibold text-foreground'
       }
-      // Upcoming lines (not past): light gray to be readable
+      // Upcoming lines (not past): slightly muted but readable
       if (!isPast) {
-        return 'text-base md:text-lg lg:text-xl text-gray-200'
+        return 'text-base md:text-lg lg:text-xl text-foreground/70'
       }
-      // Past lines: darker
-      return 'text-base md:text-lg lg:text-xl text-gray-400'
+      // Past lines: muted foreground
+      return 'text-base md:text-lg lg:text-xl text-muted-foreground'
     }, [isActive, isNext, isPast])
 
     // Render content based on display mode
