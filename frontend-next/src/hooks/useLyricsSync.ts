@@ -19,11 +19,7 @@ import { PERFORMANCE_CONFIG } from '@/types/lyrics'
 // SMOOTHING CONSTANTS
 // ============================================================================
 
-/** Hysteresis: minimum ms before changing to a new word (prevents micro-jumps) */
-const WORD_CHANGE_DELAY_MS = 80
-
-/** EMA smoothing factor for word progress (0 = very smooth, 1 = no smoothing) */
-const PROGRESS_SMOOTHING = 0.3
+// Word tracking constants — centralized in PERFORMANCE_CONFIG (types/lyrics.ts)
 
 // ============================================================================
 // TYPES
@@ -314,7 +310,7 @@ export function useLyricsSync({
     // Adaptive hysteresis: proportional to average word duration.
     // Fast songs (120+ BPM) get a shorter window, slow songs get longer.
     const hysteresisMs = (() => {
-      if (!currentLine.words || currentLine.words.length < 2) return WORD_CHANGE_DELAY_MS
+      if (!currentLine.words || currentLine.words.length < 2) return PERFORMANCE_CONFIG.WORD_CHANGE_DELAY_MS
       const totalMs = currentLine.words.reduce((s, w) => s + w.endTimeMs - w.startTimeMs, 0)
       return Math.min(0.15 * (totalMs / currentLine.words.length), 150)
     })()
@@ -406,8 +402,8 @@ export function useLyricsSync({
     const rawProgress = calculateWordProgress(currentLine, currentWordIndex, timeMs)
 
     // EMA smoothing: smoothed = α * raw + (1-α) * prev
-    const smoothed = PROGRESS_SMOOTHING * rawProgress +
-      (1 - PROGRESS_SMOOTHING) * t.smoothedProgress
+    const smoothed = PERFORMANCE_CONFIG.PROGRESS_SMOOTHING * rawProgress +
+      (1 - PERFORMANCE_CONFIG.PROGRESS_SMOOTHING) * t.smoothedProgress
 
     t.smoothedProgress = smoothed
     t.cachedProgress = smoothed

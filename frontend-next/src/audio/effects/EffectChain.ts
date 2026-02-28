@@ -5,7 +5,13 @@
  * Tone.js is loaded lazily on first enable (dynamic import, ~150KB).
  *
  * Signal path when effects are active:
- *   PannerNode → [PitchShift?] → [Reverb?] → [Compressor?] → AnalyserNode
+ *   PannerNode → [bridgeIn] → [PitchShift?] → [Reverb?] → [Compressor?] → [bridgeOut] → AnalyserNode
+ *
+ * bridgeIn / bridgeOut are Tone.Gain(1) nodes whose .input/.output are native
+ * GainNodes created from the same AudioContext — this is how we cross between
+ * the native Web Audio world and the Tone.js world without "Overload resolution
+ * failed" errors.  Native AudioNode.connect() only accepts AudioNode | AudioParam,
+ * NOT Tone.js ToneAudioNode wrappers.
  *
  * When all effects are disabled:
  *   PannerNode → AnalyserNode  (direct, zero overhead)
@@ -47,6 +53,13 @@ export class EffectChain {
   private reverb: ToneEffect | null = null
   private compressor: ToneEffect | null = null
 
+  // Bridge gains for native ↔ Tone.js interop.
+  // Tone.Gain wraps a native GainNode (.input/.output are native GainNodes)
+  // created from the same AudioContext (via Tone.setContext), so native
+  // connect() works on both sides.
+  private bridgeIn: ToneEffect | null = null
+  private bridgeOut: ToneEffect | null = null
+
   private enabledEffects = new Set<EffectType>()
   private disposed = false
 
@@ -64,6 +77,12 @@ export class EffectChain {
   async enable(type: EffectType, params: EffectParams): Promise<void> {
     if (this.disposed) return
     const Tone = await ensureToneLoaded(this.context)
+
+    // Create bridge gains on first enable (lazy, only when Tone.js is loaded)
+    if (!this.bridgeIn) {
+      this.bridgeIn = new Tone.Gain(1)
+      this.bridgeOut = new Tone.Gain(1)
+    }
 
     if (type === 'pitchShift' && !this.pitchShift) {
       const p = params as PitchShiftParams
@@ -131,13 +150,20 @@ export class EffectChain {
   /**
    * Rebuild the audio routing between inputNode and outputNode.
    * Only enabled effects are inserted; disabled ones are bypassed.
+   *
+   * Bridge pattern for native ↔ Tone.js interop:
+   *   nativePanner.connect(bridgeIn.input)   — both native GainNodes, same context
+   *   bridgeIn.connect(effect1)              — Tone→Tone (Tone's .connect handles this)
+   *   effect1.connect(effect2)               — Tone→Tone
+   *   effectN.connect(bridgeOut)             — Tone→Tone
+   *   bridgeOut.output.connect(nativeAnalyser) — both native GainNodes, same context
    */
   private rebuildChain(): void {
     // Disconnect everything from inputNode
     try { this.inputNode.disconnect() } catch { /* already disconnected */ }
 
     // Disconnect existing Tone nodes from each other
-    for (const node of [this.pitchShift, this.reverb, this.compressor]) {
+    for (const node of [this.bridgeIn, this.pitchShift, this.reverb, this.compressor, this.bridgeOut]) {
       if (node) try { node.disconnect() } catch { /* ok */ }
     }
 
@@ -147,22 +173,28 @@ export class EffectChain {
     if (this.enabledEffects.has('reverb') && this.reverb) chain.push(this.reverb)
     if (this.enabledEffects.has('compressor') && this.compressor) chain.push(this.compressor)
 
-    if (chain.length === 0) {
-      // No effects — direct connection (zero overhead)
+    if (chain.length === 0 || !this.bridgeIn || !this.bridgeOut) {
+      // No effects or bridges not ready — direct connection (zero overhead)
       this.inputNode.connect(this.outputNode)
       return
     }
 
-    // Connect: inputNode → first effect
-    this.inputNode.connect(chain[0].input)
+    // 1) Native panner → bridge input (native GainNode → native GainNode)
+    this.inputNode.connect(this.bridgeIn.input)
 
-    // Chain effects together
+    // 2) Bridge input → first Tone.js effect (Tone→Tone)
+    this.bridgeIn.connect(chain[0])
+
+    // 3) Chain Tone.js effects together (Tone→Tone)
     for (let i = 0; i < chain.length - 1; i++) {
       chain[i].connect(chain[i + 1])
     }
 
-    // Last effect → outputNode (native AnalyserNode)
-    chain[chain.length - 1].connect(this.outputNode)
+    // 4) Last effect → bridge output (Tone→Tone)
+    chain[chain.length - 1].connect(this.bridgeOut)
+
+    // 5) Bridge output → native analyser (native GainNode → native AnalyserNode)
+    this.bridgeOut.output.connect(this.outputNode)
   }
 
   /** Clean up all Tone.js nodes. */
@@ -172,13 +204,15 @@ export class EffectChain {
 
     try { this.inputNode.disconnect() } catch { /* ok */ }
 
-    for (const node of [this.pitchShift, this.reverb, this.compressor]) {
+    for (const node of [this.bridgeIn, this.pitchShift, this.reverb, this.compressor, this.bridgeOut]) {
       if (node) {
         try { node.disconnect() } catch { /* ok */ }
         try { node.dispose() } catch { /* ok */ }
       }
     }
 
+    this.bridgeIn = null
+    this.bridgeOut = null
     this.pitchShift = null
     this.reverb = null
     this.compressor = null

@@ -95,12 +95,15 @@ tuasunincroyabletalent.fr/
 │       │                          # useWordTimestamps, useYouTubePlayer,
 │       │                          # useLyricsSync, useLyricsScroll, useOrientation,
 │       │                          # useFlowEnvelope (getEnergyAtTime → karaoke glow),
+│       │                          # usePrefersReducedMotion (delegates to Framer Motion),
 │       │                          # useSSE (Server-Sent Events + polling fallback)
 │       ├── audio/                 # Multi-track player (AudioContext, TrackProcessor,
 │       │                          # StudioMode, TrackMixer, TransportBar)
 │       ├── api/                   # API client (fetch wrapper)
 │       ├── lib/                   # Utilities (cn, etc.)
-│       └── types/                 # TypeScript types (lyrics, youtube)
+│       └── types/                 # TypeScript types + animation config constants
+│           └── lyrics.ts          # ENERGY_CONFIG, BLUR_CONFIG, SCROLL_SPRING_CONFIG,
+│                                  # PERFORMANCE_CONFIG, DEFAULT_ANIMATION_CONFIG
 │
 ├── backend/                       # FastAPI
 │   ├── Dockerfile                 # Python 3.11 + uv, port 8080
@@ -378,7 +381,18 @@ Threading: page.tsx → LyricsDisplayPro → LyricLine → KaraokeWordGroup → 
 Compute:   energy = getEnergyAtTime(adjustedTime)  // inside LyricsDisplayPro
 Render:    motion.span with animate={{ textShadow, scale }} + spring physics
            clipPath stays in style (instant, GPU), energy effects in animate (spring)
-Config:    ENERGY_SPRING = { type: 'spring', stiffness: 300, damping: 20 }
+Config:    All constants centralized in types/lyrics.ts:
+           - ENERGY_CONFIG (threshold, glow multipliers, scale, spring physics)
+           - BLUR_CONFIG (depth-of-field per distance)
+           - SCROLL_SPRING_CONFIG (auto-scroll physics)
+           - PERFORMANCE_CONFIG (render window, word tracking hysteresis, EMA smoothing)
+           - DEFAULT_ANIMATION_CONFIG (line-level glow, scale, transition)
+Glow:      LyricLine glow (textShadow) applies ONLY in 'line' mode.
+           In karaoke/word modes, KaraokeWord handles glow via Framer Motion per-word.
+           This avoids double glow (parent + child textShadow stacking).
+CSS:       In karaoke/word modes, CSS transition excludes `transform` to avoid
+           competing with Framer Motion spring on KaraokeWord children.
+           Only opacity + filter are CSS-transitioned; scale is instant on container.
 ```
 
 ## Celery Task Routing

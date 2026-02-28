@@ -9,7 +9,7 @@
  */
 
 import { useEffect, useRef, useCallback, useState } from 'react'
-import { PERFORMANCE_CONFIG } from '@/types/lyrics'
+import { PERFORMANCE_CONFIG, SCROLL_SPRING_CONFIG } from '@/types/lyrics'
 
 // ============================================================================
 // TYPES
@@ -180,9 +180,7 @@ export function useLyricsScroll({
       cancelAnimationFrame(prevState.rafId)
     }
 
-    const stiffness = 120
-    const damping = 26
-    const mass = 1
+    const { STIFFNESS: stiffness, DAMPING: damping, MASS: mass } = SCROLL_SPRING_CONFIG
 
     const state = {
       rafId: null as number | null,

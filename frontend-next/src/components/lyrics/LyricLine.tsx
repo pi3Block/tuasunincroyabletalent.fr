@@ -14,7 +14,7 @@
 import React, { memo, useMemo, forwardRef } from 'react'
 import { cn } from '@/lib/utils'
 import type { LyricLineProps } from '@/types/lyrics'
-import { DEFAULT_ANIMATION_CONFIG } from '@/types/lyrics'
+import { DEFAULT_ANIMATION_CONFIG, NEXT_LINE_SCALE, BLUR_CONFIG } from '@/types/lyrics'
 import { KaraokeWordGroup } from './KaraokeWord'
 
 // ============================================================================
@@ -63,7 +63,7 @@ function getTeleprompterOpacity(distance: number, isActive: boolean): number {
  */
 function getScale(isActive: boolean, isNext: boolean, config = DEFAULT_ANIMATION_CONFIG): number {
   if (isActive) return config.activeScale  // 1.0
-  if (isNext) return 0.98                  // clearly distinct from others
+  if (isNext) return NEXT_LINE_SCALE       // 0.98 — clearly distinct from others
   return config.inactiveScale              // 0.85 — strong recession
 }
 
@@ -137,33 +137,35 @@ export const LyricLine = memo(forwardRef<HTMLDivElement, LyricLineProps>(
       const opacity = getOpacity(distance, isActive, isNext, isPast)
 
       // Blur depth-of-field: focuses the eye on the active line (Apple Music-style).
-      // Re-implemented with targeted transition + dynamic will-change (fixes previous
-      // scrolling performance issue caused by global will-change + transition-all).
       const blurAmount = isActive ? 0
-        : isNext ? 0.3
-        : distance <= 3 ? Math.min(distance * 0.4, 1.5)
-        : Math.min(2 + (distance - 4) * 0.2, 3)
+        : isNext ? BLUR_CONFIG.NEXT
+        : distance <= 3 ? Math.min(distance * BLUR_CONFIG.NEAR_MULTIPLIER, BLUR_CONFIG.NEAR_MAX)
+        : Math.min(BLUR_CONFIG.FAR_BASE + (distance - 4) * BLUR_CONFIG.FAR_STEP, BLUR_CONFIG.FAR_MAX)
 
       // Pre-roll: subtle anticipatory glow on the next line when <2s from activation.
-      // Half the intensity of the active glow — visible but not distracting.
+      // Derived from config: 60% intensity, halved opacity.
       const preRollGlow = isPreRoll && !isActive
-        ? { textShadow: '0 0 12px rgba(34, 197, 94, 0.3)' }
+        ? {
+            textShadow: `0 0 ${Math.round(DEFAULT_ANIMATION_CONFIG.glowIntensity * 0.6)}px ${DEFAULT_ANIMATION_CONFIG.glowColor.replace('0.6)', '0.3)')}`,
+          }
         : {}
+
+      // Glow on the active line container — only in 'line' mode.
+      // In karaoke/word modes, KaraokeWord handles glow via Framer Motion
+      // on each word individually, so applying it here too would double the effect.
+      const isWordMode = displayMode === 'karaoke' || displayMode === 'word'
+      const activeGlow = isActive && DEFAULT_ANIMATION_CONFIG.enableGlow && !isWordMode
+        ? { textShadow: `0 0 ${DEFAULT_ANIMATION_CONFIG.glowIntensity}px ${DEFAULT_ANIMATION_CONFIG.glowColor}` }
+        : preRollGlow
 
       return {
         transform: `scale(${scale})`,
         opacity,
         filter: blurAmount > 0 ? `blur(${blurAmount}px)` : undefined,
-        // Dynamic will-change: promote ±10 lines to GPU layers (includes filter for blur)
         willChange: distance <= 10 ? 'transform, opacity, filter' : 'auto',
-        // Glow effect for active line — overrides pre-roll if both somehow true
-        ...(isActive && DEFAULT_ANIMATION_CONFIG.enableGlow
-          ? {
-              textShadow: `0 0 ${DEFAULT_ANIMATION_CONFIG.glowIntensity}px ${DEFAULT_ANIMATION_CONFIG.glowColor}`,
-            }
-          : preRollGlow),
+        ...activeGlow,
       } as React.CSSProperties
-    }, [isActive, isNext, isPast, distance, isPreRoll, isTeleprompter, reducedMotion])
+    }, [isActive, isNext, isPast, distance, isPreRoll, isTeleprompter, reducedMotion, displayMode])
 
     // Determine text classes based on state
     // Reduced sizes for better readability and more lines visible
@@ -250,12 +252,16 @@ export const LyricLine = memo(forwardRef<HTMLDivElement, LyricLineProps>(
         className={cn(
           // Base styles
           'cursor-pointer select-none',
-          // Transition — adapted for motion preferences and display mode
+          // Transition — adapted for motion preferences and display mode.
+          // In karaoke/word modes, exclude `transform` from CSS transitions to avoid
+          // competing with Framer Motion springs on KaraokeWord children.
           reducedMotion
             ? 'transition-none'
             : isTeleprompter
               ? 'transition-opacity duration-300 ease-out'
-              : 'transition-[transform,opacity,filter] duration-300 ease-out',
+              : (displayMode === 'karaoke' || displayMode === 'word')
+                ? 'transition-[opacity,filter] duration-300 ease-out'
+                : 'transition-[transform,opacity,filter] duration-300 ease-out',
           // Hover effect (only on non-active, disabled for teleprompter)
           !isActive && !isTeleprompter && 'hover:scale-[0.96] hover:opacity-80'
         )}

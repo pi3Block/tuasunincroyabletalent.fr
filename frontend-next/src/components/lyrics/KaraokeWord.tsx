@@ -15,9 +15,7 @@
 import React, { memo } from 'react'
 import { motion } from 'framer-motion'
 import type { KaraokeWordProps } from '@/types/lyrics'
-
-// Spring config for energy-driven glow & breathing — organic, bouncy feel
-const ENERGY_SPRING = { type: 'spring' as const, stiffness: 300, damping: 20 }
+import { ENERGY_CONFIG } from '@/types/lyrics'
 
 // ============================================================================
 // COMPONENT
@@ -87,20 +85,20 @@ export const KaraokeWord = memo(function KaraokeWord({
   // because clip-path clips text-shadow — the glow would be invisible if applied
   // to the clipped overlay span.
   const clipRight = Math.max(0, 100 - progress * 100)
-  const e = energy && energy > 0.05 ? energy : 0
+  const e = energy && energy > ENERGY_CONFIG.THRESHOLD ? energy : 0
 
   return (
     <motion.span
       className="relative inline-block"
       animate={{
         textShadow: e > 0
-          ? `0 0 ${Math.round(e * 50)}px rgba(34, 197, 94, ${(0.5 + e * 0.5).toFixed(2)}), 0 0 ${Math.round(e * 100)}px rgba(34, 197, 94, ${(e * 0.35).toFixed(2)})`
+          ? `0 0 ${Math.round(e * ENERGY_CONFIG.GLOW_INNER_MULTIPLIER)}px rgba(34, 197, 94, ${(ENERGY_CONFIG.GLOW_BASE_OPACITY + e * ENERGY_CONFIG.GLOW_OPACITY_RANGE).toFixed(2)}), 0 0 ${Math.round(e * ENERGY_CONFIG.GLOW_OUTER_MULTIPLIER)}px rgba(34, 197, 94, ${(e * ENERGY_CONFIG.GLOW_OUTER_OPACITY).toFixed(2)})`
           : '0 0 0px rgba(34, 197, 94, 0)',
-        scale: 1 + e * 0.12,
+        scale: 1 + e * ENERGY_CONFIG.SCALE_MULTIPLIER,
       }}
       transition={{
-        textShadow: ENERGY_SPRING,
-        scale: ENERGY_SPRING,
+        textShadow: ENERGY_CONFIG.SPRING,
+        scale: ENERGY_CONFIG.SPRING,
       }}
       style={{ transformOrigin: 'center bottom' }}
     >

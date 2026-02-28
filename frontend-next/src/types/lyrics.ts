@@ -229,6 +229,60 @@ export const DEFAULT_ANIMATION_CONFIG: LyricsAnimationConfig = {
   glowIntensity: 20,
 }
 
+/** Scale for the next line (distance=1, not past). Between active and inactive. */
+export const NEXT_LINE_SCALE = 0.98
+
+/**
+ * Energy-reactive effects on the active karaoke word (glow + breathing).
+ * Used by KaraokeWord for Framer Motion spring animations.
+ */
+export const ENERGY_CONFIG = {
+  /** Minimum energy to trigger effects (avoids noise) */
+  THRESHOLD: 0.05,
+  /** Inner glow radius multiplier (energy * this = px) */
+  GLOW_INNER_MULTIPLIER: 50,
+  /** Outer glow radius multiplier (energy * this = px) */
+  GLOW_OUTER_MULTIPLIER: 100,
+  /** Glow opacity at zero energy */
+  GLOW_BASE_OPACITY: 0.5,
+  /** Additional opacity range scaled by energy */
+  GLOW_OPACITY_RANGE: 0.5,
+  /** Outer glow opacity multiplier */
+  GLOW_OUTER_OPACITY: 0.35,
+  /** Scale increase multiplier (1 + energy * this) */
+  SCALE_MULTIPLIER: 0.12,
+  /** Framer Motion spring config for glow + scale */
+  SPRING: { type: 'spring' as const, stiffness: 300, damping: 20 },
+} as const
+
+/**
+ * Blur depth-of-field config for non-active lines (Apple Music-style focus).
+ * Applied via CSS filter in LyricLine.
+ */
+export const BLUR_CONFIG = {
+  /** Blur for next line (distance=1) */
+  NEXT: 0.3,
+  /** Blur multiplier for near lines (distance 2-3) */
+  NEAR_MULTIPLIER: 0.4,
+  /** Max blur for near lines */
+  NEAR_MAX: 1.5,
+  /** Base blur for far lines (distance 4+) */
+  FAR_BASE: 2,
+  /** Incremental blur per extra distance beyond 4 */
+  FAR_STEP: 0.2,
+  /** Maximum blur (never exceed) */
+  FAR_MAX: 3,
+} as const
+
+/**
+ * Spring physics config for auto-scroll (useLyricsScroll).
+ */
+export const SCROLL_SPRING_CONFIG = {
+  STIFFNESS: 120,
+  DAMPING: 26,
+  MASS: 1,
+} as const
+
 /**
  * Offset configuration constants.
  */
@@ -242,10 +296,14 @@ export const OFFSET_CONFIG = {
  * Performance configuration.
  */
 export const PERFORMANCE_CONFIG = {
-  /** Max lines to render (virtualization window) - high value to allow scrolling all lyrics */
-  RENDER_WINDOW: 100,
+  /** Max lines to render above/below active line (virtualization window) */
+  RENDER_WINDOW: 30,
   /** Scroll debounce in ms — 50ms for snappier response at line changes */
   SCROLL_DEBOUNCE_MS: 50,
   /** Binary search threshold for line lookup */
   BINARY_SEARCH_THRESHOLD: 20,
+  /** Hysteresis: minimum ms before changing to a new word (prevents micro-jumps) */
+  WORD_CHANGE_DELAY_MS: 80,
+  /** EMA smoothing factor for word progress (0 = very smooth, 1 = no smoothing) */
+  PROGRESS_SMOOTHING: 0.3,
 } as const
