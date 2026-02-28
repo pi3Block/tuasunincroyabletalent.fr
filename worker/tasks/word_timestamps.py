@@ -311,21 +311,17 @@ def generate_word_timestamps_cached(
     Celery task: Full pipeline — Demucs separation + shared-whisper timestamps + caching.
 
     Steps:
-    1. Unload Ollama from GPU 0 (if Demucs needed)
-    2. Run Demucs separation (GPU 0, ~4 GB VRAM)
+    1. Unload Ollama Heavy from GPU 1 (if Demucs needed, keep_alive:0)
+    2. Run Demucs separation (cuda:0 = GPU 1 RTX 3080, ~4 GB VRAM)
     3. Fetch lyrics for guided recognition
-    4. Generate word timestamps via shared-whisper HTTP (GPU 4, zero GPU 0 usage)
+    4. Generate word timestamps via shared-whisper HTTP (GPU 3, zero GPU 1 usage)
     5. Cache results in PostgreSQL
     """
     import torch
     import torchaudio
     from demucs.apply import apply_model
     from tasks.audio_separation import get_demucs_model, convert_to_wav
-    try:
-        from tasks.pipeline import _unload_ollama_model_for_gpu
-    except Exception:
-        # New GPU architecture does not require/define this helper.
-        _unload_ollama_model_for_gpu = None
+    from tasks.pipeline import _unload_ollama_for_demucs
 
     self.update_state(state="PROGRESS", meta={
         "step": "checking_cache",
@@ -363,9 +359,8 @@ def generate_word_timestamps_cached(
             "spotify_track_id": spotify_track_id,
         })
 
-        # Unload Ollama from GPU 0 if helper is available (legacy setups).
-        if _unload_ollama_model_for_gpu:
-            _unload_ollama_model_for_gpu()
+        # Unload Ollama Heavy from GPU 1 to free VRAM for Demucs
+        _unload_ollama_for_demucs()
 
         self.update_state(state="PROGRESS", meta={
             "step": "separating_audio",

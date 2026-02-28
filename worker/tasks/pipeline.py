@@ -2,11 +2,16 @@
 Audio analysis pipeline - orchestrates all analysis tasks.
 Runs all processing directly (not as sub-tasks) to avoid Celery .get() issues.
 
-Multi-GPU architecture (2026-02-27):
-- GPU 1 (RTX 3080 10GB, cuda:0): Demucs + de-bleeding (dedicated, no Ollama)
-- GPU 4 (RTX 3060 Ti 8GB, cuda:1): CREPE pitch extraction (dedicated)
+Multi-GPU architecture (2026-02-28):
+- GPU 1 (RTX 3080 10GB, cuda:0): Demucs + de-bleeding — shared with Ollama Heavy
+- GPU 2 (RTX 3070 8GB, cuda:1): CREPE pitch — coexists with Ollama (CREPE ~1GB)
 - GPU 3 (RTX 3070 8GB): shared-whisper HTTP (separate container)
 - Jury LLM: 100% LiteLLM/Groq (no local GPU needed)
+
+GPU time-sharing (GPU 1):
+  Normal state: Ollama Heavy qwen3:8b resident (~5.8 GB) for augmenter.pro
+  Pipeline start: POST keep_alive:0 → Ollama unloads → Demucs uses GPU (~4 GB)
+  Pipeline end: Ollama reloads on next request (~2-3s cold start)
 
 Storage (storages.augmenter.pro, bucket: kiaraoke):
   cache/{youtube_id}/reference.wav         <- YouTube original (permanent)
@@ -34,9 +39,12 @@ logger = logging.getLogger(__name__)
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
-# Dedicated GPU devices — no Ollama sharing, no locks needed
+# GPU devices — shared with Ollama via keep_alive:0 time-sharing
 DEMUCS_DEVICE = os.getenv("DEMUCS_DEVICE", "cuda:0")  # GPU 1 RTX 3080 10GB
-CREPE_DEVICE = os.getenv("CREPE_DEVICE", "cuda:1")     # GPU 4 RTX 3060 Ti 8GB
+CREPE_DEVICE = os.getenv("CREPE_DEVICE", "cuda:1")     # GPU 2 RTX 3070 8GB
+
+# Ollama Heavy on GPU 1 (same as Demucs) — unloaded before Demucs, reloads on next request
+OLLAMA_HEAVY_HOST = os.getenv("OLLAMA_HEAVY_HOST", "http://host.docker.internal:11434")
 try:
     STORAGE_UPLOAD_PARALLELISM = max(1, min(2, int(os.getenv("STORAGE_UPLOAD_PARALLELISM", "1"))))
 except ValueError:
@@ -127,6 +135,31 @@ def _temp_dir(name: str) -> Path:
     d = base / name
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def _unload_ollama_for_demucs():
+    """Unload Ollama Heavy model from GPU 1 to free VRAM for Demucs.
+
+    Ollama Heavy (qwen3:8b, ~5.8 GB) shares GPU 1 with Demucs (~4 GB).
+    Combined they exceed 10 GB RTX 3080 VRAM, so we unload before Demucs runs.
+    Ollama reloads automatically on next request (~2-3s cold start).
+
+    Non-fatal: if Ollama is unreachable or already unloaded, Demucs proceeds anyway.
+    """
+    import httpx
+
+    try:
+        resp = httpx.post(
+            f"{OLLAMA_HEAVY_HOST}/api/generate",
+            json={"model": "qwen3:8b", "keep_alive": 0},
+            timeout=10.0,
+        )
+        if resp.status_code == 200:
+            logger.info("Ollama Heavy unloaded from GPU 1 (keep_alive:0)")
+        else:
+            logger.warning("Ollama Heavy unload returned %d", resp.status_code)
+    except Exception as e:
+        logger.info("Ollama Heavy not reachable (may be idle): %s", e)
 
 
 def _resolve_audio(url_or_path: str, dest: Path) -> str:
@@ -259,8 +292,9 @@ def analyze_performance(
 
     try:
         # ============================================================
-        # GPU STATUS CHECK (dedicated GPUs, no locks needed)
+        # GPU PREP — unload Ollama Heavy from GPU 1 to free VRAM for Demucs
         # ============================================================
+        _unload_ollama_for_demucs()
         has_gpu = log_gpu_status()
 
         # ============================================================
@@ -564,6 +598,8 @@ def prepare_reference(
     )
 
     try:
+        # Unload Ollama Heavy from GPU 1 before any Demucs work
+        _unload_ollama_for_demucs()
         has_gpu = log_gpu_status()
         vocals_local = None
         instrumentals_local = None

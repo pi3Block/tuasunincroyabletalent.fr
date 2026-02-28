@@ -105,9 +105,11 @@ services:
       - WHISPER_MODEL=${WHISPER_MODEL:-turbo}
       - WHISPER_LOCAL_FALLBACK=false
       - GROQ_API_KEY=${GROQ_API_KEY:-}
-      # Multi-GPU device assignment
+      # Multi-GPU device assignment (shared with Ollama via keep_alive:0 time-sharing)
       - DEMUCS_DEVICE=cuda:0
       - CREPE_DEVICE=cuda:1
+      # Ollama Heavy on GPU 1 (same as Demucs) — unloaded before Demucs runs
+      - OLLAMA_HEAVY_HOST=http://host.docker.internal:11434
       # Remote storage — storages.augmenter.pro
       - STORAGE_URL=${STORAGE_URL:-https://storages.augmenter.pro}
       - STORAGE_API_KEY=${STORAGE_API_KEY:-}
