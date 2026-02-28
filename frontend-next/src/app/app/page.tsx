@@ -19,6 +19,8 @@ import { api, type Track } from "@/api/client";
 import { useAudioRecorder } from "@/hooks/useAudioRecorder";
 import { usePitchDetection } from "@/hooks/usePitchDetection";
 import { useWordTimestamps } from "@/hooks/useWordTimestamps";
+import { useFlowEnvelope } from "@/hooks/useFlowEnvelope";
+import { useFlowVisualization } from "@/hooks/useFlowVisualization";
 import { useOrientation } from "@/hooks/useOrientation";
 import { useSSE, type SSEEvent } from "@/hooks/useSSE";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
@@ -236,6 +238,15 @@ export default function AppPage() {
     autoGenerate: true,
     referenceReady:
       status === "ready" || status === "recording" || status === "results",
+  });
+
+  // Flow visualization — vocal energy envelope
+  const { status: flowEnvelopeStatus, getEnergyAtTime } = useFlowEnvelope(youtubeMatch?.id || null);
+  const flowState = useFlowVisualization({
+    getEnergyAtTime,
+    envelopeReady: flowEnvelopeStatus === 'found',
+    currentTime: playbackTime,
+    isPlaying: isVideoPlaying,
   });
 
   // YouTube player imperative controls (for TransportBar sync)
@@ -965,6 +976,7 @@ export default function AppPage() {
     offset: lyricsOffset,
     onOffsetChange: handleOffsetChange,
     showOffsetControls: true,
+    flowState,
   };
 
   // Reusable lyrics mode toggle (karaoke / line / teleprompter)
@@ -1114,6 +1126,7 @@ export default function AppPage() {
             onStateChange={handleYoutubeStateChange}
             onControlsReady={handleYoutubeControlsReady}
             onDurationChange={handleYoutubeDurationChange}
+            flowState={flowState}
             isRecording={status === "recording"}
             recordingDuration={
               status === "recording" ? recordingDuration : undefined

@@ -173,6 +173,13 @@ export interface GenerateWordTimestampsResponse {
   message: string;
 }
 
+export interface FlowEnvelopeResponse {
+  status: "found" | "not_found";
+  sample_rate_hz?: number;
+  values?: number[];
+  duration_seconds?: number;
+}
+
 export interface LyricsResponse {
   session_id: string;
   lyrics: string;
@@ -398,6 +405,14 @@ class ApiClient {
     trackType: "vocals" | "instrumentals" | "original",
   ): string {
     return `${this.baseUrl}/api/audio/${sessionId}/${source}/${trackType}`;
+  }
+
+  async getFlowEnvelope(
+    youtubeVideoId: string,
+  ): Promise<FlowEnvelopeResponse> {
+    return this.request<FlowEnvelopeResponse>(
+      `/api/lyrics/flow-envelope/${youtubeVideoId}`,
+    );
   }
 
   async getWordTimestamps(

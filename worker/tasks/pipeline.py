@@ -422,6 +422,10 @@ def analyze_performance(
                                 _safe_upload, storage,
                                 Path(ri_path), f"cache/{youtube_id}/instrumentals.wav",
                             )
+                    # Flow envelope (non-fatal, <1s CPU)
+                    if youtube_id and not storage.exists(f"cache/{youtube_id}/flow_envelope.json"):
+                        from tasks.flow_envelope import compute_and_upload_envelope
+                        compute_and_upload_envelope(rv_path, youtube_id, storage)
                 return rv_path, ri_path
 
             def _crepe_user() -> dict:
@@ -675,6 +679,13 @@ def prepare_reference(
                     logger.info("Saved Demucs output to storage cache: %s", youtube_id)
                 else:
                     logger.warning("Demucs cache upload failed for %s (non-fatal)", youtube_id)
+
+        # ================================================================
+        # FLOW ENVELOPE — compute and cache (non-fatal, <1s CPU)
+        # ================================================================
+        if youtube_id and not storage.exists(f"cache/{youtube_id}/flow_envelope.json"):
+            from tasks.flow_envelope import compute_and_upload_envelope
+            compute_and_upload_envelope(str(vocals_local), youtube_id, storage)
 
         # ================================================================
         # UPLOAD SESSION COPIES — parallel (StudioMode access via audio.py)

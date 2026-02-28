@@ -13,6 +13,8 @@ from celery import Celery
 
 from app.services.lyrics import lyrics_service
 from app.services.word_timestamps_cache import word_timestamps_cache_service
+from app.services.redis_client import redis_client
+from app.services.storage import storage as storage_client
 from app.config import settings
 
 # Celery app for triggering tasks (same config as session.py)
@@ -274,6 +276,71 @@ async def get_task_status(task_id: str):
             status_code=500,
             detail=f"Failed to get task status: {e}"
         )
+
+
+# ============================================
+# Flow Envelope Endpoints
+# ============================================
+
+class FlowEnvelopeResponse(BaseModel):
+    """Response for flow envelope (vocal energy visualization)."""
+    status: str  # 'found', 'not_found'
+    sample_rate_hz: Optional[int] = None
+    values: Optional[list[float]] = None
+    duration_seconds: Optional[float] = None
+
+
+@router.get("/flow-envelope/{youtube_video_id}", response_model=FlowEnvelopeResponse)
+async def get_flow_envelope(youtube_video_id: str):
+    """
+    Get pre-computed amplitude envelope of reference vocals for flow visualization.
+
+    The envelope is computed in the worker during `prepare_reference` (after Demucs).
+    Returns a compact time-series (20 Hz / 50ms windows) of normalized RMS values (0-1).
+
+    Cache strategy: Redis (1h TTL) → storage → not_found.
+    """
+    import json
+
+    redis_key = f"flow_env:{youtube_video_id}"
+
+    # Tier 1: Redis cache (1h TTL)
+    try:
+        client = await redis_client.get_client()
+        cached = await client.get(redis_key)
+        if cached:
+            data = json.loads(cached)
+            return FlowEnvelopeResponse(
+                status="found",
+                sample_rate_hz=data["sample_rate_hz"],
+                values=data["values"],
+                duration_seconds=data["duration_seconds"],
+            )
+    except Exception:
+        pass
+
+    # Tier 2: Storage fallback
+    storage_path = f"cache/{youtube_video_id}/flow_envelope.json"
+    try:
+        if await storage_client.exists(storage_path):
+            raw = await storage_client.download(storage_path)
+            data = json.loads(raw)
+            # Populate Redis cache for next request
+            try:
+                client = await redis_client.get_client()
+                await client.setex(redis_key, 3600, raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+            except Exception:
+                pass
+            return FlowEnvelopeResponse(
+                status="found",
+                sample_rate_hz=data["sample_rate_hz"],
+                values=data["values"],
+                duration_seconds=data["duration_seconds"],
+            )
+    except Exception:
+        pass
+
+    return FlowEnvelopeResponse(status="not_found")
 
 
 # ============================================

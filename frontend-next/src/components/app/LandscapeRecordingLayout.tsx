@@ -8,6 +8,7 @@ import { YouTubePlayer, type YouTubePlayerControls } from '@/components/app/YouT
 import { LyricsDisplayPro } from '@/components/lyrics/LyricsDisplayPro'
 import { formatSeconds } from '@/lib/utils'
 import type { YouTubeMatch, SyncedLyricLine, WordLine } from '@/api/client'
+import type { FlowVisualizationState } from '@/hooks/useFlowVisualization'
 
 interface LandscapeRecordingLayoutProps {
   /** YouTube video match */
@@ -42,6 +43,8 @@ interface LandscapeRecordingLayoutProps {
   onControlsReady?: (controls: YouTubePlayerControls) => void
   /** Called when YouTube player duration changes */
   onDurationChange?: (duration: number) => void
+  /** Flow visualization state (vocal energy waveform) */
+  flowState?: FlowVisualizationState | null
 }
 
 /**
@@ -65,6 +68,7 @@ export const LandscapeRecordingLayout = memo(function LandscapeRecordingLayout({
   actionButton,
   onControlsReady,
   onDurationChange,
+  flowState,
 }: LandscapeRecordingLayoutProps) {
   return (
     <div className="fixed inset-0 bg-gray-900 flex flex-row z-50">
@@ -116,6 +120,7 @@ export const LandscapeRecordingLayout = memo(function LandscapeRecordingLayout({
             offset={lyricsOffset}
             onOffsetChange={onOffsetChange}
             showOffsetControls={true}
+            flowState={flowState}
             className="h-full flex flex-col"
             scrollAreaClassName="h-full"
           />
