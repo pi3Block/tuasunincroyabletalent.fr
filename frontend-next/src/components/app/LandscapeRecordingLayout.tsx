@@ -138,6 +138,7 @@ export const LandscapeRecordingLayout = memo(function LandscapeRecordingLayout({
             offset={lyricsOffset}
             onOffsetChange={onOffsetChange}
             showOffsetControls={true}
+            getEnergyAtTime={flowEnvelopeReady ? getEnergyAtTime : undefined}
             className="h-full flex flex-col"
             scrollAreaClassName="h-full"
           />

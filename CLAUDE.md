@@ -86,14 +86,15 @@ tuasunincroyabletalent.fr/
 │       ├── components/
 │       │   ├── app/               # TrackSearch, YouTubePlayer, PitchIndicator,
 │       │   │                      # LandscapeRecordingLayout, LyricsDisplay
-│       │   ├── lyrics/            # LyricsDisplayPro, KaraokeWord, LyricLine,
-│       │   │                      # LyricsControls, TimelineDebug
+│       │   ├── lyrics/            # LyricsDisplayPro, KaraokeWord (Framer Motion energy glow),
+│       │   │                      # LyricLine, FlowBar, LyricsControls, TimelineDebug
 │       │   ├── sections/          # Hero, HowItWorks, RecentPerformances, TechStack
 │       │   ├── layout/            # Footer
 │       │   └── ui/                # shadcn (button, card, slider, badge, progress...)
 │       ├── hooks/                 # useAudioRecorder, usePitchDetection,
 │       │                          # useWordTimestamps, useYouTubePlayer,
 │       │                          # useLyricsSync, useLyricsScroll, useOrientation,
+│       │                          # useFlowEnvelope (getEnergyAtTime → karaoke glow),
 │       │                          # useSSE (Server-Sent Events + polling fallback)
 │       ├── audio/                 # Multi-track player (AudioContext, TrackProcessor,
 │       │                          # StudioMode, TrackMixer, TransportBar)
@@ -340,6 +341,23 @@ async def generate_comment(persona, prompt):
     return heuristic_comment(persona, score)
 ```
 
+### Singleton AudioContext (Playback + Microphone)
+```typescript
+// CRITICAL: All audio (playback, recording, pitch detection) MUST share a single
+// AudioContext. Multiple contexts cause hardware contention → music stuttering/jitter.
+import { getAudioContext } from '@/audio/core/AudioContext'
+
+// In usePitchDetection — use the shared context, NOT new AudioContext()
+const audioContext = getAudioContext()
+const analyser = audioContext.createAnalyser()
+const source = audioContext.createMediaStreamSource(micStream)
+source.connect(analyser)
+
+// On cleanup: disconnect source/analyser, but NEVER close the shared context
+source.disconnect()
+// audioContext.close()  ← NEVER do this, it kills playback
+```
+
 ### Zustand Store with Optimized Selectors
 ```typescript
 import { create } from 'zustand'
@@ -351,6 +369,16 @@ export const useLyricsState = () => useSessionStore(                       // sh
   s => ({ lines: s.lyricsLines, syncType: s.lyricsSyncType }),
   shallow,
 )
+```
+
+### Energy-Reactive Karaoke Words (Framer Motion)
+```
+Data flow: useFlowEnvelope(youtubeId) → getEnergyAtTime(t) → 0-1
+Threading: page.tsx → LyricsDisplayPro → LyricLine → KaraokeWordGroup → KaraokeWord
+Compute:   energy = getEnergyAtTime(adjustedTime)  // inside LyricsDisplayPro
+Render:    motion.span with animate={{ textShadow, scale }} + spring physics
+           clipPath stays in style (instant, GPU), energy effects in animate (spring)
+Config:    ENERGY_SPRING = { type: 'spring', stiffness: 300, damping: 20 }
 ```
 
 ## Celery Task Routing
@@ -482,6 +510,7 @@ Tables creees via Alembic migrations (`alembic upgrade head`), fallback `create_
 - **Never** use `large-v3` Whisper (non-turbo) — 7.6 Go VRAM, CUDA OOM on 8GB GPUs
 - **Never** run Demucs pendant qu'Ollama Light est charge (GPU OOM)
 - **Never** `REINDEX SYSTEM` sur shared-postgres en production
+- **Never** create a second `new AudioContext()` — use `getAudioContext()` singleton (contention = stuttering)
 
 ## Performance Guidelines
 

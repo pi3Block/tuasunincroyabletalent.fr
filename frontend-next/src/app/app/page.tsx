@@ -1028,6 +1028,7 @@ export default function AppPage() {
     offset: lyricsOffset,
     onOffsetChange: handleOffsetChange,
     showOffsetControls: true,
+    getEnergyAtTime: flowEnvelopeReady ? getEnergyAtTime : undefined,
   };
 
   // Reusable lyrics mode toggle (karaoke / line / teleprompter)

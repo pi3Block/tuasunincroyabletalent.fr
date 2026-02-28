@@ -15,6 +15,7 @@ import {
 } from '../core/AudioPlayerFactory'
 import { ensureAudioContextRunning, setMasterVolume } from '../core/AudioContext'
 import type { TrackId, AudioTracksResponse, StudioContext } from '../types'
+import type { EffectType } from '../effects/types'
 
 interface UseMultiTrackOptions {
   sessionId: string
@@ -255,6 +256,30 @@ export function useMultiTrack({
   useEffect(() => {
     syncPlayback()
   }, [syncPlayback])
+
+  // Sync effect state from store to EffectChain instances
+  useEffect(() => {
+    const instances = trackInstancesRef.current
+    instances.forEach((instance, key) => {
+      const trackState = tracks[key]
+      if (!trackState?.loaded || !trackState.effects) return
+
+      const effectTypes: EffectType[] = ['pitchShift', 'reverb', 'compressor']
+      for (const type of effectTypes) {
+        const fx = trackState.effects[type]
+        if (!fx) continue
+
+        const chain = instance.processor.getEffectChain()
+        if (fx.enabled) {
+          // Enable + update params (enable is async but fire-and-forget is fine here)
+          chain.enable(type, fx.params).catch(console.error)
+          chain.updateParams(type, fx.params).catch(console.error)
+        } else {
+          chain.disable(type)
+        }
+      }
+    })
+  }, [tracks])
 
   // Cleanup on unmount
   useEffect(() => {

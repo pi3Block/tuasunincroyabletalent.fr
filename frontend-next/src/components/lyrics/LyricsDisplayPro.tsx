@@ -60,6 +60,8 @@ interface LyricsDisplayProProps {
   onLineTap?: (lineIndex: number, lineStartTime: number) => void
   /** Show debug timeline UI */
   showDebug?: boolean
+  /** O(1) energy lookup for vocal energy visualization on active karaoke word */
+  getEnergyAtTime?: (t: number) => number
   /** Custom class name */
   className?: string
   /** Override ScrollArea class name (e.g. "h-full" for landscape) */
@@ -339,6 +341,7 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
   showOffsetControls = true,
   onLineChange,
   onLineTap,
+  getEnergyAtTime,
   showDebug = false,
   className,
   scrollAreaClassName,
@@ -387,6 +390,9 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
     displayMode: effectiveDisplayMode,
     enableWordTracking: effectiveDisplayMode === 'karaoke' || effectiveDisplayMode === 'word',
   })
+
+  // Energy for active karaoke word glow — O(1) lookup, zero extra renders
+  const energy = getEnergyAtTime ? getEnergyAtTime(adjustedTime) : 0
 
   // Responsive scroll position:
   // - Mobile landscape: 40% (half screen, center more)
@@ -629,6 +635,7 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
                   wordProgress={wordProgress}
                   isPreRoll={lineIsPreRoll}
                   reducedMotion={reducedMotion}
+                  energy={isActive ? energy : undefined}
                   onClick={() => handleLineTap(index)}
                 />
                 {/* Interlude dots: shown after the active line during gaps >5s */}

@@ -6,6 +6,8 @@ import { create } from 'zustand'
 import { useShallow } from 'zustand/react/shallow'
 import type { TrackState, TransportState, TrackId } from '@/audio/types'
 import { getTrackKey, getDefaultVolume } from '@/audio/core/AudioPlayerFactory'
+import type { EffectType, EffectState, EffectParams } from '@/audio/effects/types'
+import { DEFAULT_EFFECTS } from '@/audio/effects/types'
 
 interface AudioState {
   // Track states
@@ -31,6 +33,11 @@ interface AudioState {
   setTrackMuted: (id: TrackId, muted: boolean) => void
   setTrackSolo: (id: TrackId, solo: boolean) => void
   setTrackPan: (id: TrackId, pan: number) => void
+
+  // Effects actions
+  setTrackEffectEnabled: (id: TrackId, effectType: EffectType, enabled: boolean) => void
+  setTrackEffectParams: (id: TrackId, effectType: EffectType, params: EffectParams) => void
+  setTrackEffects: (id: TrackId, effects: Record<EffectType, EffectState>) => void
 
   // Transport actions
   play: () => void
@@ -82,6 +89,7 @@ export const useAudioStore = create<AudioState>((set) => ({
           muted: false,
           solo: false,
           pan: 0,
+          effects: structuredClone(DEFAULT_EFFECTS),
         },
       },
     }))
@@ -211,6 +219,60 @@ export const useAudioStore = create<AudioState>((set) => ({
     })
   },
 
+  setTrackEffectEnabled: (id, effectType, enabled) => {
+    const key = getTrackKey(id)
+    set((state) => {
+      const track = state.tracks[key]
+      if (!track) return state
+      return {
+        tracks: {
+          ...state.tracks,
+          [key]: {
+            ...track,
+            effects: {
+              ...track.effects,
+              [effectType]: { ...track.effects[effectType], enabled },
+            },
+          },
+        },
+      }
+    })
+  },
+
+  setTrackEffectParams: (id, effectType, params) => {
+    const key = getTrackKey(id)
+    set((state) => {
+      const track = state.tracks[key]
+      if (!track) return state
+      return {
+        tracks: {
+          ...state.tracks,
+          [key]: {
+            ...track,
+            effects: {
+              ...track.effects,
+              [effectType]: { ...track.effects[effectType], params },
+            },
+          },
+        },
+      }
+    })
+  },
+
+  setTrackEffects: (id, effects) => {
+    const key = getTrackKey(id)
+    set((state) => {
+      const track = state.tracks[key]
+      if (!track) return state
+      return {
+        tracks: {
+          ...state.tracks,
+          [key]: { ...track, effects },
+        },
+      }
+    })
+  },
+
   play: () =>
     set((state) => ({
       transport: { ...state.transport, playing: true },
@@ -303,3 +365,19 @@ export const useLoadedTracksCount = () =>
 /** Get total tracks count */
 export const useTotalTracksCount = () =>
   useAudioStore((s) => Object.keys(s.tracks).length)
+
+/** Per-track effects state */
+export const useTrackEffects = (id: TrackId) => {
+  const key = getTrackKey(id)
+  return useAudioStore((s) => s.tracks[key]?.effects)
+}
+
+/** Whether any effect is active on a given track */
+export const useTrackHasActiveEffects = (id: TrackId) => {
+  const key = getTrackKey(id)
+  return useAudioStore((s) => {
+    const effects = s.tracks[key]?.effects
+    if (!effects) return false
+    return Object.values(effects).some((e) => e.enabled)
+  })
+}

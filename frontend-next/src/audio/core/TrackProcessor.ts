@@ -1,10 +1,14 @@
 /**
  * TrackProcessor - Web Audio API node chain for a single track.
  *
- * Signal chain:
- * Source -> GainNode (volume) -> StereoPannerNode -> AnalyserNode -> MasterGain -> Destination
+ * Signal chain (no effects):
+ *   Source -> GainNode -> PannerNode -> AnalyserNode -> MasterGain -> Destination
+ *
+ * Signal chain (with effects):
+ *   Source -> GainNode -> PannerNode -> [EffectChain] -> AnalyserNode -> MasterGain -> Destination
  */
 import { getAudioContext, getMasterGain } from './AudioContext'
+import { EffectChain } from '../effects/EffectChain'
 
 export class TrackProcessor {
   private context: AudioContext
@@ -15,6 +19,7 @@ export class TrackProcessor {
   private audioElement: HTMLAudioElement | null = null
   private connected: boolean = false
   private currentVolume: number = 1
+  private _effectChain: EffectChain | null = null
 
   constructor() {
     this.context = getAudioContext()
@@ -129,9 +134,32 @@ export class TrackProcessor {
   }
 
   /**
+   * Get or create the EffectChain for this track.
+   * Lazily created on first call — the chain starts in bypass mode
+   * (panner → analyser direct) until an effect is explicitly enabled.
+   */
+  getEffectChain(): EffectChain {
+    if (!this._effectChain) {
+      // Disconnect panner → analyser so EffectChain can manage that link
+      try { this.pannerNode.disconnect(this.analyserNode) } catch { /* ok */ }
+      this._effectChain = new EffectChain(this.context, this.pannerNode, this.analyserNode)
+      // EffectChain constructor doesn't auto-connect — we need an initial rebuild
+      // with no effects, which restores the direct panner→analyser link
+      // This is handled by the caller enabling/disabling effects.
+      // For now, restore direct connection so audio doesn't cut out:
+      this.pannerNode.connect(this.analyserNode)
+    }
+    return this._effectChain
+  }
+
+  /**
    * Cleanup and dispose of all nodes.
    */
   dispose(): void {
+    if (this._effectChain) {
+      this._effectChain.dispose()
+      this._effectChain = null
+    }
     if (this.sourceNode) {
       this.sourceNode.disconnect()
       this.sourceNode = null

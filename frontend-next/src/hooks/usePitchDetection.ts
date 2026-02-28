@@ -15,6 +15,7 @@
  *  - Posts back { frequency }
  */
 import { useState, useRef, useCallback, useEffect } from 'react'
+import { getAudioContext } from '@/audio/core/AudioContext'
 
 export interface PitchData {
   frequency: number      // Hz (0 if no voice detected)
@@ -242,7 +243,9 @@ export function usePitchDetection(
 
   const startAnalysis = useCallback((stream: MediaStream) => {
     try {
-      const audioContext = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)()
+      // Use the singleton AudioContext shared with playback — avoids hardware
+      // contention between two contexts which causes music stuttering/jitter.
+      const audioContext = getAudioContext()
       audioContextRef.current = audioContext
 
       const analyser = audioContext.createAnalyser()
@@ -261,10 +264,8 @@ export function usePitchDetection(
 
       setIsAnalyzing(true)
     } catch (err) {
-      if (audioContextRef.current) {
-        audioContextRef.current.close()
-        audioContextRef.current = null
-      }
+      // Don't close the shared AudioContext on error — it's used by playback
+      audioContextRef.current = null
       analyserRef.current = null
       sourceRef.current = null
       throw err
@@ -284,10 +285,9 @@ export function usePitchDetection(
       sourceRef.current = null
     }
 
-    if (audioContextRef.current) {
-      audioContextRef.current.close()
-      audioContextRef.current = null
-    }
+    // Don't close the AudioContext — it's the shared singleton used by playback.
+    // Just drop the reference; the analyser/source are already disconnected above.
+    audioContextRef.current = null
 
     if (workerRef.current) {
       workerRef.current.onmessage = null

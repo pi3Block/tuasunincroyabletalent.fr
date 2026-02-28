@@ -107,6 +107,7 @@ export const LyricLine = memo(forwardRef<HTMLDivElement, LyricLineProps>(
       wordProgress,
       isPreRoll = false,
       reducedMotion = false,
+      energy,
       onClick,
     },
     ref
@@ -222,13 +223,14 @@ export const LyricLine = memo(forwardRef<HTMLDivElement, LyricLineProps>(
             currentWordIndex={effectiveWordIndex}
             wordProgress={isActive ? wordProgress : 0}
             reducedMotion={reducedMotion}
+            energy={isActive ? energy : undefined}
           />
         )
       }
 
       // Standard text rendering
       return line.text
-    }, [line, displayMode, isActive, isPast, currentWordIndex, wordProgress, isTeleprompter, reducedMotion])
+    }, [line, displayMode, isActive, isPast, currentWordIndex, wordProgress, isTeleprompter, reducedMotion, energy])
 
     return (
       <div

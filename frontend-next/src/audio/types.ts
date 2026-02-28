@@ -29,6 +29,9 @@ export interface TrackState {
   muted: boolean
   solo: boolean
   pan: number // -1 (left) to 1 (right)
+
+  // Effects state (per-track, managed by audioStore)
+  effects: import('./effects/types').TrackEffectsState
 }
 
 /** Transport state (shared across all tracks) */

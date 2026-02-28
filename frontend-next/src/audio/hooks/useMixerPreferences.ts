@@ -4,11 +4,13 @@
  */
 import { useEffect, useRef, useCallback } from 'react'
 import { useAudioStore } from '@/stores/audioStore'
+import type { TrackEffectsState } from '../effects/types'
 
 interface TrackPrefs {
   volume: number
   muted: boolean
   solo: boolean
+  effects?: TrackEffectsState
 }
 
 interface MixerPreferences {
@@ -46,6 +48,9 @@ export function useMixerPreferences(spotifyTrackId: string | null) {
           store.setTrackVolume(id, settings.volume)
           store.setTrackMuted(id, settings.muted)
           store.setTrackSolo(id, settings.solo)
+          if (settings.effects) {
+            store.setTrackEffects(id, settings.effects)
+          }
         }
       })
       restoredRef.current = true
@@ -69,7 +74,7 @@ export function useMixerPreferences(spotifyTrackId: string | null) {
           tracks: Object.fromEntries(
             Object.entries(tracks).map(([key, t]) => [
               key,
-              { volume: t.volume, muted: t.muted, solo: t.solo },
+              { volume: t.volume, muted: t.muted, solo: t.solo, effects: t.effects },
             ])
           ),
           savedAt: Date.now(),

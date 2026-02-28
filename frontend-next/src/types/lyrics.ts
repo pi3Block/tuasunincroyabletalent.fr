@@ -164,6 +164,8 @@ export interface LyricLineProps {
   isPreRoll?: boolean
   /** Whether prefers-reduced-motion is active (disables blur, glow, scale transitions) */
   reducedMotion?: boolean
+  /** Vocal energy (0-1) for active word glow/breathing */
+  energy?: number
   /** Callback when line is clicked */
   onClick?: () => void
 }
@@ -182,6 +184,8 @@ export interface KaraokeWordProps {
   progress: number
   /** Whether prefers-reduced-motion is active (disables clip-path animation) */
   reducedMotion?: boolean
+  /** Vocal energy (0-1) for active word glow/breathing */
+  energy?: number
 }
 
 // ============================================================================

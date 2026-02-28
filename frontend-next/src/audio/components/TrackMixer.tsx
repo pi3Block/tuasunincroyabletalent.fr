@@ -1,6 +1,7 @@
 /**
  * Multi-track mixer panel.
  */
+import { useState, useCallback } from 'react'
 import { useAudioStore, useTracks, useMasterVolume } from '@/stores/audioStore'
 import { AudioTrack } from './AudioTrack'
 import { VolumeSlider } from './VolumeSlider'
@@ -98,6 +99,25 @@ export function TrackMixer({
     downloadAudioTrack(url, filename)
   }
 
+  // FX panel toggle — only one track's FX panel open at a time
+  const [fxOpenTrack, setFxOpenTrack] = useState<string | null>(null)
+
+  const handleFxToggle = useCallback(
+    (id: TrackId) => () => {
+      const key = getTrackKey(id)
+      setFxOpenTrack((prev) => (prev === key ? null : key))
+    },
+    []
+  )
+
+  const hasActiveEffects = useCallback(
+    (state: { effects?: Record<string, { enabled: boolean }> }) =>
+      state.effects
+        ? Object.values(state.effects).some((e) => e.enabled)
+        : false,
+    []
+  )
+
   if (trackEntries.length === 0) {
     return (
       <div
@@ -155,6 +175,9 @@ export function TrackMixer({
                     onMuteToggle={handleMuteToggle(state.id)}
                     onSoloToggle={handleSoloToggle(state.id)}
                     onDownload={showDownload ? handleDownload(state.id, state.url) : undefined}
+                    onFxToggle={handleFxToggle(state.id)}
+                    fxActive={hasActiveEffects(state)}
+                    fxOpen={fxOpenTrack === key}
                     compact={compact}
                   />
                 ))}
@@ -178,6 +201,9 @@ export function TrackMixer({
                     onMuteToggle={handleMuteToggle(state.id)}
                     onSoloToggle={handleSoloToggle(state.id)}
                     onDownload={showDownload ? handleDownload(state.id, state.url) : undefined}
+                    onFxToggle={handleFxToggle(state.id)}
+                    fxActive={hasActiveEffects(state)}
+                    fxOpen={fxOpenTrack === key}
                     compact={compact}
                   />
                 ))}

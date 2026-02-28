@@ -7,6 +7,7 @@ import { VolumeSlider } from './VolumeSlider'
 import { Mic, Music, Disc, Loader2, Download } from 'lucide-react'
 import type { TrackId, TrackState } from '../types'
 import { getTrackKey } from '../core/AudioPlayerFactory'
+import { TrackEffectsPanel } from './TrackEffectsPanel'
 
 interface AudioTrackProps {
   id: TrackId
@@ -15,6 +16,9 @@ interface AudioTrackProps {
   onMuteToggle: () => void
   onSoloToggle: () => void
   onDownload?: () => void
+  onFxToggle?: () => void
+  fxActive?: boolean
+  fxOpen?: boolean
   compact?: boolean
 }
 
@@ -40,6 +44,9 @@ export const AudioTrack = React.memo(function AudioTrack({
   onMuteToggle,
   onSoloToggle,
   onDownload,
+  onFxToggle,
+  fxActive = false,
+  fxOpen = false,
   compact = false,
 }: AudioTrackProps) {
   const key = getTrackKey(id)
@@ -93,13 +100,14 @@ export const AudioTrack = React.memo(function AudioTrack({
   return (
     <div
       className={cn(
-        'flex items-center gap-3 rounded-lg transition-all',
+        'rounded-lg transition-all',
         isUserTrack ? 'bg-primary/10 border border-primary/20' : 'bg-muted/30',
         state.solo && 'ring-2 ring-yellow-500/50 bg-yellow-500/10',
         state.muted && 'opacity-60',
         compact ? 'p-2' : 'p-3'
       )}
     >
+    <div className="flex items-center gap-3">
       {/* Track icon and label */}
       <div className="flex items-center gap-2 min-w-[90px] sm:min-w-[110px]">
         <div
@@ -165,6 +173,26 @@ export const AudioTrack = React.memo(function AudioTrack({
           M
         </button>
 
+        {/* FX button */}
+        {onFxToggle && (
+          <button
+            type="button"
+            onClick={onFxToggle}
+            className={cn(
+              'h-8 w-8 rounded text-xs font-bold transition-all',
+              'flex items-center justify-center',
+              'touch-manipulation active:scale-95',
+              fxActive
+                ? 'bg-violet-500 text-white shadow-md'
+                : 'bg-muted/50 text-muted-foreground hover:bg-muted'
+            )}
+            title="Effets audio"
+            aria-pressed={fxActive}
+          >
+            FX
+          </button>
+        )}
+
         {/* Download button */}
         {onDownload && (
           <button
@@ -182,6 +210,12 @@ export const AudioTrack = React.memo(function AudioTrack({
           </button>
         )}
       </div>
+    </div>
+
+      {/* Effects panel (collapsible) */}
+      {fxOpen && state.effects && (
+        <TrackEffectsPanel id={id} effects={state.effects} />
+      )}
     </div>
   )
 })
