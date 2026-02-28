@@ -890,8 +890,22 @@ export default function AppPage() {
 
       await api.uploadRecording(sessionId, audioBlob);
       setStatus("analyzing");
-      const analysisResponse = await api.startAnalysis(sessionId);
-      setAnalysisTaskId(analysisResponse.task_id);
+
+      // Retry startAnalysis up to 3 times (API may be restarting)
+      let analysisResponse;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          analysisResponse = await api.startAnalysis(sessionId);
+          break;
+        } catch (retryErr) {
+          if (attempt < 2) {
+            await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+          } else {
+            throw retryErr;
+          }
+        }
+      }
+      setAnalysisTaskId(analysisResponse!.task_id);
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Erreur lors de l'envoi",

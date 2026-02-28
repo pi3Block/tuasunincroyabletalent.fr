@@ -76,6 +76,19 @@ def do_generate_feedback(
     user_pitch = np.load(user_pitch_path)
     reference_pitch = np.load(reference_pitch_path)
 
+    # Diagnostic logging for scoring inputs
+    u_freq = user_pitch["frequency"]
+    r_freq = reference_pitch["frequency"]
+    u_voiced = int(np.sum(u_freq > 0))
+    r_voiced = int(np.sum(r_freq > 0))
+    logger.info(
+        "Scoring inputs: user_freq=%d samples (%d voiced), "
+        "ref_freq=%d samples (%d voiced), "
+        "user_lyrics=%d chars, ref_lyrics=%d chars",
+        len(u_freq), u_voiced, len(r_freq), r_voiced,
+        len(user_lyrics), len(reference_lyrics),
+    )
+
     # Calculate pitch accuracy (simplified DTW distance)
     pitch_accuracy = calculate_pitch_accuracy(
         user_pitch["frequency"],
@@ -239,7 +252,11 @@ def calculate_pitch_accuracy(
 
     # Need minimum samples for meaningful comparison
     if len(user_voiced) < 10 or len(ref_voiced) < 10:
-        logger.debug("Not enough voiced samples for pitch comparison")
+        logger.warning(
+            "PITCH FALLBACK 50: not enough voiced samples "
+            "(user=%d, ref=%d, need >=10 each)",
+            len(user_voiced), len(ref_voiced),
+        )
         return 50.0
 
     # Convert to cents (logarithmic scale, semitone = 100 cents)
@@ -256,7 +273,11 @@ def calculate_pitch_accuracy(
             dist=euclidean
         )
     except Exception as e:
-        logger.warning("DTW error: %s", e)
+        logger.warning(
+            "PITCH FALLBACK 50: DTW error: %s "
+            "(user_cents=%d, ref_cents=%d)",
+            e, len(user_cents), len(ref_cents),
+        )
         return 50.0
 
     # Normalize by path length to get average cents difference
@@ -385,7 +406,11 @@ def calculate_rhythm_accuracy(
         user_onsets = user_onsets - offset_seconds
 
     if len(user_onsets) == 0 or len(ref_onsets) == 0:
-        logger.debug("No voice onsets detected for rhythm analysis")
+        logger.warning(
+            "RHYTHM FALLBACK 50: no voice onsets "
+            "(user=%d, ref=%d)",
+            len(user_onsets), len(ref_onsets),
+        )
         return 50.0
 
     # Match user onsets to closest reference onsets
@@ -427,7 +452,11 @@ def calculate_lyrics_accuracy(user_lyrics: str, ref_lyrics: str) -> float:
 
     # Handle missing reference lyrics
     if not ref_clean:
-        logger.debug("No reference lyrics available, using neutral score")
+        logger.warning(
+            "LYRICS FALLBACK 50: no reference lyrics available "
+            "(user_lyrics=%d chars)",
+            len(user_clean),
+        )
         return 50.0
 
     # Handle empty user transcription

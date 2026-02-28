@@ -211,6 +211,11 @@ def _clean_lyrics(lyrics: str) -> str:
     # Remove section headers [Verse], [Chorus], etc.
     lyrics = re.sub(r'\[.*?\]', '', lyrics)
 
+    # Remove Genius metadata prefix (e.g. "10 ContributorsTranslationsEnglish")
+    lyrics = re.sub(
+        r'^\d*\s*Contributor[s]?.*?\n+', '', lyrics, flags=re.IGNORECASE,
+    )
+
     # Clean up whitespace
     lyrics = re.sub(r'\n{3,}', '\n\n', lyrics)
     lyrics = lyrics.strip()
