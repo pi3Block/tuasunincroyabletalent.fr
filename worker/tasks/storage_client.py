@@ -4,6 +4,9 @@ Storage client (synchronous) for storages.augmenter.pro — worker Celery.
 Same API as backend/app/services/storage.py but synchronous (httpx sync)
 so it can be called from Celery tasks without an asyncio event loop.
 
+Uses a persistent connection pool to avoid creating new TCP connections
+for every request (which would exhaust Hostinger's process limit of ~120).
+
 API:
   POST /api/upload.php  — X-File-Path header + Bearer auth + raw binary body
   POST /api/delete.php  — JSON body {"path": "bucket/path"}
@@ -27,13 +30,20 @@ _UPLOAD_ATTEMPTS = 3
 _UPLOAD_RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 _UPLOAD_FOLLOW_REDIRECTS = os.getenv("STORAGE_UPLOAD_FOLLOW_REDIRECTS", "true").lower() in {"1", "true", "yes", "on"}
 
+# Connection pool limits — prevents overwhelming Hostinger (120 max processes)
+_MAX_CONNECTIONS = 10
+_MAX_KEEPALIVE = 5
+
 
 def _is_storage_url(path_or_url: str) -> bool:
     return path_or_url.startswith("http://") or path_or_url.startswith("https://")
 
 
 class StorageClient:
-    """Synchronous HTTP client for storages.augmenter.pro (bucket: kiaraoke)."""
+    """Synchronous HTTP client for storages.augmenter.pro (bucket: kiaraoke).
+
+    Uses a persistent connection pool to reuse TCP connections across requests.
+    """
 
     def __init__(self):
         self.base_url = self._normalize_base_url(
@@ -41,24 +51,38 @@ class StorageClient:
         )
         self.api_key = os.getenv("STORAGE_API_KEY", "")
         self.bucket = os.getenv("STORAGE_BUCKET", "kiaraoke")
+        self._client: httpx.Client | None = None
         key_fp = hashlib.sha256(self.api_key.encode("utf-8")).hexdigest()[:10] if self.api_key else "missing"
         logger.info(
-            "Storage client configured: base_url=%s bucket=%s api_key_fp=%s",
+            "Storage client configured: base_url=%s bucket=%s api_key_fp=%s pool=%d/%d",
             self.base_url,
             self.bucket,
             key_fp,
+            _MAX_KEEPALIVE,
+            _MAX_CONNECTIONS,
         )
+
+    def _get_client(self, follow_redirects: bool = True) -> httpx.Client:
+        """Get or create the persistent HTTP client with connection pooling."""
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.Client(
+                follow_redirects=follow_redirects,
+                limits=httpx.Limits(
+                    max_connections=_MAX_CONNECTIONS,
+                    max_keepalive_connections=_MAX_KEEPALIVE,
+                ),
+            )
+        return self._client
+
+    def close(self):
+        """Close the persistent HTTP client."""
+        if self._client and not self._client.is_closed:
+            self._client.close()
+            self._client = None
+            logger.info("Storage client connection pool closed")
 
     @staticmethod
     def _normalize_base_url(raw_url: str) -> str:
-        """
-        Normalize storage base URL.
-
-        Accepts either:
-          - https://storages.augmenter.pro
-          - https://storages.augmenter.pro/api
-        and always returns the host root URL.
-        """
         url = raw_url.rstrip("/")
         if url.endswith("/api"):
             url = url[:-4]
@@ -87,53 +111,53 @@ class StorageClient:
             "Content-Type": content_type,
             "X-File-Path": full_path,
         }
-        with httpx.Client(follow_redirects=_UPLOAD_FOLLOW_REDIRECTS) as client:
-            last_exc: Exception | None = None
-            for attempt in range(1, _UPLOAD_ATTEMPTS + 1):
-                try:
-                    logger.info(
-                        "Storage upload attempt %d/%d: path=%s bytes=%d follow_redirects=%s endpoint=%s",
-                        attempt,
-                        _UPLOAD_ATTEMPTS,
-                        full_path,
-                        len(data),
-                        _UPLOAD_FOLLOW_REDIRECTS,
-                        f"{self.base_url}/api/upload.php",
+        client = self._get_client(follow_redirects=_UPLOAD_FOLLOW_REDIRECTS)
+        last_exc: Exception | None = None
+        for attempt in range(1, _UPLOAD_ATTEMPTS + 1):
+            try:
+                logger.info(
+                    "Storage upload attempt %d/%d: path=%s bytes=%d follow_redirects=%s endpoint=%s",
+                    attempt,
+                    _UPLOAD_ATTEMPTS,
+                    full_path,
+                    len(data),
+                    _UPLOAD_FOLLOW_REDIRECTS,
+                    f"{self.base_url}/api/upload.php",
+                )
+                response = client.post(
+                    f"{self.base_url}/api/upload.php",
+                    content=data,
+                    headers=headers,
+                    timeout=_UPLOAD_TIMEOUT,
+                )
+                self._log_upload_response(response, full_path, attempt)
+                if response.status_code in _UPLOAD_RETRYABLE_STATUS:
+                    raise httpx.HTTPStatusError(
+                        f"Retryable status {response.status_code}",
+                        request=response.request,
+                        response=response,
                     )
-                    response = client.post(
-                        f"{self.base_url}/api/upload.php",
-                        content=data,
-                        headers=headers,
-                        timeout=_UPLOAD_TIMEOUT,
-                    )
-                    self._log_upload_response(response, full_path, attempt)
-                    if response.status_code in _UPLOAD_RETRYABLE_STATUS:
-                        raise httpx.HTTPStatusError(
-                            f"Retryable status {response.status_code}",
-                            request=response.request,
-                            response=response,
-                        )
-                    response.raise_for_status()
-                    result = response.json()
-                    url = result.get("url") or self.public_url(full_path)
-                    logger.info("Storage upload OK: %s (%d bytes)", full_path, len(data))
-                    return url
-                except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError) as e:
-                    last_exc = e
-                    retryable = not isinstance(e, httpx.HTTPStatusError) or (
-                        e.response is not None and e.response.status_code in _UPLOAD_RETRYABLE_STATUS
-                    )
-                    if not retryable or attempt == _UPLOAD_ATTEMPTS:
-                        logger.error("Storage upload failed for %s: %s", full_path, e)
-                        raise
-                    backoff = 1.5 * (2 ** (attempt - 1))
-                    logger.warning(
-                        "Storage upload retry %d/%d for %s after %.1fs (%s)",
-                        attempt + 1, _UPLOAD_ATTEMPTS, full_path, backoff, e,
-                    )
-                    time.sleep(backoff)
-            assert last_exc is not None
-            raise last_exc
+                response.raise_for_status()
+                result = response.json()
+                url = result.get("url") or self.public_url(full_path)
+                logger.info("Storage upload OK: %s (%d bytes)", full_path, len(data))
+                return url
+            except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError) as e:
+                last_exc = e
+                retryable = not isinstance(e, httpx.HTTPStatusError) or (
+                    e.response is not None and e.response.status_code in _UPLOAD_RETRYABLE_STATUS
+                )
+                if not retryable or attempt == _UPLOAD_ATTEMPTS:
+                    logger.error("Storage upload failed for %s: %s", full_path, e)
+                    raise
+                backoff = 1.5 * (2 ** (attempt - 1))
+                logger.warning(
+                    "Storage upload retry %d/%d for %s after %.1fs (%s)",
+                    attempt + 1, _UPLOAD_ATTEMPTS, full_path, backoff, e,
+                )
+                time.sleep(backoff)
+        assert last_exc is not None
+        raise last_exc
 
     def _log_upload_response(self, response: httpx.Response, full_path: str, attempt: int) -> None:
         """Emit concise diagnostics for redirects/upstream failures."""
@@ -167,52 +191,51 @@ class StorageClient:
         """Delete a file from storage (non-fatal on error)."""
         full_path = self.storage_path(relative_path)
         headers = {**self._auth_headers(), "Content-Type": "application/json"}
-        with httpx.Client(follow_redirects=True) as client:
-            try:
-                response = client.post(
-                    f"{self.base_url}/api/delete.php",
-                    json={"path": full_path},
-                    headers=headers,
-                    timeout=_DELETE_TIMEOUT,
-                )
-                if response.status_code not in (200, 204, 404):
-                    logger.warning("Storage delete %d for %s", response.status_code, full_path)
-                else:
-                    logger.debug("Storage delete OK: %s", full_path)
-            except Exception as e:
-                logger.warning("Storage delete failed for %s (non-fatal): %s", full_path, e)
+        client = self._get_client()
+        try:
+            response = client.post(
+                f"{self.base_url}/api/delete.php",
+                json={"path": full_path},
+                headers=headers,
+                timeout=_DELETE_TIMEOUT,
+            )
+            if response.status_code not in (200, 204, 404):
+                logger.warning("Storage delete %d for %s", response.status_code, full_path)
+            else:
+                logger.debug("Storage delete OK: %s", full_path)
+        except Exception as e:
+            logger.warning("Storage delete failed for %s (non-fatal): %s", full_path, e)
 
     def exists(self, relative_path: str) -> bool:
         """Check existence via HEAD request."""
         url = self.public_url(relative_path)
-        with httpx.Client(follow_redirects=True) as client:
-            try:
-                response = client.head(url, timeout=_EXISTS_TIMEOUT)
-                return response.status_code == 200
-            except Exception:
-                return False
+        client = self._get_client()
+        try:
+            response = client.head(url, timeout=_EXISTS_TIMEOUT)
+            return response.status_code == 200
+        except Exception:
+            return False
 
     def download(self, relative_path: str) -> bytes:
         """Download file bytes from storage."""
         url = self.public_url(relative_path)
-        with httpx.Client(follow_redirects=True) as client:
-            response = client.get(url, timeout=_DOWNLOAD_TIMEOUT)
-            response.raise_for_status()
-            logger.debug("Storage download OK: %s (%d bytes)", relative_path, len(response.content))
-            return response.content
+        client = self._get_client()
+        response = client.get(url, timeout=_DOWNLOAD_TIMEOUT)
+        response.raise_for_status()
+        logger.debug("Storage download OK: %s (%d bytes)", relative_path, len(response.content))
+        return response.content
 
     def download_to_file(self, relative_path: str, local_path: Path) -> Path:
         """Download from storage to a local path, returns local_path."""
         local_path.parent.mkdir(parents=True, exist_ok=True)
-        # Stream for large files
         url = self.public_url(relative_path)
         logger.info("Downloading storage:%s → %s", relative_path, local_path)
-        with httpx.Client(follow_redirects=True) as client:
-            with client.stream("GET", url, timeout=_DOWNLOAD_TIMEOUT) as response:
-                response.raise_for_status()
-                with open(local_path, "wb") as f:
-                    for chunk in response.iter_bytes(chunk_size=1024 * 256):
-                        f.write(chunk)
+        client = self._get_client()
+        with client.stream("GET", url, timeout=_DOWNLOAD_TIMEOUT) as response:
+            response.raise_for_status()
+            with open(local_path, "wb") as f:
+                for chunk in response.iter_bytes(chunk_size=1024 * 256):
+                    f.write(chunk)
         return local_path
 
 

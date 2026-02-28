@@ -74,21 +74,6 @@ async def list_available_tracks(session_id: str):
     # Separated tracks: check storage (session path first, then cache fallback)
     youtube_id = session.get("youtube_id")
 
-    async def _check_with_fallback(session_path: str, cache_path: str | None) -> tuple[bool, str]:
-        """Check session path first, fallback to cache. Returns (available, source)."""
-        try:
-            if await storage.exists(session_path):
-                return True, "session"
-        except Exception:
-            pass
-        if cache_path:
-            try:
-                if await storage.exists(cache_path):
-                    return True, "cache"
-            except Exception:
-                pass
-        return False, ""
-
     ref_vocals_path = f"sessions/{session_id}_ref/vocals.wav"
     ref_instru_path = f"sessions/{session_id}_ref/instrumentals.wav"
     user_vocals_path = f"sessions/{session_id}_user/vocals.wav"
@@ -98,16 +83,31 @@ async def list_available_tracks(session_id: str):
     cache_vocals = f"cache/{youtube_id}/vocals.wav" if youtube_id else None
     cache_instru = f"cache/{youtube_id}/instrumentals.wav" if youtube_id else None
 
+    async def _check_with_url(session_path: str, cache_path: str | None) -> tuple[bool, str, str]:
+        """Check existence and return (available, source, direct_url)."""
+        try:
+            if await storage.exists(session_path):
+                return True, "session", storage.public_url(session_path)
+        except Exception:
+            pass
+        if cache_path:
+            try:
+                if await storage.exists(cache_path):
+                    return True, "cache", storage.public_url(cache_path)
+            except Exception:
+                pass
+        return False, "", ""
+
     (
-        (ref_vocals_ready, ref_vocals_source),
-        (ref_instru_ready, ref_instru_source),
-        (user_vocals_ready, _user_v_src),
-        (user_instru_ready, _user_i_src),
+        (ref_vocals_ready, ref_vocals_source, ref_vocals_url),
+        (ref_instru_ready, ref_instru_source, ref_instru_url),
+        (user_vocals_ready, _user_v_src, user_vocals_url),
+        (user_instru_ready, _user_i_src, user_instru_url),
     ) = await asyncio.gather(
-        _check_with_fallback(ref_vocals_path, cache_vocals),
-        _check_with_fallback(ref_instru_path, cache_instru),
-        _check_with_fallback(user_vocals_path, None),
-        _check_with_fallback(user_instru_path, None),
+        _check_with_url(ref_vocals_path, cache_vocals),
+        _check_with_url(ref_instru_path, cache_instru),
+        _check_with_url(user_vocals_path, None),
+        _check_with_url(user_instru_path, None),
     )
 
     return {
@@ -119,11 +119,17 @@ async def list_available_tracks(session_id: str):
                 "original": ref_original_ready,
                 "vocals_source": ref_vocals_source,
                 "instrumentals_source": ref_instru_source,
+                "vocals_url": ref_vocals_url,
+                "instrumentals_url": ref_instru_url,
+                "original_url": reference_path if ref_original_ready and _is_storage_url(reference_path) else "",
             },
             "user": {
                 "vocals": user_vocals_ready,
                 "instrumentals": user_instru_ready,
                 "original": user_original_ready,
+                "vocals_url": user_vocals_url,
+                "instrumentals_url": user_instru_url,
+                "original_url": user_audio_path if user_original_ready and _is_storage_url(user_audio_path) else "",
             },
         }
     }

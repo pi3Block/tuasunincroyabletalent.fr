@@ -67,6 +67,7 @@ export const TrackEffectsPanel = React.memo(function TrackEffectsPanel({
             max={12}
             step={1}
             value={[pitchParams.semitones]}
+            disabled={!effects.pitchShift.enabled}
             onValueChange={([v]) =>
               setEffectParams(id, 'pitchShift', { type: 'pitchShift', semitones: v })
             }
@@ -92,6 +93,7 @@ export const TrackEffectsPanel = React.memo(function TrackEffectsPanel({
               max={100}
               step={1}
               value={[Math.round(reverbParams.wet * 100)]}
+              disabled={!effects.reverb.enabled}
               onValueChange={([v]) =>
                 setEffectParams(id, 'reverb', { type: 'reverb', decay: reverbParams.decay, wet: v / 100 })
               }
@@ -108,6 +110,7 @@ export const TrackEffectsPanel = React.memo(function TrackEffectsPanel({
               max={100}
               step={1}
               value={[Math.round(reverbParams.decay * 10)]}
+              disabled={!effects.reverb.enabled}
               onValueChange={([v]) =>
                 setEffectParams(id, 'reverb', { type: 'reverb', decay: v / 10, wet: reverbParams.wet })
               }
@@ -134,6 +137,7 @@ export const TrackEffectsPanel = React.memo(function TrackEffectsPanel({
               max={0}
               step={1}
               value={[compressorParams.threshold]}
+              disabled={!effects.compressor.enabled}
               onValueChange={([v]) =>
                 setEffectParams(id, 'compressor', { type: 'compressor', threshold: v, ratio: compressorParams.ratio })
               }
@@ -150,6 +154,7 @@ export const TrackEffectsPanel = React.memo(function TrackEffectsPanel({
               max={20}
               step={1}
               value={[compressorParams.ratio]}
+              disabled={!effects.compressor.enabled}
               onValueChange={([v]) =>
                 setEffectParams(id, 'compressor', { type: 'compressor', threshold: compressorParams.threshold, ratio: v })
               }
@@ -175,25 +180,29 @@ interface EffectRowProps {
 function EffectRow({ type, enabled, onToggle, children }: EffectRowProps) {
   const config = EFFECT_CONFIG[type]
 
-  const btnColors: Record<string, string> = {
-    violet: enabled ? 'bg-violet-500 text-white' : 'bg-muted/50 text-muted-foreground hover:bg-muted',
-    blue: enabled ? 'bg-blue-500 text-white' : 'bg-muted/50 text-muted-foreground hover:bg-muted',
-    amber: enabled ? 'bg-amber-500 text-white' : 'bg-muted/50 text-muted-foreground hover:bg-muted',
+  const activeColors: Record<string, string> = {
+    violet: 'bg-violet-500 text-white shadow-md shadow-violet-500/30',
+    blue: 'bg-blue-500 text-white shadow-md shadow-blue-500/30',
+    amber: 'bg-amber-500 text-white shadow-md shadow-amber-500/30',
   }
 
   return (
     <div className={cn(
-      'flex items-start gap-2 rounded-md px-2 py-1.5 transition-opacity',
-      !enabled && 'opacity-50',
+      'flex items-start gap-2 rounded-md px-2 py-1.5 transition-all',
+      enabled && 'bg-white/5',
     )}>
       <button
         type="button"
         onClick={onToggle}
         className={cn(
-          'shrink-0 h-7 px-2 rounded text-xs font-medium transition-all',
-          'flex items-center gap-1',
+          'shrink-0 h-8 min-w-[44px] px-2.5 rounded-md text-xs font-bold transition-all',
+          'flex items-center justify-center gap-1.5',
           'touch-manipulation active:scale-95',
-          btnColors[config.color],
+          'border-2',
+          enabled
+            ? activeColors[config.color]
+            : 'border-muted-foreground/30 bg-muted/30 text-muted-foreground hover:border-muted-foreground/60 hover:bg-muted/50',
+          enabled && 'border-transparent',
         )}
         aria-pressed={enabled}
         title={`${enabled ? 'Désactiver' : 'Activer'} ${config.label}`}
@@ -201,7 +210,9 @@ function EffectRow({ type, enabled, onToggle, children }: EffectRowProps) {
         <span>{config.icon}</span>
         <span className="hidden sm:inline">{config.label}</span>
       </button>
-      {children}
+      <div className={cn('flex-1 transition-opacity', !enabled && 'opacity-40 pointer-events-none')}>
+        {children}
+      </div>
     </div>
   )
 }

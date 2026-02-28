@@ -57,11 +57,17 @@ export interface AudioTracksResponse {
       vocals: boolean
       instrumentals: boolean
       original: boolean
+      vocals_url?: string
+      instrumentals_url?: string
+      original_url?: string
     }
     user: {
       vocals: boolean
       instrumentals: boolean
       original: boolean
+      vocals_url?: string
+      instrumentals_url?: string
+      original_url?: string
     }
   }
 }

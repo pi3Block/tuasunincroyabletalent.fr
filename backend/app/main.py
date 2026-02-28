@@ -46,6 +46,8 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     print("👋 Shutting down...")
+    from app.services.storage import storage
+    await storage.close()
     await close_db()
 
 

@@ -82,38 +82,43 @@ export const KaraokeWord = memo(function KaraokeWord({
 
   // Active word: clip-path overlay reveals primary color from left to right.
   // clip-path is GPU compositor-accelerated (Tier S) — no layout, no paint.
-  // Compatible with text-shadow/glow (unlike background-clip: text).
+  //
+  // Energy effects (glow + breathing) are on the CONTAINER, not the overlay,
+  // because clip-path clips text-shadow — the glow would be invisible if applied
+  // to the clipped overlay span.
   const clipRight = Math.max(0, 100 - progress * 100)
+  const e = energy && energy > 0.05 ? energy : 0
 
   return (
-    <span className="relative inline-block">
+    <motion.span
+      className="relative inline-block"
+      animate={{
+        textShadow: e > 0
+          ? `0 0 ${Math.round(e * 50)}px rgba(34, 197, 94, ${(0.5 + e * 0.5).toFixed(2)}), 0 0 ${Math.round(e * 100)}px rgba(34, 197, 94, ${(e * 0.35).toFixed(2)})`
+          : '0 0 0px rgba(34, 197, 94, 0)',
+        scale: 1 + e * 0.12,
+      }}
+      transition={{
+        textShadow: ENERGY_SPRING,
+        scale: ENERGY_SPRING,
+      }}
+      style={{ transformOrigin: 'center bottom' }}
+    >
       {/* Base layer: muted color, hidden from AT (overlay provides accessible text) */}
       <span className="font-bold text-muted-foreground" aria-hidden="true">
         {word.text}
       </span>
-      {/* Overlay: primary color, revealed left-to-right by clip-path.
-          Energy effects (glow + breathing) animated via Framer Motion spring physics. */}
-      <motion.span
+      {/* Overlay: primary color, revealed left-to-right by clip-path */}
+      <span
         className="absolute inset-0 font-bold text-primary"
         style={{
           clipPath: `inset(0 ${clipRight}% 0 0)`,
           willChange: 'clip-path',
-          transformOrigin: 'center bottom',
-        }}
-        animate={{
-          textShadow: energy && energy > 0.05
-            ? `0 0 ${Math.round(energy * 24)}px rgba(34, 197, 94, ${(0.3 + energy * 0.5).toFixed(2)})`
-            : '0 0 0px rgba(34, 197, 94, 0)',
-          scale: 1 + (energy && energy > 0.05 ? energy * 0.05 : 0),
-        }}
-        transition={{
-          textShadow: ENERGY_SPRING,
-          scale: ENERGY_SPRING,
         }}
       >
         {word.text}
-      </motion.span>
-    </span>
+      </span>
+    </motion.span>
   )
 })
 

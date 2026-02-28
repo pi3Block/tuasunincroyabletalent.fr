@@ -56,11 +56,11 @@ export function useMultiTrack({
     setLoading,
   } = useAudioStore()
 
-  // Initialize a single track
+  // Initialize a single track (directUrl bypasses API proxy → loads from storage directly)
   const initTrack = useCallback(
-    async (id: TrackId): Promise<boolean> => {
+    async (id: TrackId, directUrl?: string | null): Promise<boolean> => {
       const key = getTrackKey(id)
-      const url = buildAudioUrl(sessionId, id.source, id.type)
+      const url = directUrl || buildAudioUrl(sessionId, id.source, id.type)
 
       // Add to store
       addTrack(id, url)
@@ -136,6 +136,18 @@ export function useMultiTrack({
     setIsReady(false)
   }, [])
 
+  // Resolve direct storage URL for a track (bypasses API proxy → faster, no CORS redirect)
+  const getDirectUrl = useCallback(
+    (availableTracks: AudioTracksResponse | null, id: TrackId): string | null => {
+      if (!availableTracks) return null
+      const trackInfo = availableTracks.tracks[id.source]
+      const urlKey = `${id.type}_url` as keyof typeof trackInfo
+      const url = trackInfo[urlKey]
+      return typeof url === 'string' && url.startsWith('http') ? url : null
+    },
+    []
+  )
+
   // Load all available tracks
   const loadTracks = useCallback(async () => {
     if (isInitializedRef.current) return
@@ -161,8 +173,13 @@ export function useMultiTrack({
         throw new Error('Aucune piste audio disponible')
       }
 
-      // Load all tracks in parallel
-      const results = await Promise.all(tracksToLoad.map(initTrack))
+      // Load all tracks in parallel — use direct storage URLs when available
+      const results = await Promise.all(
+        tracksToLoad.map((id) => {
+          const directUrl = getDirectUrl(availableTracks, id)
+          return initTrack(id, directUrl)
+        })
+      )
 
       // Check if at least one loaded successfully
       const successCount = results.filter((r) => r).length
@@ -188,7 +205,7 @@ export function useMultiTrack({
       const error = err instanceof Error ? err : new Error('Unknown error')
       onError?.(error)
     }
-  }, [context, fetchAvailableTracks, initTrack, setDuration, setLoading, onReady, onError])
+  }, [context, fetchAvailableTracks, getDirectUrl, initTrack, setDuration, setLoading, onReady, onError])
 
   // Sync all tracks to current transport state
   const syncPlayback = useCallback(() => {
