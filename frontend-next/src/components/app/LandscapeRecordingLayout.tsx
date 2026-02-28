@@ -6,9 +6,9 @@
 import { memo } from 'react'
 import { YouTubePlayer, type YouTubePlayerControls } from '@/components/app/YouTubePlayer'
 import { LyricsDisplayPro } from '@/components/lyrics/LyricsDisplayPro'
+import { FlowBar } from '@/components/lyrics/FlowBar'
 import { formatSeconds } from '@/lib/utils'
 import type { YouTubeMatch, SyncedLyricLine, WordLine } from '@/api/client'
-import type { FlowVisualizationState } from '@/hooks/useFlowVisualization'
 
 interface LandscapeRecordingLayoutProps {
   /** YouTube video match */
@@ -43,8 +43,12 @@ interface LandscapeRecordingLayoutProps {
   onControlsReady?: (controls: YouTubePlayerControls) => void
   /** Called when YouTube player duration changes */
   onDurationChange?: (duration: number) => void
-  /** Flow visualization state (vocal energy waveform) */
-  flowState?: FlowVisualizationState | null
+  /** O(1) energy lookup for FlowBar */
+  getEnergyAtTime?: (t: number) => number
+  /** Whether flow envelope is ready */
+  flowEnvelopeReady?: boolean
+  /** Reduced motion preference */
+  reducedMotion?: boolean
 }
 
 /**
@@ -68,11 +72,13 @@ export const LandscapeRecordingLayout = memo(function LandscapeRecordingLayout({
   actionButton,
   onControlsReady,
   onDurationChange,
-  flowState,
+  getEnergyAtTime,
+  flowEnvelopeReady = false,
+  reducedMotion = false,
 }: LandscapeRecordingLayoutProps) {
   return (
     <div className="fixed inset-0 bg-gray-900 flex flex-row z-50">
-      {/* Left side: Video + Controls (50%) */}
+      {/* Left side: Video + FlowBar + Controls (50%) */}
       <div className="w-1/2 h-full flex flex-col p-2 gap-2">
         {/* Video container - takes most of the space */}
         <div className="flex-1 min-h-0 relative">
@@ -93,8 +99,19 @@ export const LandscapeRecordingLayout = memo(function LandscapeRecordingLayout({
           )}
         </div>
 
+        {/* Flow visualization bar — under video */}
+        {flowEnvelopeReady && getEnergyAtTime && (
+          <FlowBar
+            getEnergyAtTime={getEnergyAtTime}
+            envelopeReady
+            currentTime={playbackTime}
+            isPlaying={isVideoPlaying}
+            reducedMotion={reducedMotion}
+          />
+        )}
+
         {/* Recording indicator + Action button */}
-        <div className="flex-shrink-0 space-y-2">
+        <div className="shrink-0 space-y-2">
           {isRecording && (
             <div className="flex items-center justify-center gap-2 bg-red-500/20 border border-red-500 rounded-lg px-3 py-1.5">
               <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse" />
@@ -120,7 +137,6 @@ export const LandscapeRecordingLayout = memo(function LandscapeRecordingLayout({
             offset={lyricsOffset}
             onOffsetChange={onOffsetChange}
             showOffsetControls={true}
-            flowState={flowState}
             className="h-full flex flex-col"
             scrollAreaClassName="h-full"
           />

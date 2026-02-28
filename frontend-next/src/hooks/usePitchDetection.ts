@@ -1,6 +1,9 @@
 /**
  * Hook for real-time pitch detection using Web Audio API.
  * Uses autocorrelation algorithm for fundamental frequency detection.
+ *
+ * Performance: Throttled to ~12fps to avoid blocking the main thread
+ * during recording (autocorrelation is O(n²) on buffer size).
  */
 import { useState, useRef, useCallback, useEffect } from 'react'
 
@@ -27,6 +30,9 @@ export interface UsePitchDetectionReturn {
 
 // Note names for display
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+
+// Target ~12fps for pitch detection (enough for visual feedback, easy on main thread)
+const PITCH_FRAME_INTERVAL = 80 // ms
 
 // Convert frequency to note name and cents deviation
 function frequencyToNote(frequency: number): { note: string; cents: number } {
@@ -57,7 +63,7 @@ function autoCorrelate(
   const maxSamples = Math.floor(sampleRate / minFreq)
   const minSamples = Math.floor(sampleRate / maxFreq)
 
-  // Check if there's enough signal
+  // Check if there's enough signal (reuse same buffer, no extra alloc)
   let rms = 0
   for (let i = 0; i < SIZE; i++) {
     rms += buffer[i] * buffer[i]
@@ -115,6 +121,14 @@ function autoCorrelateAt(buffer: Float32Array, offset: number): number {
   return correlation / (SIZE - offset)
 }
 
+const DEFAULT_PITCH: PitchData = {
+  frequency: 0,
+  note: '-',
+  cents: 0,
+  volume: 0,
+  isVoiced: false,
+}
+
 export function usePitchDetection(
   options: UsePitchDetectionOptions = {}
 ): UsePitchDetectionReturn {
@@ -124,14 +138,7 @@ export function usePitchDetection(
     smoothingFactor = 0.3,
   } = options
 
-  const [pitchData, setPitchData] = useState<PitchData>({
-    frequency: 0,
-    note: '-',
-    cents: 0,
-    volume: 0,
-    isVoiced: false,
-  })
-
+  const [pitchData, setPitchData] = useState<PitchData>(DEFAULT_PITCH)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
 
   const audioContextRef = useRef<AudioContext | null>(null)
@@ -139,25 +146,51 @@ export function usePitchDetection(
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
   const animationFrameRef = useRef<number | null>(null)
   const previousFrequencyRef = useRef<number>(0)
+  // Reuse buffer across frames to avoid GC pressure
+  const bufferRef = useRef<Float32Array<ArrayBuffer> | null>(null)
+  // Timestamp of last actual analysis (for throttling)
+  const lastAnalysisRef = useRef<number>(0)
 
-  const analyze = useCallback(() => {
-    if (!analyserRef.current || !isAnalyzing) return
+  const analyze = useCallback((timestamp: number) => {
+    if (!analyserRef.current) return
+
+    // Schedule next frame first (keeps loop alive even if we skip this frame)
+    animationFrameRef.current = requestAnimationFrame(analyze)
+
+    // Throttle: skip frame if not enough time has passed
+    const elapsed = timestamp - lastAnalysisRef.current
+    if (elapsed < PITCH_FRAME_INTERVAL) return
+    lastAnalysisRef.current = timestamp
 
     const analyser = analyserRef.current
     const bufferLength = analyser.fftSize
-    const buffer = new Float32Array(bufferLength)
+
+    // Reuse Float32Array buffer
+    if (!bufferRef.current || bufferRef.current.length !== bufferLength) {
+      bufferRef.current = new Float32Array(bufferLength)
+    }
+    const buffer = bufferRef.current
 
     analyser.getFloatTimeDomainData(buffer)
 
-    // Calculate volume (RMS)
+    // Fast volume check — skip expensive autocorrelation if silent
     let rms = 0
     for (let i = 0; i < bufferLength; i++) {
       rms += buffer[i] * buffer[i]
     }
     rms = Math.sqrt(rms / bufferLength)
-    const volume = Math.min(1, rms * 10) // Scale for display
+    const volume = Math.min(1, rms * 10)
 
-    // Detect pitch
+    if (rms < 0.01) {
+      // Silent — skip autocorrelation entirely, just update volume
+      if (previousFrequencyRef.current !== 0) {
+        previousFrequencyRef.current = 0
+        setPitchData({ frequency: 0, note: '-', cents: 0, volume, isVoiced: false })
+      }
+      return
+    }
+
+    // Detect pitch (expensive O(n²) autocorrelation)
     const frequency = autoCorrelate(
       buffer,
       audioContextRef.current!.sampleRate,
@@ -183,9 +216,7 @@ export function usePitchDetection(
       volume,
       isVoiced: smoothedFrequency > 0 && volume > 0.05,
     })
-
-    animationFrameRef.current = requestAnimationFrame(analyze)
-  }, [isAnalyzing, minFrequency, maxFrequency, smoothingFactor])
+  }, [minFrequency, maxFrequency, smoothingFactor])
 
   const startAnalysis = useCallback((stream: MediaStream) => {
     try {
@@ -237,19 +268,16 @@ export function usePitchDetection(
 
     analyserRef.current = null
     previousFrequencyRef.current = 0
+    bufferRef.current = null
+    lastAnalysisRef.current = 0
 
-    setPitchData({
-      frequency: 0,
-      note: '-',
-      cents: 0,
-      volume: 0,
-      isVoiced: false,
-    })
+    setPitchData(DEFAULT_PITCH)
   }, [])
 
   // Start analysis loop when isAnalyzing changes
   useEffect(() => {
     if (isAnalyzing) {
+      lastAnalysisRef.current = 0
       animationFrameRef.current = requestAnimationFrame(analyze)
     }
 

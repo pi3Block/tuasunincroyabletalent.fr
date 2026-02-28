@@ -20,7 +20,8 @@ import { useAudioRecorder } from "@/hooks/useAudioRecorder";
 import { usePitchDetection } from "@/hooks/usePitchDetection";
 import { useWordTimestamps } from "@/hooks/useWordTimestamps";
 import { useFlowEnvelope } from "@/hooks/useFlowEnvelope";
-import { useFlowVisualization } from "@/hooks/useFlowVisualization";
+import { FlowBar } from "@/components/lyrics/FlowBar";
+import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
 import { useOrientation } from "@/hooks/useOrientation";
 import { useSSE, type SSEEvent } from "@/hooks/useSSE";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
@@ -242,12 +243,8 @@ export default function AppPage() {
 
   // Flow visualization — vocal energy envelope
   const { status: flowEnvelopeStatus, getEnergyAtTime } = useFlowEnvelope(youtubeMatch?.id || null);
-  const flowState = useFlowVisualization({
-    getEnergyAtTime,
-    envelopeReady: flowEnvelopeStatus === 'found',
-    currentTime: playbackTime,
-    isPlaying: isVideoPlaying,
-  });
+  const prefersReducedMotion = usePrefersReducedMotion();
+  const flowEnvelopeReady = flowEnvelopeStatus === 'found';
 
   // YouTube player imperative controls (for TransportBar sync)
   const [youtubeControls, setYoutubeControls] =
@@ -891,21 +888,36 @@ export default function AppPage() {
       await api.uploadRecording(sessionId, audioBlob);
       setStatus("analyzing");
 
-      // Retry startAnalysis up to 3 times (API may be restarting)
-      let analysisResponse;
-      for (let attempt = 0; attempt < 3; attempt++) {
+      // Start analysis — if the response is lost (proxy timeout),
+      // recover by polling the session status from the backend.
+      try {
+        const analysisResponse = await api.startAnalysis(sessionId);
+        setAnalysisTaskId(analysisResponse.task_id);
+      } catch (startErr) {
+        // The backend may have received the request and queued the task
+        // even though the response was lost. Check session status.
+        console.warn("[Analysis] startAnalysis failed, checking session:", startErr);
+        await new Promise((r) => setTimeout(r, 2000));
         try {
-          analysisResponse = await api.startAnalysis(sessionId);
-          break;
-        } catch (retryErr) {
-          if (attempt < 2) {
-            await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+          const sessionStatus = await api.getSessionStatus(sessionId);
+          if (sessionStatus.status === "completed") {
+            // Already done — fetch results directly
+            const analysisStatus = await api.getAnalysisStatus(sessionId);
+            if (analysisStatus.results) {
+              setResults(analysisStatus.results);
+            }
+          } else if (sessionStatus.status === "analyzing") {
+            // Backend did process it — stay in analyzing mode, polling will pick it up
+            console.info("[Analysis] Backend confirmed analyzing, continuing...");
           } else {
-            throw retryErr;
+            // Backend didn't process it — retry once
+            const retryResponse = await api.startAnalysis(sessionId);
+            setAnalysisTaskId(retryResponse.task_id);
           }
+        } catch {
+          throw startErr; // Both attempts failed, surface original error
         }
       }
-      setAnalysisTaskId(analysisResponse!.task_id);
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Erreur lors de l'envoi",
@@ -990,7 +1002,6 @@ export default function AppPage() {
     offset: lyricsOffset,
     onOffsetChange: handleOffsetChange,
     showOffsetControls: true,
-    flowState,
   };
 
   // Reusable lyrics mode toggle (karaoke / line / teleprompter)
@@ -1033,6 +1044,18 @@ export default function AppPage() {
         <span>🔄</span>
       </button>
     </div>
+  ) : null;
+
+  // Reusable FlowBar element — placed under video, self-contained rAF loop, zero re-renders
+  const flowBar = flowEnvelopeReady ? (
+    <FlowBar
+      getEnergyAtTime={getEnergyAtTime}
+      envelopeReady
+      currentTime={playbackTime}
+      isPlaying={isVideoPlaying}
+      reducedMotion={prefersReducedMotion}
+      className="rounded-b-lg"
+    />
   ) : null;
 
   // ─── NON-UNIFIED STATES (selecting / needs_fallback) ────────────────────────
@@ -1140,7 +1163,9 @@ export default function AppPage() {
             onStateChange={handleYoutubeStateChange}
             onControlsReady={handleYoutubeControlsReady}
             onDurationChange={handleYoutubeDurationChange}
-            flowState={flowState}
+            getEnergyAtTime={getEnergyAtTime}
+            flowEnvelopeReady={flowEnvelopeReady}
+            reducedMotion={prefersReducedMotion}
             isRecording={status === "recording"}
             recordingDuration={
               status === "recording" ? recordingDuration : undefined
@@ -1273,6 +1298,7 @@ export default function AppPage() {
                       onDurationChange={handleYoutubeDurationChange}
                       onControlsReady={handleYoutubeControlsReady}
                     />
+                    {flowBar}
                     {status === "recording" && (
                       <PitchIndicator pitchData={pitchData} />
                     )}
@@ -1304,6 +1330,20 @@ export default function AppPage() {
                       value={results.lyrics_accuracy}
                     />
                   </div>
+
+                  {/* Warnings */}
+                  {Array.isArray(results.warnings) && results.warnings.length > 0 && (
+                    <div className="space-y-2">
+                      {results.warnings.map((warning: string, i: number) => (
+                        <div
+                          key={i}
+                          className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg px-3 py-2 text-xs text-yellow-300"
+                        >
+                          {warning}
+                        </div>
+                      ))}
+                    </div>
+                  )}
 
                   {/* Auto-sync info */}
                   {results.auto_sync && results.auto_sync.confidence > 0.3 && (
@@ -1516,13 +1556,16 @@ export default function AppPage() {
           {status === "ready" && (
             <div className="w-full max-w-md space-y-4">
               {youtubeMatch && (
-                <YouTubePlayer
-                  video={youtubeMatch}
-                  onTimeUpdate={handleYoutubeTimeUpdate}
-                  onStateChange={handleYoutubeStateChange}
-                  onDurationChange={handleYoutubeDurationChange}
-                  onControlsReady={handleYoutubeControlsReady}
-                />
+                <>
+                  <YouTubePlayer
+                    video={youtubeMatch}
+                    onTimeUpdate={handleYoutubeTimeUpdate}
+                    onStateChange={handleYoutubeStateChange}
+                    onDurationChange={handleYoutubeDurationChange}
+                    onControlsReady={handleYoutubeControlsReady}
+                  />
+                  {flowBar}
+                </>
               )}
 
               <div className="bg-green-500/20 border border-green-500 rounded-lg p-4 text-center">
@@ -1572,13 +1615,16 @@ export default function AppPage() {
               <PitchIndicator pitchData={pitchData} />
 
               {youtubeMatch && (
-                <YouTubePlayer
-                  video={youtubeMatch}
-                  onTimeUpdate={handleYoutubeTimeUpdate}
-                  onStateChange={handleYoutubeStateChange}
-                  onDurationChange={handleYoutubeDurationChange}
-                  onControlsReady={handleYoutubeControlsReady}
-                />
+                <>
+                  <YouTubePlayer
+                    video={youtubeMatch}
+                    onTimeUpdate={handleYoutubeTimeUpdate}
+                    onStateChange={handleYoutubeStateChange}
+                    onDurationChange={handleYoutubeDurationChange}
+                    onControlsReady={handleYoutubeControlsReady}
+                  />
+                  {flowBar}
+                </>
               )}
 
               <button
@@ -1706,6 +1752,20 @@ export default function AppPage() {
                 <ScoreCard label="Rythme" value={results.rhythm_accuracy} />
                 <ScoreCard label="Paroles" value={results.lyrics_accuracy} />
               </div>
+
+              {/* Warnings */}
+              {Array.isArray(results.warnings) && results.warnings.length > 0 && (
+                <div className="space-y-2">
+                  {results.warnings.map((warning: string, i: number) => (
+                    <div
+                      key={i}
+                      className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg px-3 py-2.5 text-sm text-yellow-300"
+                    >
+                      {warning}
+                    </div>
+                  ))}
+                </div>
+              )}
 
               {results.auto_sync && results.auto_sync.confidence > 0.3 && (
                 <div className="text-center text-xs text-muted-foreground">

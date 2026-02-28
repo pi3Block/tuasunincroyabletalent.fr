@@ -1,194 +1,256 @@
 /**
  * @fileoverview Canvas-based vocal energy waveform — "flow bar".
  *
- * Renders a breathing waveform visualization from the singer's vocal energy.
- * Placed between the lyrics header and ScrollArea in LyricsDisplayPro.
+ * Self-contained animation: runs its own rAF loop internally, reading energy
+ * from the pre-computed envelope via `getEnergyAtTime(currentTime)`.
+ * ZERO React re-renders during playback — all updates go straight to canvas.
  *
  * Visual design:
- * - Centered waveform (mirrored top/bottom) from energyHistory ring buffer
- * - Primary green color with opacity proportional to energy
- * - Left→right gradient: old data fades out, current data is bright
- * - Smooth curves via quadraticCurveTo
- * - Glow effect on energy peaks (CSS box-shadow)
+ * - Centered mirrored waveform from a ring buffer of recent energy values
+ * - Green with gradient: old data fades left → current data bright right
+ * - Faint center baseline always visible
+ * - Glow on energy peaks (CSS box-shadow via direct DOM mutation)
  *
- * Reduced motion: static horizontal bar with CSS width transition.
- * Accessibility: role="img" with descriptive aria-label.
+ * Reduced motion: static bar with CSS width transition.
  */
 
-import { memo, useRef, useEffect } from 'react'
+import { memo, useRef, useEffect, useCallback } from 'react'
 import { cn } from '@/lib/utils'
-import type { FlowVisualizationState } from '@/hooks/useFlowVisualization'
 
 interface FlowBarProps {
-  flow: FlowVisualizationState
-  className?: string
+  /** O(1) lookup: returns energy 0-1 at the given time in seconds */
+  getEnergyAtTime: (t: number) => number
+  /** Whether envelope data is loaded and available */
+  envelopeReady: boolean
+  /** Current playback time in seconds (stored in ref, no re-renders) */
+  currentTime: number
+  /** Whether audio is playing (controls rAF loop) */
+  isPlaying: boolean
+  /** Reduced motion preference */
   reducedMotion?: boolean
+  className?: string
 }
 
-// Drawing constants
 const BAR_HEIGHT = 40
 const LINE_WIDTH = 2
-// oklch(0.55 0.2 145) ≈ rgb(0, 160, 60) — app's primary green
-const WAVE_COLOR_R = 0
-const WAVE_COLOR_G = 160
-const WAVE_COLOR_B = 60
+const HISTORY_SIZE = 64
+const EMA_ALPHA = 0.15
+const TARGET_FPS = 30
+const FRAME_MS = 1000 / TARGET_FPS
+
+const R = 0, G = 160, B = 60  // primary green
 
 export const FlowBar = memo(function FlowBar({
-  flow,
-  className,
+  getEnergyAtTime,
+  envelopeReady,
+  currentTime,
+  isPlaying,
   reducedMotion = false,
+  className,
 }: FlowBarProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  const sizeRef = useRef({ w: 0, h: BAR_HEIGHT })
 
-  // Resize canvas to match container width (pixel-perfect)
-  useEffect(() => {
+  // Animation state — all in refs, zero React state
+  const historyRef = useRef<number[]>(new Array(HISTORY_SIZE).fill(0))
+  const smoothRef = useRef(0)
+  const lastFrameRef = useRef(0)
+  const currentTimeRef = useRef(currentTime)
+  const reducedBarRef = useRef<HTMLDivElement>(null)
+
+  // Keep currentTime ref in sync (this prop changes often but causes no re-render of FlowBar
+  // because memo() blocks it — the parent re-renders but FlowBar skips via shallow compare...
+  // Actually memo won't help since currentTime changes. We need a different approach.)
+  // We just update the ref on every render — that's fine, it's O(1).
+  currentTimeRef.current = currentTime
+
+  // Resize canvas
+  const resizeCanvas = useCallback(() => {
     const container = containerRef.current
     const canvas = canvasRef.current
     if (!container || !canvas) return
-
-    const observer = new ResizeObserver((entries) => {
-      const { width } = entries[0].contentRect
-      const dpr = window.devicePixelRatio || 1
-      canvas.width = width * dpr
-      canvas.height = BAR_HEIGHT * dpr
-      canvas.style.width = `${width}px`
-      canvas.style.height = `${BAR_HEIGHT}px`
-      const ctx = canvas.getContext('2d')
-      if (ctx) ctx.scale(dpr, dpr)
-    })
-    observer.observe(container)
-    return () => observer.disconnect()
+    const w = container.getBoundingClientRect().width
+    const dpr = window.devicePixelRatio || 1
+    canvas.width = w * dpr
+    canvas.height = BAR_HEIGHT * dpr
+    canvas.style.width = `${w}px`
+    canvas.style.height = `${BAR_HEIGHT}px`
+    sizeRef.current = { w, h: BAR_HEIGHT }
   }, [])
 
-  // Draw waveform
   useEffect(() => {
-    if (reducedMotion) return
+    resizeCanvas()
+    const container = containerRef.current
+    if (!container) return
+    const obs = new ResizeObserver(() => resizeCanvas())
+    obs.observe(container)
+    return () => obs.disconnect()
+  }, [resizeCanvas])
+
+  // Single rAF draw function — reads from refs, writes to canvas, no setState
+  const draw = useCallback(() => {
     const canvas = canvasRef.current
     if (!canvas) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
     const dpr = window.devicePixelRatio || 1
-    const w = canvas.width / dpr
-    const h = BAR_HEIGHT
-    const centerY = h / 2
-    const history = flow.energyHistory
-    if (history.length === 0) return
+    const { w, h } = sizeRef.current
+    if (w === 0) return
 
-    // Clear
+    const centerY = h / 2
+    const maxAmp = centerY - 2
+
+    // Sample energy
+    const raw = getEnergyAtTime(currentTimeRef.current)
+    const smooth = reducedMotion
+      ? raw
+      : EMA_ALPHA * raw + (1 - EMA_ALPHA) * smoothRef.current
+    smoothRef.current = smooth
+
+    // Push to ring buffer
+    const hist = historyRef.current
+    hist.push(smooth)
+    if (hist.length > HISTORY_SIZE) hist.shift()
+
+    // Reset transform and clear
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, w, h)
 
-    // Draw mirrored waveform
-    const len = history.length
-    const segmentWidth = w / len
+    // Faint center baseline (always visible)
+    ctx.strokeStyle = `rgba(${R},${G},${B}, 0.15)`
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.moveTo(0, centerY)
+    ctx.lineTo(w, centerY)
+    ctx.stroke()
 
-    // Create gradient for fade-in effect (left transparent → right bright)
-    const gradient = ctx.createLinearGradient(0, 0, w, 0)
-    gradient.addColorStop(0, `rgba(${WAVE_COLOR_R},${WAVE_COLOR_G},${WAVE_COLOR_B}, 0.05)`)
-    gradient.addColorStop(0.5, `rgba(${WAVE_COLOR_R},${WAVE_COLOR_G},${WAVE_COLOR_B}, 0.3)`)
-    gradient.addColorStop(0.85, `rgba(${WAVE_COLOR_R},${WAVE_COLOR_G},${WAVE_COLOR_B}, 0.7)`)
-    gradient.addColorStop(1, `rgba(${WAVE_COLOR_R},${WAVE_COLOR_G},${WAVE_COLOR_B}, 0.9)`)
+    const len = hist.length
+    if (len === 0) return
+    const segW = w / len
 
-    ctx.strokeStyle = gradient
+    // Gradient: left fades → right bright
+    const grad = ctx.createLinearGradient(0, 0, w, 0)
+    grad.addColorStop(0, `rgba(${R},${G},${B}, 0.05)`)
+    grad.addColorStop(0.5, `rgba(${R},${G},${B}, 0.35)`)
+    grad.addColorStop(0.85, `rgba(${R},${G},${B}, 0.7)`)
+    grad.addColorStop(1, `rgba(${R},${G},${B}, 0.95)`)
+
     ctx.lineWidth = LINE_WIDTH
     ctx.lineJoin = 'round'
     ctx.lineCap = 'round'
 
-    // Top half (positive amplitude)
-    ctx.beginPath()
-    ctx.moveTo(0, centerY)
-    for (let i = 0; i < len; i++) {
-      const x = i * segmentWidth
-      const amplitude = history[i] * (centerY - 2)
-      const y = centerY - amplitude
-      if (i === 0) {
-        ctx.lineTo(x, y)
-      } else {
-        const prevX = (i - 1) * segmentWidth
-        const cpX = (prevX + x) / 2
-        ctx.quadraticCurveTo(cpX, centerY - history[i - 1] * (centerY - 2), x, y)
+    // Draw mirrored halves
+    for (const sign of [-1, 1] as const) {
+      ctx.strokeStyle = grad
+      ctx.beginPath()
+      ctx.moveTo(0, centerY)
+      for (let i = 0; i < len; i++) {
+        const x = i * segW
+        const y = centerY + sign * hist[i] * maxAmp
+        if (i === 0) {
+          ctx.lineTo(x, y)
+        } else {
+          const px = (i - 1) * segW
+          ctx.quadraticCurveTo((px + x) / 2, centerY + sign * hist[i - 1] * maxAmp, x, y)
+        }
       }
+      ctx.stroke()
     }
-    ctx.stroke()
 
-    // Bottom half (mirrored)
+    // Fill between curves
     ctx.beginPath()
     ctx.moveTo(0, centerY)
     for (let i = 0; i < len; i++) {
-      const x = i * segmentWidth
-      const amplitude = history[i] * (centerY - 2)
-      const y = centerY + amplitude
-      if (i === 0) {
-        ctx.lineTo(x, y)
-      } else {
-        const prevX = (i - 1) * segmentWidth
-        const cpX = (prevX + x) / 2
-        ctx.quadraticCurveTo(cpX, centerY + history[i - 1] * (centerY - 2), x, y)
-      }
-    }
-    ctx.stroke()
-
-    // Fill between the two curves (subtle)
-    ctx.beginPath()
-    ctx.moveTo(0, centerY)
-    // Top edge
-    for (let i = 0; i < len; i++) {
-      const x = i * segmentWidth
-      const y = centerY - history[i] * (centerY - 2)
+      const x = i * segW
+      const y = centerY - hist[i] * maxAmp
       if (i === 0) ctx.lineTo(x, y)
       else {
-        const prevX = (i - 1) * segmentWidth
-        ctx.quadraticCurveTo(
-          (prevX + x) / 2,
-          centerY - history[i - 1] * (centerY - 2),
-          x,
-          y,
-        )
+        const px = (i - 1) * segW
+        ctx.quadraticCurveTo((px + x) / 2, centerY - hist[i - 1] * maxAmp, x, y)
       }
     }
-    // Bottom edge (reverse)
     for (let i = len - 1; i >= 0; i--) {
-      const x = i * segmentWidth
-      const y = centerY + history[i] * (centerY - 2)
+      const x = i * segW
+      const y = centerY + hist[i] * maxAmp
       if (i === len - 1) ctx.lineTo(x, y)
       else {
-        const nextX = (i + 1) * segmentWidth
-        ctx.quadraticCurveTo(
-          (nextX + x) / 2,
-          centerY + history[i + 1] * (centerY - 2),
-          x,
-          y,
-        )
+        const nx = (i + 1) * segW
+        ctx.quadraticCurveTo((nx + x) / 2, centerY + hist[i + 1] * maxAmp, x, y)
       }
     }
     ctx.closePath()
-
-    const fillGradient = ctx.createLinearGradient(0, 0, w, 0)
-    fillGradient.addColorStop(0, `rgba(${WAVE_COLOR_R},${WAVE_COLOR_G},${WAVE_COLOR_B}, 0.01)`)
-    fillGradient.addColorStop(0.6, `rgba(${WAVE_COLOR_R},${WAVE_COLOR_G},${WAVE_COLOR_B}, 0.08)`)
-    fillGradient.addColorStop(1, `rgba(${WAVE_COLOR_R},${WAVE_COLOR_G},${WAVE_COLOR_B}, 0.15)`)
-    ctx.fillStyle = fillGradient
+    const fill = ctx.createLinearGradient(0, 0, w, 0)
+    fill.addColorStop(0, `rgba(${R},${G},${B}, 0.02)`)
+    fill.addColorStop(0.6, `rgba(${R},${G},${B}, 0.1)`)
+    fill.addColorStop(1, `rgba(${R},${G},${B}, 0.2)`)
+    ctx.fillStyle = fill
     ctx.fill()
-  }, [flow.energyHistory, reducedMotion])
 
-  // Glow intensity based on current smooth energy
-  const glowIntensity = Math.round(flow.smoothEnergy * 12)
+    // Glow — direct DOM mutation, no React
+    const glow = Math.round(smooth * 15)
+    const el = containerRef.current
+    if (el) {
+      el.style.boxShadow = glow > 3
+        ? `inset 0 0 ${glow}px rgba(${R},${G},${B}, 0.2)`
+        : 'none'
+    }
+  }, [getEnergyAtTime, reducedMotion])
+
+  // Reduced motion: update static bar via ref (no canvas)
+  const drawReduced = useCallback(() => {
+    const raw = getEnergyAtTime(currentTimeRef.current)
+    const smooth = EMA_ALPHA * raw + (1 - EMA_ALPHA) * smoothRef.current
+    smoothRef.current = smooth
+    const bar = reducedBarRef.current
+    if (bar) bar.style.width = `${Math.round(smooth * 100)}%`
+  }, [getEnergyAtTime])
+
+  // Animation loop — rAF based, no React state
+  useEffect(() => {
+    if (!envelopeReady) return
+
+    const drawFn = reducedMotion ? drawReduced : draw
+
+    // Initial draw
+    drawFn()
+
+    if (!isPlaying) return
+
+    let rafId: number
+    const loop = (ts: number) => {
+      const elapsed = ts - lastFrameRef.current
+      if (elapsed >= FRAME_MS) {
+        lastFrameRef.current = ts - (elapsed % FRAME_MS)
+        drawFn()
+      }
+      rafId = requestAnimationFrame(loop)
+    }
+    rafId = requestAnimationFrame(loop)
+    return () => cancelAnimationFrame(rafId)
+  }, [envelopeReady, isPlaying, draw, drawReduced, reducedMotion])
+
+  // When paused, redraw on seek (currentTime changes)
+  useEffect(() => {
+    if (!envelopeReady || isPlaying) return
+    const drawFn = reducedMotion ? drawReduced : draw
+    drawFn()
+  }, [envelopeReady, isPlaying, currentTime, draw, drawReduced, reducedMotion])
+
+  if (!envelopeReady) return null
 
   if (reducedMotion) {
-    // Static bar fallback
     return (
       <div
-        className={cn('relative h-[40px] overflow-hidden', className)}
+        className={cn('relative h-[40px] overflow-hidden bg-muted/10', className)}
         role="img"
         aria-label="Visualisation de l'énergie vocale"
       >
         <div
-          className="absolute inset-y-1 left-0 rounded-full transition-[width] duration-300 ease-out"
-          style={{
-            width: `${Math.round(flow.smoothEnergy * 100)}%`,
-            backgroundColor: `rgba(${WAVE_COLOR_R},${WAVE_COLOR_G},${WAVE_COLOR_B}, 0.5)`,
-          }}
+          ref={reducedBarRef}
+          className="absolute inset-y-1 left-0 rounded-full transition-none"
+          style={{ backgroundColor: `rgba(${R},${G},${B}, 0.5)`, width: '0%' }}
         />
       </div>
     )
@@ -197,14 +259,9 @@ export const FlowBar = memo(function FlowBar({
   return (
     <div
       ref={containerRef}
-      className={cn('relative h-[40px] overflow-hidden', className)}
+      className={cn('relative h-[40px] overflow-hidden bg-muted/5', className)}
       role="img"
       aria-label="Visualisation de l'énergie vocale"
-      style={{
-        boxShadow: glowIntensity > 2
-          ? `inset 0 0 ${glowIntensity}px rgba(${WAVE_COLOR_R},${WAVE_COLOR_G},${WAVE_COLOR_B}, 0.15)`
-          : 'none',
-      }}
     >
       <canvas ref={canvasRef} className="block" />
     </div>

@@ -65,7 +65,7 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}): UseAudi
     startTimeRef.current = Date.now() - pausedDurationRef.current * 1000
     timerRef.current = window.setInterval(() => {
       setDuration(Math.floor((Date.now() - startTimeRef.current) / 1000))
-    }, 100)
+    }, 500)
   }, [])
 
   const stopTimer = useCallback(() => {

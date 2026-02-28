@@ -100,6 +100,7 @@ export interface AnalysisResults {
   lyrics_accuracy: number;
   jury_comments: JuryComment[];
   auto_sync?: AutoSync;
+  warnings?: string[];
 }
 
 export interface RecentTrack {

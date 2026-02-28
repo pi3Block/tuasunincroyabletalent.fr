@@ -84,7 +84,7 @@ export function useFlowVisualization({
     setState({
       energy: raw,
       smoothEnergy: smooth,
-      energyHistory: [...hist],
+      energyHistory: hist.slice(),
       source: 'precomputed',
     })
   }, [getEnergyAtTime, reducedMotion])

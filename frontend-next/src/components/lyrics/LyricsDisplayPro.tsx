@@ -34,9 +34,6 @@ import { OFFSET_CONFIG } from '@/types/lyrics'
 import type { WordLine } from '@/api/client'
 import { usePrefersReducedMotion } from '@/hooks/usePrefersReducedMotion'
 import { useOrientation } from '@/hooks/useOrientation'
-import { FlowBar } from './FlowBar'
-import type { FlowVisualizationState } from '@/hooks/useFlowVisualization'
-
 // Local props type to avoid type conflicts with SyncedLyricLine
 interface LyricsDisplayProProps {
   /** Plain text lyrics (fallback) */
@@ -67,8 +64,6 @@ interface LyricsDisplayProProps {
   className?: string
   /** Override ScrollArea class name (e.g. "h-full" for landscape) */
   scrollAreaClassName?: string
-  /** Flow visualization state (vocal energy waveform) */
-  flowState?: FlowVisualizationState | null
 }
 import { useLyricsSync } from '@/hooks/useLyricsSync'
 import { useLyricsScroll } from '@/hooks/useLyricsScroll'
@@ -347,7 +342,6 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
   showDebug = false,
   className,
   scrollAreaClassName,
-  flowState,
 }: LyricsDisplayProProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const reducedMotion = usePrefersReducedMotion()
@@ -584,11 +578,6 @@ export const LyricsDisplayPro = memo(function LyricsDisplayPro({
           </Button>
         </div>
       </div>
-
-      {/* Flow visualization bar — vocal energy waveform */}
-      {flowState && flowState.source !== 'none' && (
-        <FlowBar flow={flowState} reducedMotion={reducedMotion} className="border-b border-border/30" />
-      )}
 
       {/* Lyrics - Main content */}
       <ScrollArea

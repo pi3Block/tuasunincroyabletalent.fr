@@ -76,18 +76,36 @@ def do_generate_feedback(
     user_pitch = np.load(user_pitch_path)
     reference_pitch = np.load(reference_pitch_path)
 
-    # Diagnostic logging for scoring inputs
+    # Diagnostic logging + user-facing warnings
     u_freq = user_pitch["frequency"]
     r_freq = reference_pitch["frequency"]
     u_voiced = int(np.sum(u_freq > 0))
     r_voiced = int(np.sum(r_freq > 0))
+    user_duration_s = len(u_freq) * 0.01  # 10ms hop
+    ref_duration_s = len(r_freq) * 0.01
     logger.info(
-        "Scoring inputs: user_freq=%d samples (%d voiced), "
-        "ref_freq=%d samples (%d voiced), "
+        "Scoring inputs: user_freq=%d samples (%d voiced, %.1fs), "
+        "ref_freq=%d samples (%d voiced, %.1fs), "
         "user_lyrics=%d chars, ref_lyrics=%d chars",
-        len(u_freq), u_voiced, len(r_freq), r_voiced,
+        len(u_freq), u_voiced, user_duration_s,
+        len(r_freq), r_voiced, ref_duration_s,
         len(user_lyrics), len(reference_lyrics),
     )
+
+    # Collect warnings to surface to the user
+    warnings = []
+    if u_voiced == 0:
+        warnings.append("Aucune voix détectée dans ton enregistrement. "
+                         "Vérifie que ton micro fonctionne et chante plus fort !")
+    elif u_voiced < 10:
+        warnings.append(f"Très peu de voix détectée ({u_voiced} échantillons). "
+                         "Essaie de chanter plus fort ou plus près du micro.")
+    if user_duration_s < 15:
+        warnings.append(f"Enregistrement très court ({user_duration_s:.0f}s). "
+                         "Essaie de chanter au moins 30 secondes pour un score fiable.")
+    if not reference_lyrics.strip():
+        warnings.append("Paroles de référence non trouvées pour cette chanson. "
+                         "Le score paroles n'a pas pu être calculé.")
 
     # Calculate pitch accuracy (simplified DTW distance)
     pitch_accuracy = calculate_pitch_accuracy(
@@ -118,8 +136,9 @@ def do_generate_feedback(
     )
 
     logger.info(
-        "Scores: pitch=%.1f, rhythm=%.1f, lyrics=%.1f, overall=%d",
+        "Scores: pitch=%.1f, rhythm=%.1f, lyrics=%.1f, overall=%d, warnings=%d",
         pitch_accuracy, rhythm_accuracy, lyrics_accuracy, overall_score,
+        len(warnings),
     )
 
     # Generate jury comments via Ollama (parallel, with fallback)
@@ -143,6 +162,7 @@ def do_generate_feedback(
         "rhythm_accuracy": rhythm_accuracy,
         "lyrics_accuracy": lyrics_accuracy,
         "jury_comments": jury_comments,
+        "warnings": warnings,
     }
 
     with open(results_path, "w", encoding="utf-8") as f:
