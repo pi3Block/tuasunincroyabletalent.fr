@@ -16,6 +16,11 @@ FROM ghcr.io/pi3block/gpu-worker-base:latest
 WORKDIR /app
 
 # ===========================================
+# Build dependencies for ctc-forced-aligner (C++ extension)
+# ===========================================
+RUN apt-get update && apt-get install -y --no-install-recommends g++ && rm -rf /var/lib/apt/lists/*
+
+# ===========================================
 # Project-Specific Python Dependencies
 # (Base already has: torch, torchaudio, whisper, librosa, etc.)
 # ===========================================
