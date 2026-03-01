@@ -50,5 +50,10 @@ class Settings(BaseSettings):
     storage_api_key: str = ""
     storage_bucket: str = "kiaraoke"
 
+    # Local disk cache (shared Docker volume between api + worker)
+    local_cache_dir: str = "/cache"
+    local_cache_max_references: int = 20
+    local_cache_max_sessions: int = 20
+
 
 settings = Settings()

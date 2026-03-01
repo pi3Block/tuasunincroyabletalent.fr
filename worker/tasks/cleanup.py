@@ -21,6 +21,7 @@ import redis
 from celery import shared_task
 
 from .storage_client import get_storage
+from .local_cache import get_local_cache
 
 logger = logging.getLogger(__name__)
 
@@ -110,14 +111,33 @@ def cleanup_session_files():
                 deleted_temp_dirs += 1
                 logger.debug("Removed temp dir: %s", entry.name)
 
+    # ── Local cache LRU eviction ────────────────────────────────────────────
+    evicted_refs = 0
+    evicted_sessions = 0
+    cleaned_orphans = 0
+    try:
+        lcache = get_local_cache()
+        evicted_refs = lcache._evict_references()
+        evicted_sessions = lcache._evict_sessions()
+        cleaned_orphans = lcache.cleanup_orphaned_dirs()
+    except Exception as e:
+        logger.warning("Local cache eviction failed (non-fatal): %s", e)
+
     logger.info(
-        "Cleanup complete: %d sessions, %d storage files, %d temp dirs",
+        "Cleanup complete: %d sessions, %d storage files, %d temp dirs, "
+        "cache evicted: %d refs + %d sessions, %d orphans",
         deleted_sessions,
         deleted_storage_files,
         deleted_temp_dirs,
+        evicted_refs,
+        evicted_sessions,
+        cleaned_orphans,
     )
     return {
         "deleted_sessions": deleted_sessions,
         "deleted_storage_files": deleted_storage_files,
         "deleted_temp_dirs": deleted_temp_dirs,
+        "cache_evicted_refs": evicted_refs,
+        "cache_evicted_sessions": evicted_sessions,
+        "cache_cleaned_orphans": cleaned_orphans,
     }

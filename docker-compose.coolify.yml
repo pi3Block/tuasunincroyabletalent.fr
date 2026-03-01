@@ -51,9 +51,15 @@ services:
       - STORAGE_BUCKET=${STORAGE_BUCKET:-kiaraoke}
       - AUDIO_TEMP_DIR=/tmp/kiaraoke
       - AUDIO_OUTPUT_DIR=/tmp/kiaraoke
+      # Local disk cache (shared volume with worker)
+      - LOCAL_CACHE_DIR=/cache
+      - LOCAL_CACHE_MAX_REFERENCES=${LOCAL_CACHE_MAX_REFERENCES:-20}
+      - LOCAL_CACHE_MAX_SESSIONS=${LOCAL_CACHE_MAX_SESSIONS:-20}
       # Sentry error tracking (optional)
       - SENTRY_DSN=${SENTRY_DSN:-}
       - SENTRY_ENVIRONMENT=${SENTRY_ENVIRONMENT:-production}
+    volumes:
+      - audio-cache:/cache
     extra_hosts:
       - "host.docker.internal:host-gateway"
     deploy:
@@ -97,6 +103,7 @@ services:
     command: ["celery", "-A", "tasks.celery_app", "worker", "--loglevel=info", "--pool=solo", "-Q", "gpu-heavy,gpu,default", "-n", "heavy@%h", "-B"]
     volumes:
       - model-cache:/root/.cache
+      - audio-cache:/cache
     environment:
       - REDIS_URL=${REDIS_URL}
       - DATABASE_URL=${DATABASE_URL}
@@ -116,6 +123,10 @@ services:
       - STORAGE_BUCKET=${STORAGE_BUCKET:-kiaraoke}
       - AUDIO_TEMP_DIR=/tmp/kiaraoke
       - AUDIO_OUTPUT_DIR=/tmp/kiaraoke
+      # Local disk cache (shared volume with api)
+      - LOCAL_CACHE_DIR=/cache
+      - LOCAL_CACHE_MAX_REFERENCES=${LOCAL_CACHE_MAX_REFERENCES:-20}
+      - LOCAL_CACHE_MAX_SESSIONS=${LOCAL_CACHE_MAX_SESSIONS:-20}
       # Langfuse tracing
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
       - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
@@ -153,6 +164,7 @@ services:
 # GPU tasks use /tmp/kiaraoke/ for processing (auto-cleaned after each task)
 volumes:
   model-cache:
+  audio-cache:
 
 # ============================================
 # Networks

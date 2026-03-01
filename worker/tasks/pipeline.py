@@ -34,6 +34,7 @@ from celery import shared_task
 
 from .tracing import trace_pipeline, flush_traces, TracingSpan
 from .storage_client import get_storage
+from .local_cache import get_local_cache
 
 logger = logging.getLogger(__name__)
 
@@ -230,9 +231,13 @@ def update_progress(task, step: str, progress: int, detail: str = ""):
 
 
 def is_ref_separation_in_storage(youtube_id: str) -> bool:
-    """Check if reference separation (vocals.wav) is cached in remote storage."""
+    """Check if reference separation (vocals.wav) is cached locally or in remote storage."""
     if not youtube_id:
         return False
+    # Local cache check first (instant, no network)
+    cache = get_local_cache()
+    if cache.has_reference(youtube_id, "vocals.wav"):
+        return True
     storage = get_storage()
     return storage.exists(f"cache/{youtube_id}/vocals.wav")
 
@@ -359,34 +364,62 @@ def analyze_performance(
 
                 Appelé uniquement depuis Phase 2. N'appelle pas update_progress() (Celery).
                 Écrit user_tracks_ready_at dans Redis session → SSE router émet user_tracks_ready.
+                Also populates local cache for faster audio serving.
                 """
                 _upload_pair(
                     storage,
                     (user_vocals_local, f"sessions/{session_id}_user/vocals.wav"),
                     (user_instru_local, f"sessions/{session_id}_user/instrumentals.wav"),
                 )
+                # Populate local cache (non-fatal)
+                try:
+                    lcache = get_local_cache()
+                    lcache.put_session_file(session_id, "user_vocals.wav", user_vocals_local)
+                    lcache.put_session_file(session_id, "user_instrumentals.wav", user_instru_local)
+                except Exception as e:
+                    logger.warning("Local cache session populate failed (non-fatal): %s", e)
                 _notify_user_tracks_ready(session_id)
 
             def _separate_ref() -> tuple:
                 """
-                Thread B: séparation référence (cuda:0) avec cache storage.
+                Thread B: séparation référence (cuda:0) avec cache local + storage.
 
-                CACHE HIT  → download 2 fichiers depuis storage (~2s).
+                LOCAL HIT  → copie locale (~0s).
+                STORAGE HIT → download depuis storage (~2s) + populate local cache.
                 CACHE MISS → yt-dlp + Demucs htdemucs (~25s) + upload cache + session_ref.
                 Retourne (ref_vocals_path: str, ref_instru_path: str).
                 """
+                lcache = get_local_cache()
+
                 if youtube_id and is_ref_separation_in_storage(youtube_id):
                     logger.info("Reference separation cache HIT for %s", youtube_id)
-                    rv_local = storage.download_to_file(
-                        f"cache/{youtube_id}/vocals.wav",
-                        ref_temp / "vocals.wav",
-                    )
-                    ri_local = storage.download_to_file(
-                        f"cache/{youtube_id}/instrumentals.wav",
-                        ref_temp / "instrumentals.wav",
-                    )
-                    rv_path = str(rv_local)
-                    ri_path = str(ri_local)
+
+                    # Try local cache first (instant copy, no network)
+                    local_v = lcache.get_reference_file(youtube_id, "vocals.wav")
+                    local_i = lcache.get_reference_file(youtube_id, "instrumentals.wav")
+
+                    if local_v and local_i:
+                        logger.info("Local cache HIT for ref separation %s", youtube_id)
+                        shutil.copy2(local_v, ref_temp / "vocals.wav")
+                        shutil.copy2(local_i, ref_temp / "instrumentals.wav")
+                    else:
+                        rv_dl = storage.download_to_file(
+                            f"cache/{youtube_id}/vocals.wav",
+                            ref_temp / "vocals.wav",
+                        )
+                        ri_dl = storage.download_to_file(
+                            f"cache/{youtube_id}/instrumentals.wav",
+                            ref_temp / "instrumentals.wav",
+                        )
+                        # Populate local cache for next time
+                        try:
+                            lcache.put_reference_file(youtube_id, "vocals.wav", rv_dl)
+                            lcache.put_reference_file(youtube_id, "instrumentals.wav", ri_dl)
+                        except Exception as e:
+                            logger.warning("Local cache populate failed (non-fatal): %s", e)
+
+                    rv_path = str(ref_temp / "vocals.wav")
+                    ri_path = str(ref_temp / "instrumentals.wav")
                     # Ensure session_ref tracks exist for StudioMode (non-fatal if missing)
                     if not storage.exists(f"sessions/{session_id}_ref/vocals.wav"):
                         _upload_pair(
@@ -430,6 +463,13 @@ def analyze_performance(
                                 _safe_upload, storage,
                                 Path(ri_path), f"cache/{youtube_id}/instrumentals.wav",
                             )
+                    # Populate local cache after Demucs (non-fatal)
+                    if youtube_id:
+                        try:
+                            lcache.put_reference_file(youtube_id, "vocals.wav", Path(rv_path))
+                            lcache.put_reference_file(youtube_id, "instrumentals.wav", Path(ri_path))
+                        except Exception as e:
+                            logger.warning("Local cache populate failed (non-fatal): %s", e)
                     # Flow envelope (non-fatal, <1s CPU)
                     if youtube_id and not storage.exists(f"cache/{youtube_id}/flow_envelope.json"):
                         from tasks.flow_envelope import compute_and_upload_envelope
@@ -501,12 +541,32 @@ def analyze_performance(
                     return {"offset_seconds": 0.0, "confidence": 0.0, "method": "fallback"}
 
             def _crepe_ref() -> dict:
-                """Thread F: CREPE ref pitch (cuda:1, tiny model) avec cache pitch NPZ."""
+                """Thread F: CREPE ref pitch (cuda:1, tiny model) avec cache local + pitch NPZ."""
+                lcache = get_local_cache()
                 ref_pitch_cache_key = (
                     f"cache/{youtube_id}/pitch_data.npz" if youtube_id else None
                 )
+
+                # Try local cache first (instant)
+                if youtube_id:
+                    local_npz = lcache.get_reference_file(youtube_id, "pitch_data.npz")
+                    if local_npz:
+                        try:
+                            import numpy as _np
+                            with _np.load(str(local_npz)) as npz:
+                                if "frequency" not in npz or "time" not in npz:
+                                    raise ValueError("Missing keys in cached NPZ")
+                            logger.info("Pitch local cache HIT for %s — skipping CREPE", youtube_id)
+                            # Copy to ref_temp for pipeline use
+                            dest_npz = ref_temp / "pitch_data_cached.npz"
+                            shutil.copy2(local_npz, dest_npz)
+                            return {"pitch_path": str(dest_npz), "stats": {}, "status": "cached"}
+                        except Exception as npz_err:
+                            logger.warning("Local cached pitch NPZ invalid for %s: %s", youtube_id, npz_err)
+
+                # Try remote storage
                 if ref_pitch_cache_key and storage.exists(ref_pitch_cache_key):
-                    logger.info("Pitch cache HIT for reference %s — skipping CREPE", youtube_id)
+                    logger.info("Pitch storage cache HIT for reference %s — skipping CREPE", youtube_id)
                     cached_npz = ref_temp / "pitch_data_cached.npz"
                     storage.download_to_file(ref_pitch_cache_key, cached_npz)
                     # Validate NPZ integrity — re-run CREPE if corrupt
@@ -515,9 +575,15 @@ def analyze_performance(
                         with _np.load(str(cached_npz)) as npz:
                             if "frequency" not in npz or "time" not in npz:
                                 raise ValueError("Missing keys in cached NPZ")
+                        # Populate local cache
+                        try:
+                            lcache.put_reference_file(youtube_id, "pitch_data.npz", cached_npz)
+                        except Exception:
+                            pass
                         return {"pitch_path": str(cached_npz), "stats": {}, "status": "cached"}
                     except Exception as npz_err:
                         logger.warning("Cached pitch NPZ invalid for %s, re-running CREPE: %s", youtube_id, npz_err)
+
                 rp = do_extract_pitch(
                     str(ref_vocals_path), f"{session_id}_ref",
                     fast_mode=True, device=CREPE_DEVICE,
@@ -529,6 +595,11 @@ def analyze_performance(
                         ref_pitch_cache_key,
                         content_type="application/octet-stream",
                     )
+                    # Populate local cache
+                    try:
+                        lcache.put_reference_file(youtube_id, "pitch_data.npz", Path(rp["pitch_path"]))
+                    except Exception:
+                        pass
                 return rp
 
             with ThreadPoolExecutor(max_workers=2) as pool:
@@ -651,26 +722,45 @@ def prepare_reference(
             f"cache/{youtube_id}/vocals.wav"
         )
 
+        lcache = get_local_cache()
+
         if demucs_cached:
             logger.info("Demucs cache HIT for %s — skipping separation", youtube_id)
             self.update_state(
                 state="PROGRESS",
                 meta={"step": "downloading_cached", "progress": 20},
             )
-            # Download in parallel (both files needed locally for CREPE)
-            with ThreadPoolExecutor(max_workers=2) as pool:
-                f_v = pool.submit(
-                    storage.download_to_file,
-                    f"cache/{youtube_id}/vocals.wav",
-                    ref_temp / "vocals.wav",
-                )
-                f_i = pool.submit(
-                    storage.download_to_file,
-                    f"cache/{youtube_id}/instrumentals.wav",
-                    ref_temp / "instrumentals.wav",
-                )
-                vocals_local = f_v.result()
-                instrumentals_local = f_i.result()
+            # Try local cache first (instant copy, no network)
+            local_v = lcache.get_reference_file(youtube_id, "vocals.wav") if youtube_id else None
+            local_i = lcache.get_reference_file(youtube_id, "instrumentals.wav") if youtube_id else None
+
+            if local_v and local_i:
+                logger.info("Local cache HIT for prepare_reference %s", youtube_id)
+                shutil.copy2(local_v, ref_temp / "vocals.wav")
+                shutil.copy2(local_i, ref_temp / "instrumentals.wav")
+                vocals_local = ref_temp / "vocals.wav"
+                instrumentals_local = ref_temp / "instrumentals.wav"
+            else:
+                # Download from remote storage + populate local cache
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    f_v = pool.submit(
+                        storage.download_to_file,
+                        f"cache/{youtube_id}/vocals.wav",
+                        ref_temp / "vocals.wav",
+                    )
+                    f_i = pool.submit(
+                        storage.download_to_file,
+                        f"cache/{youtube_id}/instrumentals.wav",
+                        ref_temp / "instrumentals.wav",
+                    )
+                    vocals_local = f_v.result()
+                    instrumentals_local = f_i.result()
+                # Populate local cache for next time
+                try:
+                    lcache.put_reference_file(youtube_id, "vocals.wav", vocals_local)
+                    lcache.put_reference_file(youtube_id, "instrumentals.wav", instrumentals_local)
+                except Exception as e:
+                    logger.warning("Local cache populate failed (non-fatal): %s", e)
         else:
             logger.info("Demucs cache MISS for %s — separating...", youtube_id or "unknown")
             self.update_state(
@@ -724,6 +814,12 @@ def prepare_reference(
                     logger.info("Saved Demucs output to storage cache: %s", youtube_id)
                 else:
                     logger.warning("Demucs cache upload failed for %s (non-fatal)", youtube_id)
+                # Populate local cache after Demucs (non-fatal)
+                try:
+                    lcache.put_reference_file(youtube_id, "vocals.wav", vocals_local)
+                    lcache.put_reference_file(youtube_id, "instrumentals.wav", instrumentals_local)
+                except Exception as e:
+                    logger.warning("Local cache populate failed (non-fatal): %s", e)
 
         # ================================================================
         # FLOW ENVELOPE — compute and cache (non-fatal, <1s CPU)
@@ -793,12 +889,27 @@ def prepare_reference(
         pitch_path = None
         pitch_cache_key = f"cache/{youtube_id}/pitch_data.npz" if youtube_id else None
 
-        if pitch_cache_key and storage.exists(pitch_cache_key):
-            logger.info("Pitch cache HIT for %s — skipping CREPE", youtube_id)
+        # Try local cache first (instant)
+        if youtube_id:
+            local_npz = lcache.get_reference_file(youtube_id, "pitch_data.npz")
+            if local_npz:
+                logger.info("Pitch local cache HIT for %s — skipping CREPE", youtube_id)
+                cached_npz = ref_temp / "pitch_data_cached.npz"
+                shutil.copy2(local_npz, cached_npz)
+                pitch_path = str(cached_npz)
+
+        if not pitch_path and pitch_cache_key and storage.exists(pitch_cache_key):
+            logger.info("Pitch storage cache HIT for %s — skipping CREPE", youtube_id)
             cached_npz = ref_temp / "pitch_data_cached.npz"
             storage.download_to_file(pitch_cache_key, cached_npz)
             pitch_path = str(cached_npz)
-        else:
+            # Populate local cache
+            try:
+                lcache.put_reference_file(youtube_id, "pitch_data.npz", cached_npz)
+            except Exception:
+                pass
+
+        if not pitch_path:
             pitch_result = do_extract_pitch(
                 str(vocals_local), f"{session_id}_ref",
                 fast_mode=True, device=CREPE_DEVICE,
@@ -821,6 +932,11 @@ def prepare_reference(
                     pitch_cache_key,
                     content_type="application/octet-stream",
                 )
+                # Populate local cache
+                try:
+                    lcache.put_reference_file(youtube_id, "pitch_data.npz", Path(pitch_path))
+                except Exception:
+                    pass
 
         return {
             "session_id": session_id,

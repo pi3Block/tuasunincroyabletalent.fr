@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 
 from app.services.redis_client import redis_client
 from app.services.storage import storage
+from app.services.local_cache import local_cache
 from app.config import settings
 
 router = APIRouter()
@@ -84,7 +85,29 @@ async def list_available_tracks(session_id: str):
     cache_instru = f"cache/{youtube_id}/instrumentals.wav" if youtube_id else None
 
     async def _check_with_url(session_path: str, cache_path: str | None) -> tuple[bool, str, str]:
-        """Check existence and return (available, source, direct_url)."""
+        """Check existence (local cache first, then storage) and return (available, source, direct_url)."""
+        # Local cache check (instant filesystem stat, no network)
+        if youtube_id:
+            # Map session path to local cache filename
+            # e.g. sessions/{sid}_ref/vocals.wav → ref_vocals.wav in session cache
+            # or cache/{yt_id}/vocals.wav → vocals.wav in reference cache
+            if cache_path:
+                # Reference track — check local reference cache
+                filename = cache_path.rsplit("/", 1)[-1]  # vocals.wav or instrumentals.wav
+                if await local_cache.has_reference(youtube_id, filename):
+                    return True, "local", ""
+            # Session track
+            parts = session_path.rsplit("/", 1)
+            if len(parts) == 2:
+                prefix = parts[0].rsplit("/", 1)[-1]  # {session_id}_user or {session_id}_ref
+                filename = parts[1]
+                if "_user" in prefix:
+                    local_fn = f"user_{filename}"
+                else:
+                    local_fn = f"ref_{filename}"
+                if await local_cache.has_session(session_id, local_fn):
+                    return True, "local", ""
+
         try:
             if await storage.exists(session_path):
                 return True, "session", storage.public_url(session_path)
@@ -182,7 +205,22 @@ async def get_audio_track(
         media_type = "audio/webm" if file_path.suffix == ".webm" else "audio/wav"
         return await _serve_local_file(file_path, media_type, range)
 
-    # ── Separated tracks: storage URL (constructed from known pattern) ─────
+    # ── Separated tracks: local cache first, then storage ──────────────────
+    youtube_id = session.get("youtube_id")
+
+    # Try local cache first (direct serve, no redirect, fastest)
+    if source == "user":
+        local_fn = f"user_{track_type}.wav"
+        local_path = await local_cache.get_session_file(session_id, local_fn)
+        if local_path:
+            return await _serve_local_file(local_path, "audio/wav", range)
+    elif source == "ref" and youtube_id:
+        # Reference tracks cached by youtube_id (shared across sessions)
+        local_path = await local_cache.get_reference_file(youtube_id, f"{track_type}.wav")
+        if local_path:
+            return await _serve_local_file(local_path, "audio/wav", range)
+
+    # Fallback to remote storage
     if source == "ref":
         rel_path = f"sessions/{session_id}_ref/{track_type}.wav"
     else:
@@ -196,7 +234,6 @@ async def get_audio_track(
 
     # Cache fallback for ref tracks (available before session copies finish)
     if source == "ref":
-        youtube_id = session.get("youtube_id")
         if youtube_id:
             cache_path = f"cache/{youtube_id}/{track_type}.wav"
             if await storage.exists(cache_path):

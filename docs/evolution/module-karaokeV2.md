@@ -102,11 +102,16 @@ Tier 3 : Groq Whisper API (fallback si shared-whisper down)
 
 ### REJETEES
 
-#### stable-ts — ❌ Ne supporte PAS l'alignement de texte connu
+#### stable-ts — ❌ Rejete pour l'architecture V2 (pas pour absence de feature)
 
-**Raison du rejet** : stable-ts est **transcription-first seulement**. Il n'a PAS de methode `align(known_text, audio)`. Il ameliore les timestamps de Whisper via DTW/VAD refinement, mais ne peut pas prendre des paroles externes et les aligner sur l'audio. C'est une amelioration incrementale du pipeline V1, pas un changement d'architecture.
+**Mise a jour importante** : stable-ts propose maintenant des fonctions d'alignement (`align`) avec texte connu.
 
-De plus, le README de whisper-timestamped indique que stable-ts produit des resultats "totally out-of-sync" avec de la musique de fond.
+**Raison du rejet maintenue** :
+- Reste fortement lie a l'ecosysteme Whisper (pipeline transcription-first dans la pratique)
+- N'apporte pas un vrai decouplage "texte connu -> alignement CTC dedie" comme V2
+- Le comportement sur chant + musique residuelle reste variable selon les morceaux
+
+Conclusion : outil utile pour raffiner Whisper, mais moins adapte qu'un forced alignment CTC natif comme Tier 1.
 
 #### WhisperX — ❌ Conflit de dependances torch
 
@@ -165,6 +170,7 @@ Le modele MMS-300M est entraine sur de la **parole**, pas du chant. Les performa
 
 **Avantage** : Zero dependance supplementaire
 **Inconvenient** : Modele plus petit (95M vs 300M), potentiellement moins robuste. API bas niveau = plus de code.
+**Risque long terme** : API torchaudio forced alignment marquee depreciee dans les versions recentes; a eviter comme pilier principal sans plan de migration explicite.
 
 ---
 
@@ -205,7 +211,7 @@ Le modele MMS-300M est entraine sur de la **parole**, pas du chant. Les performa
 
 ---
 
-## Plan d'implementation (8 etapes)
+## Plan d'implementation (8 etapes core + 3 etapes ops)
 
 ### Etape 1 — Dependances
 
@@ -672,7 +678,71 @@ Pipeline complet : CTC alignment → onset snap → beat snap. Triple passe pour
 
 ---
 
-## Verification
+## Validation et verification
+
+### Protocole d'evaluation (obligatoire avant rollout)
+
+Objectif : remplacer les estimations par des mesures reproductibles et comparables dans le temps.
+
+### Dataset de reference (golden set)
+
+- 20 a 50 extraits FR chantes (30-60s chacun), couvrant: voix solo/duo/choeurs, tempos lents/rapides, elisions (l', d', qu'), melismes et voyelles tenues
+- Annotations manuelles word-level sur un sous-ensemble (minimum 10 extraits)
+- Versionner ce dataset dans un dossier dedie benchmark (`benchmarks/karaoke_alignment_v2/`)
+
+### Metriques de qualite
+
+- `AAE_ms` (Average Absolute Error) word-level
+- `P50_ms`, `P95_ms` erreur absolue
+- `Hit@100ms` : % de mots avec erreur <= 100ms
+- `Hit@150ms` : % de mots avec erreur <= 150ms
+- Metrique perceptive ligne-level: `line_sync_ok_rate` = % de lignes jugees "visuellement synchrones" en review rapide
+
+### Seuils go/no-go proposes
+
+- `AAE_ms < 150`
+- `P95_ms < 280`
+- `Hit@150ms >= 80%`
+- Gain relatif vs V1 >= 30% sur `AAE_ms`
+- Aucun segment catastrophique (>800ms) sur plus de 2% des mots
+
+### Regles de benchmark
+
+- Meme audio source, meme vocals Demucs, meme lyrics input pour V1 vs V2
+- Mesures executees 3 fois puis moyennee (stabilite)
+- Export CSV/JSON des resultats dans `benchmarks/results/`
+
+### Garde-fous production
+
+#### Versionning et cache safety
+
+- Inclure dans la cle cache: `alignment_engine`, `alignment_engine_version`, `model_id`, `model_revision`, `postprocess_flags`
+- Ne jamais reutiliser un cache genere avec une autre combinaison de version.
+
+#### SLO, observabilite, alerting
+
+Tracer par tier: latence `p50/p95`, taux de succes Tier 1, taux de fallback Tier 2/3, `confidence_avg`, taux d'erreurs OOM/timeout
+
+Logs structures recommandes: `track_id`, `tier_used`, `model_version`, `duration_ms`, `word_count`, `confidence_avg`, `fallback_reason`
+
+#### Rollback et circuit breaker
+
+- Circuit breaker Tier 1 si OOM repetes, timeout repetes, ou baisse brutale de `Hit@150ms` en canary
+- En cas de breaker ouvert: fallback automatique Tier 2, alerte ops, desactivation du feature flag CTC en runtime
+
+#### Fallback partiel (segment-level)
+
+Au lieu de fallback chanson entiere: detecter les segments faibles (`score < seuil`), realigner uniquement ces segments via Whisper fallback, puis fusionner le resultat final (CTC majoritaire, fallback local).
+
+### Conformite et licences (a valider avant toute commercialisation)
+
+- Modele MMS-300M utilise par le Tier 1 : licence `CC-BY-NC-4.0` (non commercial)
+- Implication: usage commercial bloque tant que Tier 1 repose sur ce modele
+- Plan de mitigation: Option B (torchaudio + modele permissif) ou autre modele alignment avec licence compatible business, puis revue legale formelle avant monetisation
+
+Ajouter une variable de garde:
+- `KARAOKE_ALIGNMENT_LICENSE_MODE=non_commercial` (defaut)
+- check au demarrage si environnement declare `commercial` -> refuser Tier 1 NC
 
 ### Tests fonctionnels
 
@@ -709,13 +779,21 @@ Pipeline complet : CTC alignment → onset snap → beat snap. Triple passe pour
 | Etape 6 (onset refinement optionnel) | ~25 lignes | Faible |
 | Etape 7 (config GPU + env) | ~5 lignes | Faible |
 | Etape 8 (invalidation cache) | ~0-5 lignes | Faible |
-| **Total** | **~225 lignes** | |
+| Etape 9 (baseline benchmark + golden set scripts) | ~40 lignes | Moyen |
+| Etape 10 (observabilite + logs structures) | ~30 lignes | Moyen |
+| Etape 11 (feature flag + circuit breaker hooks) | ~25 lignes | Moyen |
+| **Total** | **~320 lignes** | |
 
 ---
 
 ## Ordre d'implementation
 
 ```
+Phase 0 — Baseline & instrumentation
+  1. Definir le golden set + script de benchmark
+  2. Ajouter logs structures et metriques p50/p95, fallback rate
+  → Permet de comparer V1/V2 objectivement
+
 Phase 1 — Core (Tier 1 CTC)
   1. Etape 1  (dependances)
   2. Etape 2  (lazy-loading modele)
@@ -731,8 +809,159 @@ Phase 2 — Qualite
 Phase 3 — Deploiement
   7. Etape 7  (config GPU Coolify)
   8. Etape 8  (invalidation cache si necessaire)
-  → Deploiement production
+  → Deploiement canary
+
+Phase 4 — Rollout controle
+  9. Activer feature flag CTC sur un sous-ensemble de tracks
+  10. Verifier les seuils go/no-go (`AAE`, `P95`, `Hit@150ms`)
+  11. Generaliser le rollout puis monitorer le circuit breaker
+  → Deploiement production stable
 ```
+
+## Checklist release V2
+
+- [ ] Golden set versionne et rejouable localement
+- [ ] Benchmark V1 vs V2 exporte (`benchmarks/results/`)
+- [ ] Seuils go/no-go atteints (`AAE`, `P95`, `Hit@150ms`)
+- [ ] Cle cache versionnee (engine + model + flags)
+- [ ] Fallback Tier 2/3 valide en test d'echec
+- [ ] Circuit breaker et alerting actifs
+- [ ] Validation licence terminee (usage non-commercial confirme)
+
+---
+
+## Non-negociables V2 (a ajouter a la spec d'implementation)
+
+### 1) Abstraction moteur d'alignement (anti lock-in licence)
+
+Definir une interface unique pour pouvoir remplacer facilement le moteur NC (MMS) si passage en usage commercial.
+
+```python
+class AlignmentEngine(Protocol):
+    def align(
+        self,
+        vocals_path: str,
+        lyrics_text: str,
+        language: str,
+        *,
+        synced_lines: list[dict] | None = None,
+    ) -> dict: ...
+```
+
+Implementations minimales:
+- `MmsCtcAlignmentEngine` (Tier 1 actuel, NC)
+- `TorchaudioAlignmentEngine` (fallback licence-compatible futur)
+- `WhisperAlignmentEngine` (Tier 2/3 existant)
+
+Selection via env:
+- `KARAOKE_ALIGNMENT_ENGINE=auto|mms_ctc|torchaudio_ctc|whisper`
+
+Contrainte:
+- Aucune logique metier ne doit dependre d'un moteur concret en dehors du routeur de tiers.
+
+### 2) Contrat explicite des unites temporelles
+
+Le code suppose `wr["start"]` et `wr["end"]` en secondes float. Ce contrat doit etre verifie et teste.
+
+Regles:
+- Normaliser vers un format interne unique: `start_ms` / `end_ms` (int)
+- Ajouter un validateur runtime:
+  - `0 <= start_ms <= end_ms`
+  - `end_ms <= audio_duration_ms + tolerance`
+  - monotonie globale des mots (pas de retour en arriere)
+- En cas de violation: log structure + fallback Tier 2.
+
+Tests obligatoires:
+- Cas source en secondes (attendu)
+- Cas source en millisecondes (doit detecter et refuser/convertir explicitement)
+- Cas source en frames (doit refuser sans mapping explicite)
+
+### 3) Regroupement synced robuste (pas de perte silencieuse)
+
+Le regroupement par fenetre temporelle seule (`+-500ms`) est insuffisant.
+
+Exigences:
+- Interdire toute perte silencieuse:
+  - compter `skipped_words`
+  - logguer `skipped_words_ratio`
+- Ajouter un mode hybride:
+  - fenetre temporelle + matching textuel fuzzy (normalise accents/punctuation)
+- Fallback automatique:
+  - si `skipped_words_ratio > threshold` alors utiliser regroupement par gaps.
+
+Metriques:
+- `regroup_mode_used`
+- `skipped_words`
+- `skipped_words_ratio`
+
+### 4) Variables implicites et constantes obligatoires
+
+`HALLUCINATION_WORDS` est reference mais non defini dans cette spec.
+
+Action:
+- Soit le definir explicitement (source unique de verite), soit le retirer pour le chemin CTC si non pertinent.
+- Centraliser les seuils en config:
+  - `KARAOKE_REGROUP_TOLERANCE_MS`
+  - `KARAOKE_ONSET_SNAP_THRESHOLD_MS`
+  - `KARAOKE_CTC_MIN_CONFIDENCE_AVG`
+  - `KARAOKE_CTC_MAX_LOW_CONF_RATIO`
+
+### 5) Eviter la double lecture audio (perf)
+
+`_refine_with_onsets()` ne doit pas recharger le fichier si le waveform est deja disponible.
+
+Refactor cible:
+- `_align_with_ctc()` charge une seule fois audio/waveform
+- `onset refinement` recoit `(waveform, sr)` ou une representation derivee partagee
+- `librosa.load(vocals_path)` reserve au chemin fallback uniquement.
+
+### 6) Quality gate CTC + fallback explicite
+
+Le flow mentionne un filtrage par score, il doit etre implemente.
+
+Gate minimal:
+- `confidence_avg >= min_avg`
+- `% mots avec score < low_thresh <= max_low_conf_ratio`
+- integrite temporelle valide
+
+Si gate KO:
+- fallback chanson entiere vers Whisper, ou
+- fallback segment-level (si active) puis fusion.
+
+Logs structures obligatoires:
+- `tier_used`, `confidence_avg`, `low_conf_ratio`, `fallback_reason`
+
+### 7) Validation chunking/batch continuity
+
+`generate_emissions(..., batch_size=4)` doit etre valide sur longues pistes.
+
+Tests techniques:
+- >6 min audio: verifier absence de discontinuites aux frontieres de chunks
+- verifier monotonie timestamps apres merge
+- verifier absence de trous/anomalies > threshold.
+
+### 8) Garde-fous ops a formaliser
+
+Ajouter explicitement a la spec prod:
+- warmup modele HF au demarrage (optionnel mais recommande)
+- retries/timeouts par tier
+- cache HF persistant entre redeploiements
+- version de cle cache inclut:
+  - `alignment_engine`
+  - `alignment_engine_version`
+  - `model_id`
+  - `model_revision`
+  - `postprocess_flags`
+- lock GPU/concurrence pour eviter collisions CTC/CREPE.
+
+### Definition de done (go/no-go technique)
+
+V2 n'est "done" que si:
+- Aucun mot perdu silencieusement dans le regroupement synced
+- Quality gate CTC actif avec fallback prouve en test
+- Contrat d'unites temporelles couvert par tests automatises
+- Abstraction moteur en place (`mms_ctc` remplaçable sans refactor metier)
+- Observabilite ajoutee (logs + metriques citees ci-dessus)
 
 ---
 

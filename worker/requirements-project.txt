@@ -24,6 +24,7 @@ torchcrepe>=0.0.22
 
 # Audio codec handling
 torchcodec>=0.1.0
+ctc-forced-aligner>=0.2.0
 
 # YouTube download (Optimization A: worker downloads reference directly, ~-15s first run)
 yt-dlp>=2024.1.0
