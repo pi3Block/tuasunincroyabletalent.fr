@@ -266,11 +266,11 @@ def _regroup_words_by_synced_lines(
 
 def _get_audio_duration_ms(vocals_path: str) -> int | None:
     try:
-        import torchaudio
+        import soundfile as sf
 
-        info = torchaudio.info(vocals_path)
-        if info.num_frames > 0 and info.sample_rate > 0:
-            return int((info.num_frames / info.sample_rate) * 1000)
+        info = sf.info(vocals_path)
+        if info.frames > 0 and info.samplerate > 0:
+            return int((info.frames / info.samplerate) * 1000)
     except Exception as exc:
         logger.warning("Failed to inspect audio duration for %s: %s", vocals_path, exc)
     return None
@@ -740,7 +740,7 @@ def _select_alignment_engines(
     if KARAOKE_ALIGNMENT_ENGINE == "auto":
         engines: list[AlignmentEngine] = []
         if has_known_lyrics:
-            engines.append(MmsCtcAlignmentEngine())
+            engines.append(TorchaudioCtcAlignmentEngine())
         engines.append(SharedWhisperAlignmentEngine())
         if GROQ_API_KEY:
             engines.append(GroqWhisperAlignmentEngine())
