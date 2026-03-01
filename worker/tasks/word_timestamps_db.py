@@ -32,6 +32,7 @@ def store_word_timestamps(
     source: str,
     language: str | None = None,
     model_version: str | None = None,
+    alignment_engine_version: str | None = None,
     confidence_avg: float | None = None,
     artist_name: str | None = None,
     track_name: str | None = None,
@@ -76,6 +77,7 @@ def store_word_timestamps(
                 source VARCHAR(32) NOT NULL,
                 language VARCHAR(8),
                 model_version VARCHAR(64),
+                alignment_engine_version VARCHAR(32),
                 confidence_avg FLOAT,
                 word_count INTEGER,
                 duration_ms INTEGER,
@@ -87,14 +89,25 @@ def store_word_timestamps(
             );
         """)
 
+        # Add column if missing (safe for existing production tables)
+        cursor.execute("""
+            DO $$
+            BEGIN
+                ALTER TABLE word_timestamps_cache ADD COLUMN alignment_engine_version VARCHAR(32);
+            EXCEPTION WHEN duplicate_column THEN
+                NULL;
+            END $$;
+        """)
+
         # Upsert the data
         cursor.execute("""
             INSERT INTO word_timestamps_cache (
                 spotify_track_id, youtube_video_id, words, lines, source,
-                language, model_version, confidence_avg, word_count, duration_ms,
+                language, model_version, alignment_engine_version,
+                confidence_avg, word_count, duration_ms,
                 artist_name, track_name, created_at, expires_at
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             )
             ON CONFLICT ON CONSTRAINT uq_word_timestamps_track_video
             DO UPDATE SET
@@ -103,6 +116,7 @@ def store_word_timestamps(
                 source = EXCLUDED.source,
                 language = EXCLUDED.language,
                 model_version = EXCLUDED.model_version,
+                alignment_engine_version = EXCLUDED.alignment_engine_version,
                 confidence_avg = EXCLUDED.confidence_avg,
                 word_count = EXCLUDED.word_count,
                 duration_ms = EXCLUDED.duration_ms,
@@ -118,6 +132,7 @@ def store_word_timestamps(
             source,
             language,
             model_version,
+            alignment_engine_version,
             confidence_avg,
             word_count,
             duration_ms,
@@ -142,8 +157,9 @@ def store_word_timestamps(
 def check_word_timestamps_exists(
     spotify_track_id: str,
     youtube_video_id: str | None = None,
+    alignment_engine_version: str | None = None,
 ) -> bool:
-    """Check if word timestamps exist in cache."""
+    """Check if word timestamps exist in cache, optionally matching engine version."""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -153,11 +169,15 @@ def check_word_timestamps_exists(
             WHERE spotify_track_id = %s
             AND (expires_at IS NULL OR expires_at > %s)
         """
-        params = [spotify_track_id, datetime.utcnow()]
+        params: list = [spotify_track_id, datetime.utcnow()]
 
         if youtube_video_id:
             query += " AND (youtube_video_id = %s OR youtube_video_id IS NULL)"
             params.append(youtube_video_id)
+
+        if alignment_engine_version:
+            query += " AND (alignment_engine_version = %s OR alignment_engine_version IS NULL)"
+            params.append(alignment_engine_version)
 
         cursor.execute(query, params)
         exists = cursor.fetchone() is not None

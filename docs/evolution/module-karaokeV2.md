@@ -13,6 +13,56 @@ Le mode karaoke mot-par-mot actuel utilise **Whisper large-v3-turbo** (`word_tim
 
 ---
 
+## Statut d'implementation (2026-03-01)
+
+### Core — Implemente
+
+| # | Etape | Fichier | Notes |
+|---|-------|---------|-------|
+| 1 | Dependance `ctc-forced-aligner` | `worker/requirements-project.txt` | `>=0.2.0` |
+| 2 | Lazy-loading modele CTC (MMS-300M) | `worker/tasks/word_timestamps.py` | `_get_ctc_align_model()`, fp16 sur `CTC_ALIGN_DEVICE` |
+| 3 | `MmsCtcAlignmentEngine` | `worker/tasks/word_timestamps.py` | CTC forced alignment, CC-BY-NC, 1130 langues |
+| 4 | Regroupement synced hybride | `worker/tasks/word_timestamps.py` | Temporel + fuzzy text, jamais de perte silencieuse |
+| 5 | `do_generate_word_timestamps()` 3-tier | `worker/tasks/word_timestamps.py` | Engine chain + quality gates + fallback |
+| 6 | Onset refinement (`_refine_with_onsets`) | `worker/tasks/word_timestamps.py` | Optionnel (`KARAOKE_ONSET_REFINE=true`), snap ±80ms |
+| 7 | `AlignmentEngine` Protocol | `worker/tasks/word_timestamps.py` | 4 engines : SharedWhisper, Groq, MmsCtc, TorchaudioCtc |
+| 8 | `_validate_alignment_integrity()` | `worker/tasks/word_timestamps.py` | Monotonie, bornes, timing validation |
+| 9 | `_passes_quality_gate()` | `worker/tasks/word_timestamps.py` | `confidence_avg` + `low_conf_ratio` |
+| 10 | `TorchaudioCtcAlignmentEngine` | `worker/tasks/word_timestamps.py` | Fallback licence-compatible (torchaudio MMS_FA) |
+| 11 | Cache key versioning | `worker/tasks/word_timestamps_db.py` | `alignment_engine_version` stocke + verifie |
+
+### Ops — Implemente
+
+| # | Item | Fichier |
+|---|------|---------|
+| 12 | Env vars Docker | `docker-compose.coolify.yml` |
+| 13 | Env vars Python (12 variables) | `worker/tasks/word_timestamps.py` |
+| 14 | Source priority CTC dans SQLAlchemy | `backend/app/models/word_timestamps_cache.py` |
+
+### Non-negociables V2 — Statut
+
+| # | Exigence | Statut |
+|---|----------|--------|
+| 1 | Abstraction moteur (`AlignmentEngine` Protocol) | OK — 4 implementations |
+| 2 | Contrat unites temporelles | OK — `_to_ms()` + `_normalize_words_timing()` |
+| 3 | Regroupement synced robuste | OK — hybride temporel+fuzzy, `skipped_ratio` trace |
+| 4 | `HALLUCINATION_WORDS` defini | OK — constante centralisee |
+| 5 | Eviter double lecture audio | N/A — onset refinement charge independamment a 22050Hz |
+| 6 | Quality gate CTC + fallback | OK — `_passes_quality_gate()` + fallback engine chain |
+| 7 | Validation chunking/batch | A valider sur >6min |
+| 8 | Garde-fous ops | Partiel — logs structures OK, circuit breaker absent |
+
+### Hors scope (futur)
+
+- Golden set benchmark scripts (`benchmarks/karaoke_alignment_v2/`)
+- Circuit breaker / feature flag runtime toggle
+- Observabilite Langfuse par tier
+- Beat-aware quantization (snap grille rythmique)
+- Segment-level fallback (CTC + Whisper hybride par segment)
+- Fine-tuning MMS sur chant francais
+
+---
+
 ## Diagnostic technique
 
 ### Pipeline actuel (V1)

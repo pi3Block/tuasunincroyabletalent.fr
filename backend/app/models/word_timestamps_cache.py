@@ -39,6 +39,7 @@ class WordTimestampsCache(Base):
     source = Column(String(50), nullable=False)  # musixmatch_word, whisper_timestamped, user_corrected
     language = Column(String(10), nullable=True)
     model_version = Column(String(50), nullable=True)  # e.g., 'whisper-turbo-1.0'
+    alignment_engine_version = Column(String(32), nullable=True)  # e.g., 'v2-p1'
 
     # Quality metrics
     confidence_avg = Column(Numeric(4, 3), nullable=True)  # Average confidence score
@@ -83,7 +84,11 @@ class WordTimestampsCache(Base):
         priorities = {
             'user_corrected': 0,      # User corrections are highest priority
             'musixmatch_word': 1,     # Professional sync
-            'whisper_timestamped': 2, # Generated
+            'mms_ctc': 2,             # CTC forced aligned (MMS-300M)
+            'torchaudio_ctc': 2,      # CTC forced aligned (torchaudio MMS_FA)
+            'shared_whisper': 3,      # Generated via shared-whisper HTTP
+            'groq_whisper': 3,        # Generated via Groq API
+            'whisper_timestamped': 3, # Generated (legacy)
         }
         return priorities.get(self.source, 99)
 
@@ -97,6 +102,7 @@ class WordTimestampsCache(Base):
             "source": self.source,
             "language": self.language,
             "model_version": self.model_version,
+            "alignment_engine_version": self.alignment_engine_version,
             "confidence_avg": float(self.confidence_avg) if self.confidence_avg else None,
             "word_count": self.word_count,
             "duration_ms": self.duration_ms,

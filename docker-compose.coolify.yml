@@ -141,6 +141,13 @@ services:
       - SENTRY_ENVIRONMENT=${SENTRY_ENVIRONMENT:-production}
       # Disable TorchCodec backend (ignores backend= param, may conflict with CUDA init)
       - TORCHAUDIO_USE_TORCHCODEC=0
+      # Karaoke V2 — CTC forced alignment
+      - CTC_ALIGN_DEVICE=${CTC_ALIGN_DEVICE:-cuda:1}
+      - KARAOKE_ALIGNMENT_ENGINE=${KARAOKE_ALIGNMENT_ENGINE:-auto}
+      - KARAOKE_ALIGNMENT_ENGINE_VERSION=${KARAOKE_ALIGNMENT_ENGINE_VERSION:-v2-p1}
+      - KARAOKE_ALIGNMENT_LICENSE_MODE=${KARAOKE_ALIGNMENT_LICENSE_MODE:-non_commercial}
+      - KARAOKE_ONSET_REFINE=${KARAOKE_ONSET_REFINE:-false}
+      - KARAOKE_ONSET_SNAP_THRESHOLD_MS=${KARAOKE_ONSET_SNAP_THRESHOLD_MS:-80}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     deploy:
