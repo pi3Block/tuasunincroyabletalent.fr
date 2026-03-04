@@ -19,8 +19,8 @@ psycopg2-binary>=2.9.9
 # Audio Separation (unique to this project)
 demucs>=4.0.1
 
-# Pitch Detection (unique to this project)
-torchcrepe>=0.0.22
+# Pitch Detection — SwiftF0 (CPU-only, ONNX Runtime, replaces torchcrepe Sprint 1)
+swift-f0
 
 # Audio codec handling
 torchcodec>=0.1.0

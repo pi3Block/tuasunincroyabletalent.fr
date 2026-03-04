@@ -2,22 +2,17 @@
 Audio analysis pipeline - orchestrates all analysis tasks.
 Runs all processing directly (not as sub-tasks) to avoid Celery .get() issues.
 
-Multi-GPU architecture (2026-02-28):
-- GPU 1 (RTX 3080 10GB, cuda:0): Demucs + de-bleeding — shared with Ollama Heavy
-- GPU 2 (RTX 3070 8GB, cuda:1): CREPE pitch — coexists with Ollama (CREPE ~1GB)
-- GPU 3 (RTX 3070 8GB): shared-whisper HTTP (separate container)
-- Jury LLM: 100% LiteLLM/Groq (no local GPU needed)
-
-GPU time-sharing (GPU 1):
-  Normal state: Ollama Heavy qwen3:8b resident (~5.8 GB) for augmenter.pro
-  Pipeline start: POST keep_alive:0 → Ollama unloads → Demucs uses GPU (~4 GB)
-  Pipeline end: Ollama reloads on next request (~2-3s cold start)
+Architecture (Sprint 1, 2026-03-04):
+- 1 GPU only: cuda:0 (RTX 3080 10GB) → Demucs separation
+- CPU: SwiftF0 pitch (replaces CREPE, 42x faster, +12% precision)
+- HTTP: shared-whisper (GPU 0), LiteLLM/Groq jury (no local GPU)
+- Time-sharing: A3B (port 11439) unloaded before GPU tasks via keep_alive:0
 
 Storage (storages.augmenter.pro, bucket: kiaraoke):
   cache/{youtube_id}/reference.wav         <- YouTube original (permanent)
   cache/{youtube_id}/vocals.wav            <- Demucs ref cache (90 days)
   cache/{youtube_id}/instrumentals.wav
-  cache/{youtube_id}/pitch_data.npz        <- CREPE ref cache
+  cache/{youtube_id}/pitch_data.npz        <- SwiftF0 ref cache (backward-compat with CREPE)
   sessions/{session_id}_ref/vocals.wav     <- StudioMode ref tracks
   sessions/{session_id}_ref/instrumentals.wav
   sessions/{session_id}_user/vocals.wav    <- User separated tracks
@@ -40,9 +35,8 @@ logger = logging.getLogger(__name__)
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
-# GPU devices — shared with Ollama via keep_alive:0 time-sharing
-DEMUCS_DEVICE = os.getenv("DEMUCS_DEVICE", "cuda:0")  # GPU 1 RTX 3080 10GB
-CREPE_DEVICE = os.getenv("CREPE_DEVICE", "cuda:1")     # GPU 2 RTX 3070 8GB
+# GPU device — single GPU for Demucs separation, pitch is CPU-only (SwiftF0)
+DEMUCS_DEVICE = os.getenv("DEMUCS_DEVICE", "cuda:0")  # Host GPU 4 RTX 3080 10GB
 
 # Ollama instances — unloaded before GPU tasks to free VRAM
 OLLAMA_HEAVY_HOST = os.getenv("OLLAMA_HEAVY_HOST", "http://host.docker.internal:11434")
@@ -135,14 +129,14 @@ _ollama_unload_ok = True  # Tracks whether Ollama unload succeeded (for Demucs O
 
 
 def _unload_ollama_for_demucs():
-    """Unload Ollama models from GPUs to free VRAM for Demucs/CREPE.
+    """Unload Ollama models from GPUs to free VRAM for Demucs.
 
     Targets both:
     - Ollama Heavy (port 11434, qwen3:8b ~5.8 GB on GPU cuda:0)
     - Ollama A3B (port 11439, 35B MoE ~28 GB on GPUs 1-4)
 
-    A3B is the main VRAM consumer. Without unloading, CREPE takes 47s instead of 5s
-    and de-bleeding OOMs on CPU fallback.
+    A3B is the main VRAM consumer. Without unloading, Demucs may OOM
+    and de-bleeding falls back to CPU.
 
     Non-fatal: if Ollama is unreachable or already unloaded, pipeline proceeds anyway.
     Sets _ollama_unload_ok = False on failure so Demucs can adapt.
@@ -288,14 +282,14 @@ def analyze_performance(
     """
     Full analysis pipeline for a vocal performance.
 
-    Multi-GPU: Demucs on cuda:0 (GPU 1), CREPE on cuda:1 (GPU 4), Whisper via HTTP (GPU 3).
+    1 GPU (Demucs cuda:0) + CPU (SwiftF0 pitch) + HTTP (Whisper, Jury).
 
     Steps:
     1. Download user audio from storage -> /tmp/kiaraoke/
     2. Separate user audio (Demucs, cuda:0)
     3. Check ref separation in storage cache (Demucs if MISS)
     4. Cross-correlation sync (CPU)
-    5. CREPE pitch (cuda:1) || Whisper+Lyrics (HTTP) — parallel
+    5. SwiftF0 pitch (CPU) || Whisper+Lyrics (HTTP) — parallel
     6. Score + Jury feedback (LiteLLM, no GPU)
     7. Cleanup /tmp/kiaraoke/
     """
@@ -366,11 +360,10 @@ def analyze_performance(
             #
             #   Thread A (upload_notify) : upload user stems → notifie le frontend
             #   Thread B (separate_ref)  : Demucs ref / cache (cuda:0)
-            #   Thread C (crepe_user)    : CREPE user pitch (cuda:1)
-            #   Thread D (whisper_lyrics): Whisper HTTP (GPU 3) + Genius API
+            #   Thread C (pitch_user)    : SwiftF0 user pitch (CPU-only)
+            #   Thread D (whisper_lyrics): Whisper HTTP (GPU 0) + Genius API
             #
-            # Thread A et Thread B utilisent le réseau / storage (I/O).
-            # Thread B utilise cuda:0, Thread C utilise cuda:1 → pas de contention GPU.
+            # Thread B utilise cuda:0, Thread C = CPU → zero contention GPU.
             # update_progress() N'est PAS appelé depuis les threads (non thread-safe avec Celery).
             # _notify_user_tracks_ready() écrit directement dans la session Redis (clé distincte).
             # ========================================================
@@ -494,11 +487,10 @@ def analyze_performance(
                         compute_and_upload_envelope(rv_path, youtube_id, storage)
                 return rv_path, ri_path
 
-            def _crepe_user() -> dict:
-                """Thread C: CREPE user pitch (cuda:1, full model pour précision max)."""
+            def _pitch_user() -> dict:
+                """Thread C: SwiftF0 user pitch (CPU-only, ~2s for 3min)."""
                 return do_extract_pitch(
                     user_separation["vocals_path"], f"{session_id}_user",
-                    fast_mode=False, device=CREPE_DEVICE,
                 )
 
             def _whisper_lyrics() -> tuple:
@@ -510,13 +502,13 @@ def analyze_performance(
             with ThreadPoolExecutor(max_workers=4) as pool:
                 fut_upload     = pool.submit(_upload_and_notify)
                 fut_ref        = pool.submit(_separate_ref)
-                fut_crepe_user = pool.submit(_crepe_user)
+                fut_pitch_user = pool.submit(_pitch_user)
                 fut_whisper    = pool.submit(_whisper_lyrics)
             # pool.__exit__ (shutdown wait=True) attend la fin des 4 threads.
 
             # Critical threads — pipeline cannot continue without these (5 min timeout)
             ref_vocals_path, ref_instru_path = fut_ref.result(timeout=300)
-            user_pitch = fut_crepe_user.result(timeout=300)
+            user_pitch = fut_pitch_user.result(timeout=300)
 
             # Non-critical threads — degrade gracefully instead of crashing
             try:
@@ -535,7 +527,7 @@ def analyze_performance(
             # PHASE 3 — 2 threads parallèles après Phase 2 :
             #
             #   Thread E (sync)      : cross-correlation offset (CPU, ~1s)
-            #   Thread F (crepe_ref) : CREPE ref pitch (cuda:1, tiny, ~1.5s ou 0s cache)
+            #   Thread F (pitch_ref) : SwiftF0 ref pitch (CPU, ~1s ou 0s cache)
             #
             # Les deux ne dépendent que de ref_vocals_path (disponible après Phase 2).
             # ========================================================
@@ -558,8 +550,8 @@ def analyze_performance(
                     logger.warning("Cross-correlation sync failed: %s, using offset=0", e)
                     return {"offset_seconds": 0.0, "confidence": 0.0, "method": "fallback"}
 
-            def _crepe_ref() -> dict:
-                """Thread F: CREPE ref pitch (cuda:1, tiny model) avec cache local + pitch NPZ."""
+            def _pitch_ref() -> dict:
+                """Thread F: SwiftF0 ref pitch (CPU) avec cache local + pitch NPZ."""
                 lcache = get_local_cache()
                 ref_pitch_cache_key = (
                     f"cache/{youtube_id}/pitch_data.npz" if youtube_id else None
@@ -574,7 +566,7 @@ def analyze_performance(
                             with _np.load(str(local_npz)) as npz:
                                 if "frequency" not in npz or "time" not in npz:
                                     raise ValueError("Missing keys in cached NPZ")
-                            logger.info("Pitch local cache HIT for %s — skipping CREPE", youtube_id)
+                            logger.info("Pitch local cache HIT for %s — skipping pitch extraction", youtube_id)
                             # Copy to ref_temp for pipeline use
                             dest_npz = ref_temp / "pitch_data_cached.npz"
                             shutil.copy2(local_npz, dest_npz)
@@ -584,10 +576,10 @@ def analyze_performance(
 
                 # Try remote storage
                 if ref_pitch_cache_key and storage.exists(ref_pitch_cache_key):
-                    logger.info("Pitch storage cache HIT for reference %s — skipping CREPE", youtube_id)
+                    logger.info("Pitch storage cache HIT for reference %s — skipping pitch extraction", youtube_id)
                     cached_npz = ref_temp / "pitch_data_cached.npz"
                     storage.download_to_file(ref_pitch_cache_key, cached_npz)
-                    # Validate NPZ integrity — re-run CREPE if corrupt
+                    # Validate NPZ integrity — re-run SwiftF0 if corrupt
                     try:
                         import numpy as _np
                         with _np.load(str(cached_npz)) as npz:
@@ -600,11 +592,10 @@ def analyze_performance(
                             pass
                         return {"pitch_path": str(cached_npz), "stats": {}, "status": "cached"}
                     except Exception as npz_err:
-                        logger.warning("Cached pitch NPZ invalid for %s, re-running CREPE: %s", youtube_id, npz_err)
+                        logger.warning("Cached pitch NPZ invalid for %s, re-running SwiftF0: %s", youtube_id, npz_err)
 
                 rp = do_extract_pitch(
                     str(ref_vocals_path), f"{session_id}_ref",
-                    fast_mode=True, device=CREPE_DEVICE,
                 )
                 if ref_pitch_cache_key and rp.get("pitch_path"):
                     _safe_upload(
@@ -622,9 +613,9 @@ def analyze_performance(
 
             with ThreadPoolExecutor(max_workers=2) as pool:
                 fut_sync      = pool.submit(_sync)
-                fut_crepe_ref = pool.submit(_crepe_ref)
+                fut_pitch_ref = pool.submit(_pitch_ref)
             sync_result = fut_sync.result(timeout=60)
-            ref_pitch   = fut_crepe_ref.result(timeout=300)
+            ref_pitch   = fut_pitch_ref.result(timeout=300)
 
             auto_offset = sync_result["offset_seconds"]
             sync_confidence = sync_result["confidence"]
@@ -702,7 +693,7 @@ def prepare_reference(
 
     Storage cache strategy (3 levels):
       1. Demucs cache:  cache/{youtube_id}/vocals.wav  → skip Demucs entirely
-      2. Pitch cache:   cache/{youtube_id}/pitch_data.npz → skip CREPE entirely
+      2. Pitch cache:   cache/{youtube_id}/pitch_data.npz → skip SwiftF0 entirely
       3. Session copy:  sessions/{session_id}_ref/vocals.wav → StudioMode access
 
     Optimization A (youtube_url provided + Demucs MISS):
@@ -711,10 +702,10 @@ def prepare_reference(
       runs Demucs as usual.
 
     Perf targets (warm cache):
-      Demucs+CREPE miss, direct YT download (Opt A):  ~50s   (was ~65s)
-      Demucs+CREPE miss, storage download:            ~65s
-      Demucs cached, CREPE miss:                      ~35s
-      Both cached (2nd session+):                     ~10s
+      Demucs miss + pitch miss, direct YT (Opt A):  ~35s  (SwiftF0 CPU ~1s vs CREPE ~5s)
+      Demucs miss + pitch miss, storage download:    ~50s
+      Demucs cached, pitch miss:                     ~15s
+      Both cached (2nd session+):                    ~5s
     """
     from tasks.audio_separation import do_separate_audio
     from tasks.pitch_analysis import do_extract_pitch
@@ -810,7 +801,7 @@ def prepare_reference(
             )
             result = do_separate_audio(local_ref, f"{session_id}_ref")
 
-            # Free GPU cache after Demucs (prevent VRAM fragmentation for CREPE)
+            # Free GPU cache after Demucs
             try:
                 import torch
                 if torch.cuda.is_available():
@@ -897,7 +888,7 @@ def prepare_reference(
         _notify_tracks_ready(session_id)
 
         # ================================================================
-        # PITCH CACHE CHECK — skip CREPE if already done for this video
+        # PITCH CACHE CHECK — skip SwiftF0 if already done for this video
         # ================================================================
         self.update_state(
             state="PROGRESS",
@@ -911,13 +902,13 @@ def prepare_reference(
         if youtube_id:
             local_npz = lcache.get_reference_file(youtube_id, "pitch_data.npz")
             if local_npz:
-                logger.info("Pitch local cache HIT for %s — skipping CREPE", youtube_id)
+                logger.info("Pitch local cache HIT for %s — skipping pitch extraction", youtube_id)
                 cached_npz = ref_temp / "pitch_data_cached.npz"
                 shutil.copy2(local_npz, cached_npz)
                 pitch_path = str(cached_npz)
 
         if not pitch_path and pitch_cache_key and storage.exists(pitch_cache_key):
-            logger.info("Pitch storage cache HIT for %s — skipping CREPE", youtube_id)
+            logger.info("Pitch storage cache HIT for %s — skipping pitch extraction", youtube_id)
             cached_npz = ref_temp / "pitch_data_cached.npz"
             storage.download_to_file(pitch_cache_key, cached_npz)
             pitch_path = str(cached_npz)
@@ -930,16 +921,7 @@ def prepare_reference(
         if not pitch_path:
             pitch_result = do_extract_pitch(
                 str(vocals_local), f"{session_id}_ref",
-                fast_mode=True, device=CREPE_DEVICE,
             )
-
-            # Free GPU cache after CREPE
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except Exception as cuda_err:
-                logger.warning("CUDA empty_cache failed: %s", cuda_err)
 
             pitch_path = pitch_result.get("pitch_path", "")
             # Cache pitch for future sessions with same video — non-fatal

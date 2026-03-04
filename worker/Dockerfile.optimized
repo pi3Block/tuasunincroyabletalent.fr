@@ -34,7 +34,7 @@ HEALTHCHECK --interval=60s --timeout=10s --start-period=120s --retries=3 \
     CMD celery -A tasks.celery_app inspect ping --timeout 5 2>/dev/null | grep -q "pong" || exit 1
 
 # Run Celery worker
-# gpu-heavy: Demucs, Whisper (resource-intensive)
-# gpu: CREPE pitch analysis
-# default: CPU-bound tasks
+# gpu-heavy: Demucs separation (resource-intensive)
+# gpu: reserved for future GPU tasks
+# default: CPU-bound tasks (SwiftF0 pitch, scoring, lyrics)
 CMD ["celery", "-A", "tasks.celery_app", "worker", "--loglevel=info", "--concurrency=2", "-Q", "gpu-heavy,gpu,default"]

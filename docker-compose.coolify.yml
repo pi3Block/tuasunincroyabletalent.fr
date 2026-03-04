@@ -85,12 +85,13 @@ services:
       start_period: 40s
 
   # ============================================
-  # Worker Heavy - Multi-GPU (Demucs + CREPE)
+  # Worker Heavy - Single GPU (Demucs) + CPU (SwiftF0)
   # ============================================
-  # GPU time-sharing with A3B via keep_alive:0:
+  # Sprint 1: SwiftF0 replaces CREPE → pitch is CPU-only → 1 GPU suffices
   #   cuda:0 = Host GPU 4 (RTX 3080, 10 GB) → Demucs + de-bleeding + CTC alignment
-  #   cuda:1 = Host GPU 1 (RTX 3070, 8 GB) → CREPE pitch extraction
+  #   CPU = SwiftF0 pitch extraction (42x faster than CREPE, +12% precision)
   # A3B (port 11439, GPUs 1-4) unloaded before GPU tasks, reloads after.
+  # GPU 1 (RTX 3070) returned to A3B → A3B gets 4 GPUs instead of 3.
   # Whisper: shared-whisper HTTP (GPU 0, separate container)
   # Jury LLM: 100% LiteLLM/Groq (no local GPU needed)
   worker-heavy:
@@ -109,9 +110,8 @@ services:
       - WHISPER_MODEL=${WHISPER_MODEL:-turbo}
       - WHISPER_LOCAL_FALLBACK=false
       - GROQ_API_KEY=${GROQ_API_KEY:-}
-      # Multi-GPU device assignment (shared with Ollama via keep_alive:0 time-sharing)
+      # Single GPU for Demucs (pitch is CPU-only via SwiftF0)
       - DEMUCS_DEVICE=cuda:0
-      - CREPE_DEVICE=cuda:1
       # Ollama — unloaded before GPU tasks (keep_alive:0 time-sharing)
       - OLLAMA_HEAVY_HOST=http://host.docker.internal:11434
       - OLLAMA_A3B_HOST=http://host.docker.internal:11439
@@ -154,7 +154,9 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ['GPU-bdb1f5e4-d03c-b5c1-bb9c-59f3d08d161d', 'GPU-c99d136d-ff10-5223-3919-9a28e55ffc60']
+              # Single GPU: RTX 3080 10GB (Host GPU 4) — Demucs separation only
+              # RTX 3070 (GPU-c99d136d) returned to A3B (Sprint 1)
+              device_ids: ['GPU-bdb1f5e4-d03c-b5c1-bb9c-59f3d08d161d']
               capabilities: [gpu]
         limits:
           memory: 8G

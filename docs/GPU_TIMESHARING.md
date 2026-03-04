@@ -196,14 +196,14 @@ Total peak : ~13.3 GB / 44 GB (le reste pour A3B)
 ### Docker GPU allocation evolution
 
 ```
-Sprint 0 (actuel) :
+Sprint 0 (avant) :
   docker-compose.coolify.yml → worker-heavy :
     device_ids: ['GPU-bdb1f5e4...', 'GPU-c99d136d...']  # 2 GPUs (RTX 3080 + RTX 3070)
 
-Sprint 1+ (apres SwiftF0) :
+Sprint 1 (actuel, deploye 2026-03-04) :
   docker-compose.coolify.yml → worker-heavy :
     device_ids: ['GPU-bdb1f5e4...']  # 1 GPU seulement (RTX 3080 10 GB)
-  → GPU-c99d136d... (RTX 3070) rendu a A3B
+  → GPU-c99d136d... (RTX 3070) rendu a A3B ✅
 ```
 
 ---

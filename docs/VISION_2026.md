@@ -1,7 +1,7 @@
 # VISION 2026 — Kiaraoke, leader analyse vocale IA en France
 
 > Derniere mise a jour : 2026-03-04 (brainstorm session — reorganisation sprints)
-> Statut : Sprint 0 complete (2026-03-04), Sprint 1 a venir
+> Statut : Sprint 0+1 complete (2026-03-04), Sprint 2 a venir
 > Priorite : **Infra GPU → SOTA modeles → Coaching → UX/Partage → Social**
 
 ---
@@ -158,39 +158,33 @@ Details techniques : voir [docs/GPU_TIMESHARING.md](GPU_TIMESHARING.md)
 
 ---
 
-### Sprint 1 — GPU time-sharing A3B + SwiftF0 (3-5 jours)
+### Sprint 1 — GPU time-sharing A3B + SwiftF0 (3-5 jours) ✅ COMPLETE (2026-03-04)
 
 > Objectif : decharger A3B proprement, remplacer CREPE par SwiftF0 (CPU), liberer 1 GPU
 
-#### 1.1 — Unload A3B automatique
-- [ ] Implementer `_unload_a3b()` dans `pipeline.py` — HTTP POST `keep_alive:0` vers `ollama@a3b` (port 11439)
-- [ ] Poll VRAM libre apres unload (nvidia-smi via subprocess ou pynvml)
-- [ ] Timeout 60s si A3B en cours de generation, non-fatal si injoignable
-- [ ] Remplacer `_unload_ollama_for_demucs()` actuel (qui cible Light, port 11435) par `_unload_a3b()`
-- [ ] Tester : pipeline complet avec A3B charge → verifie que Demucs ne OOM pas
+#### 1.1 — Unload A3B automatique ✅ (fait en Sprint 0)
+- [x] `_unload_ollama_for_demucs()` cible A3B (port 11439, keep_alive:0) + Heavy (port 11434)
+- [x] Timeout 30s A3B, 10s Heavy, non-fatal si injoignable
 
-#### 1.2 — SwiftF0 remplace CREPE (pitch CPU-only)
-- [ ] Ajouter `swift-f0` dans `worker/requirements-project.txt`
-- [ ] Creer `worker/tasks/pitch_swiftf0.py` — wrapper SwiftF0 avec meme interface que `do_extract_pitch()`
-- [ ] Output identique : NPZ avec arrays `time`, `frequency`, `confidence`
-- [ ] Mettre a jour `pipeline.py` : `do_extract_pitch()` → `do_extract_pitch_swiftf0()`
-- [ ] Supprimer la distinction `fast_mode=True/False` (un seul modele pour user + ref)
-- [ ] Supprimer `CREPE_DEVICE` env var (plus besoin de GPU pour le pitch)
-- [ ] Benchmark : temps, precision sur 3-5 chansons test vs CREPE actuel
+#### 1.2 — SwiftF0 remplace CREPE (pitch CPU-only) ✅
+- [x] `swift-f0` remplace `torchcrepe` dans requirements
+- [x] `pitch_analysis.py` reecrit avec SwiftF0 (meme interface `do_extract_pitch()`)
+- [x] Output identique : NPZ avec arrays `time`, `frequency`, `confidence`
+- [x] `fast_mode` et `device` ignores (un seul modele, CPU-only)
+- [x] `CREPE_DEVICE` supprime de docker-compose + pipeline.py
+- [ ] Benchmark : a faire apres deploiement
 
-#### 1.3 — Reallocation GPU Docker
-- [ ] Mettre a jour `docker-compose.coolify.yml` : worker-heavy n'a besoin que d'**1 GPU** (pour RoFormer/Demucs)
-  - Garder `GPU-bdb1f5e4...` (RTX 3080 10 GB, cuda:0) pour separation
-  - Retirer `GPU-c99d136d...` (RTX 3070 8 GB) → rendu a A3B
-- [ ] Mettre a jour `DEMUCS_DEVICE=cuda:0` (inchange), supprimer `CREPE_DEVICE`
-- [ ] Mettre a jour `deploy.resources.limits.memory` si necessaire
+#### 1.3 — Reallocation GPU Docker ✅
+- [x] `docker-compose.coolify.yml` : 1 GPU (GPU-bdb1f5e4, RTX 3080 10 GB)
+- [x] GPU-c99d136d (RTX 3070 8 GB) rendu a A3B
+- [x] `CREPE_DEVICE` supprime, `DEMUCS_DEVICE=cuda:0` inchange
 
 **Critere de succes** : pipeline analyse complete en <30s (1er run), pitch CPU en <3s, A3B se recharge en <5s apres analyse. Worker n'utilise qu'1 GPU.
 
 **Impact GPU** :
 ```
 Avant : worker = 2 GPUs (cuda:0 Demucs, cuda:1 CREPE) → A3B sur 3 GPUs
-Apres : worker = 1 GPU (cuda:0 Demucs/RoFormer) → A3B sur 4 GPUs
+Apres : worker = 1 GPU (cuda:0 Demucs) → A3B sur 4 GPUs ← DONE
 ```
 
 ---

@@ -78,7 +78,7 @@ Migration : remplacer audio_separation.py, meme interface in/out
 
 Objectif : extraire F0 (frequence fondamentale) des vocals pour comparaison DTW.
 
-### Actuel : torchcrepe 🚀
+### Ancien : torchcrepe (remplace par SwiftF0 Sprint 1)
 
 - **Precision** : ~80% RPA sur chant
 - **VRAM** : ~1 GB (full), ~200 MB (tiny)
@@ -107,7 +107,7 @@ Objectif : extraire F0 (frequence fondamentale) des vocals pour comparaison DTW.
 - **Paper** : [arxiv.org/abs/2509.15140](https://arxiv.org/abs/2509.15140) (septembre 2025)
 - **Repo** : [CNChTu/FCPE](https://github.com/CNChTu/FCPE)
 
-### NOUVEAU : SwiftF0 🧪 ← **Decouverte brainstorm 2026-03-04, priorite haute**
+### NOUVEAU : SwiftF0 ✅ ← **Deploye Sprint 1 (2026-03-04)**
 
 - **Precision** : **91.80% harmonic-mean** a 10 dB SNR — **meilleur que CREPE de +12 points**
 - **Params** : 95,842 (vs CREPE 22M = **230x plus petit**)
@@ -131,7 +131,7 @@ Objectif : extraire F0 (frequence fondamentale) des vocals pour comparaison DTW.
 |--------|-----------|------|---------|-------|--------|
 | RMVPE | 87.2% harmonic-mean | ~300 MB GPU | rapide | Polyphonic-aware, standard RVC | 🧪 backup |
 | FCPE | 96.79% RPA MIR-1K | ~150 MB GPU | RTF 0.006 | Tres rapide, bon pour real-time | 🧪 backup |
-| SwiftF0 | 91.80% harmonic-mean | **~0 (CPU)** | **42x CREPE** | **Nouveau SOTA**, CPU-only | 🧪 **priorite** |
+| SwiftF0 | 91.80% harmonic-mean | **~0 (CPU)** | **42x CREPE** | **SOTA**, CPU-only | ✅ **deploye** |
 
 ### Decision (MISE A JOUR 2026-03-04)
 

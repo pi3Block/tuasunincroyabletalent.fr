@@ -1,6 +1,12 @@
 """
-Pitch analysis using torchcrepe (PyTorch-based CREPE).
+Pitch analysis using SwiftF0 (CPU-only, ONNX Runtime).
 Extracts fundamental frequency (F0) from vocals.
+
+SwiftF0 replaces torchcrepe (Sprint 1, 2026-03-04):
+  - 95K params vs 22M (230x smaller)
+  - 42x faster than CREPE on CPU
+  - +12% precision (91.80% vs ~80% harmonic-mean)
+  - CPU-only → frees cuda:1 for A3B
 """
 import os
 import logging
@@ -10,76 +16,53 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# Lazy-loaded SwiftF0 detector (singleton, CPU-only)
+_detector = None
+
+
+def _get_detector():
+    """Lazy load SwiftF0 detector (ONNX Runtime, ~95K params, instant load)."""
+    global _detector
+    if _detector is None:
+        from swift_f0 import SwiftF0
+        _detector = SwiftF0(
+            fmin=50.0,       # Min pitch Hz (vocal range)
+            fmax=1100.0,     # Max pitch Hz (soprano + harmonics)
+            confidence_threshold=0.0,  # We filter confidence ourselves (match CREPE behavior)
+        )
+        logger.info("SwiftF0 detector loaded (CPU-only, ONNX Runtime)")
+    return _detector
+
 
 def do_extract_pitch(
     vocals_path: str, session_id: str, fast_mode: bool = False, device: str = None,
 ) -> dict:
     """
-    Core logic: Extract pitch information from vocals using torchcrepe.
+    Extract pitch from vocals using SwiftF0 (CPU-only).
 
     Args:
         vocals_path: Path to vocals audio file
         session_id: Session identifier
-        fast_mode: If True, use 'tiny' model for speed (good for reference analysis)
-        device: CUDA device (e.g. "cuda:1" for dedicated CREPE GPU). Defaults to CREPE_DEVICE env or "cuda:0".
+        fast_mode: Ignored (SwiftF0 has a single model, always fast + accurate)
+        device: Ignored (SwiftF0 is CPU-only via ONNX Runtime)
 
     Returns:
-        dict with pitch data
+        dict with pitch_path (NPZ), stats, status
     """
-    import torch
-    import torchcrepe
-    import torchaudio
+    detector = _get_detector()
 
-    logger.info("Loading vocals: %s", vocals_path)
+    logger.info("Extracting pitch with SwiftF0 (CPU): %s", vocals_path)
 
-    # Load audio with torchaudio
-    audio, sample_rate = torchaudio.load(vocals_path)
+    result = detector.detect_from_file(vocals_path)
 
-    # Convert stereo to mono if needed
-    if audio.shape[0] > 1:
-        audio = audio.mean(dim=0, keepdim=True)
+    time = result.timestamps
+    frequency = result.pitch_hz.copy()
+    confidence = result.confidence
 
-    # Resample to 16kHz if needed (torchcrepe expects 16kHz)
-    if sample_rate != 16000:
-        resampler = torchaudio.transforms.Resample(sample_rate, 16000)
-        audio = resampler(audio)
-        sample_rate = 16000
-
-    # Select device — dedicated CREPE GPU (cuda:1 = GPU 4 RTX 3060 Ti)
-    if device is None:
-        device = os.getenv("CREPE_DEVICE", "cuda:0")
-    if not torch.cuda.is_available():
-        device = "cpu"
-    model_name = "tiny" if fast_mode else "full"
-    logger.info("Extracting pitch (model=%s, device=%s)...", model_name, device)
-
-    audio = audio.to(device)
-
-    # Extract pitch with torchcrepe
-    # Model: 'tiny' (fast, ~3x faster) or 'full' (accurate)
-    hop_length = 160  # 10ms at 16kHz
-    frequency, confidence = torchcrepe.predict(
-        audio,
-        sample_rate,
-        hop_length=hop_length,
-        model=model_name,
-        decoder=torchcrepe.decode.viterbi,  # Smooth pitch curve
-        device=device,
-        batch_size=512 if device == "cuda" else 256,  # Reduced for multi-worker GPU sharing
-        return_periodicity=True,
-    )
-
-    # Move to CPU and convert to numpy
-    frequency = frequency.squeeze().cpu().numpy()
-    confidence = confidence.squeeze().cpu().numpy()
-
-    # Generate time array (10ms steps)
-    time = np.arange(len(frequency)) * (hop_length / sample_rate)
-
-    # Filter low-confidence predictions
+    # Filter low-confidence predictions (match CREPE behavior)
     frequency[confidence < 0.5] = 0
 
-    # Save pitch data
+    # Save pitch data (same NPZ format as CREPE for backward compatibility)
     output_dir = Path(vocals_path).parent
     pitch_path = output_dir / f"pitch_data_{session_id}.npz"
 
@@ -99,7 +82,7 @@ def do_extract_pitch(
         "voiced_ratio": float(np.sum(frequency > 0) / len(frequency)) if len(frequency) > 0 else 0,
     }
 
-    logger.info("Pitch extraction complete: %s", pitch_path)
+    logger.info("SwiftF0 pitch extraction complete: %s (%d frames)", pitch_path, len(time))
 
     return {
         "session_id": session_id,
@@ -111,9 +94,7 @@ def do_extract_pitch(
 
 @shared_task(bind=True, name="tasks.pitch_analysis.extract_pitch")
 def extract_pitch(self, vocals_path: str, session_id: str) -> dict:
-    """
-    Celery task wrapper for pitch extraction.
-    """
+    """Celery task wrapper for pitch extraction."""
     self.update_state(state="PROGRESS", meta={"step": "loading_vocals"})
     result = do_extract_pitch(vocals_path, session_id)
     return result
