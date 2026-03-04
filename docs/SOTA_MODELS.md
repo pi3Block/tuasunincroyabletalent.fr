@@ -1,8 +1,9 @@
 # SOTA Models — Catalogue pour Kiaraoke
 
-> Derniere mise a jour : 2026-03-04
+> Derniere mise a jour : 2026-03-04 (brainstorm session)
 > Usage : reference technique pour choisir et integrer les modeles IA.
 > Chaque modele a un statut : 🔬 Recherche | 🧪 A tester | ✅ Valide | 🚀 En prod
+> Priorite sprint : infra GPU → SOTA modeles → coaching → social
 
 ---
 
@@ -10,14 +11,18 @@
 
 1. [Separation de source](#1-separation-de-source)
 2. [Detection de pitch](#2-detection-de-pitch)
-3. [Qualite vocale (MOS)](#3-qualite-vocale-mos)
-4. [Comprehension musicale](#4-comprehension-musicale)
-5. [Detection d'erreurs de chant](#5-detection-derreurs-de-chant)
-6. [Generation musicale](#6-generation-musicale)
-7. [Voice conversion (SVC)](#7-voice-conversion-svc)
-8. [Emotion vocale](#8-emotion-vocale)
-9. [Audio-to-MIDI](#9-audio-to-midi)
-10. [Matrice de compatibilite GPU](#10-matrice-de-compatibilite-gpu)
+3. [Enhancement audio](#3-enhancement-audio) ← **NOUVEAU**
+4. [Analyse technique vocale unifiee](#4-analyse-technique-vocale-unifiee) ← **NOUVEAU**
+5. [Qualite vocale (MOS)](#5-qualite-vocale-mos)
+6. [Comprehension musicale](#6-comprehension-musicale)
+7. [Detection d'erreurs de chant](#7-detection-derreurs-de-chant)
+8. [LLM Jury — alternatives locales](#8-llm-jury-alternatives-locales) ← **NOUVEAU**
+9. [Generation musicale](#9-generation-musicale)
+10. [Voice conversion (SVC)](#10-voice-conversion-svc)
+11. [Emotion vocale](#11-emotion-vocale)
+12. [Audio-to-MIDI](#12-audio-to-midi)
+13. [Restauration audio reference](#13-restauration-audio-reference) ← **NOUVEAU**
+14. [Matrice de compatibilite GPU](#14-matrice-de-compatibilite-gpu)
 
 ---
 
@@ -102,24 +107,151 @@ Objectif : extraire F0 (frequence fondamentale) des vocals pour comparaison DTW.
 - **Paper** : [arxiv.org/abs/2509.15140](https://arxiv.org/abs/2509.15140) (septembre 2025)
 - **Repo** : [CNChTu/FCPE](https://github.com/CNChTu/FCPE)
 
-### Alternative a surveiller
+### NOUVEAU : SwiftF0 🧪 ← **Decouverte brainstorm 2026-03-04, priorite haute**
 
-| Modele | Precision | Notes | Statut |
-|--------|-----------|-------|--------|
-| SwiftF0 | 90.2% harmonic-mean | Plus haute precision globale, peu documente | 🔬 |
+- **Precision** : **91.80% harmonic-mean** a 10 dB SNR — **meilleur que CREPE de +12 points**
+- **Params** : 95,842 (vs CREPE 22M = **230x plus petit**)
+- **Vitesse** : **42x plus rapide que CREPE sur CPU**
+- **VRAM** : **~0 (CPU-only)** — libere completement le GPU du pitch
+- **Architecture** : Modele ultra-leger, optimise pour precision + vitesse
+- **Paper** : [arxiv.org/abs/2508.18440](https://arxiv.org/abs/2508.18440) (aout 2025)
+- **Repo** : [lars76/swift-f0](https://github.com/lars76/swift-f0)
+- **Adoption** : UltraSinger (karaoke open-source) a remplace CREPE par SwiftF0 comme defaut
+- **Benchmark** : [lars76/pitch-benchmark](https://github.com/lars76/pitch-benchmark)
 
-### Decision
+**Impact majeur pour Kiaraoke** : SwiftF0 rend CREPE, RMVPE et FCPE **obsoletes** pour notre use case.
+- Plus precis que CREPE full (+12 pts)
+- Plus rapide que FCPE (CPU-only, zero GPU)
+- Libere cuda:1 (RTX 3070 8 GB) entierement → disponible pour RoFormer ou autre
+- Simplifie le pipeline : plus besoin de 2 modeles pitch (full/tiny), un seul suffit
+
+### Alternatives conservees (reference)
+
+| Modele | Precision | VRAM | Vitesse | Notes | Statut |
+|--------|-----------|------|---------|-------|--------|
+| RMVPE | 87.2% harmonic-mean | ~300 MB GPU | rapide | Polyphonic-aware, standard RVC | 🧪 backup |
+| FCPE | 96.79% RPA MIR-1K | ~150 MB GPU | RTF 0.006 | Tres rapide, bon pour real-time | 🧪 backup |
+| SwiftF0 | 91.80% harmonic-mean | **~0 (CPU)** | **42x CREPE** | **Nouveau SOTA**, CPU-only | 🧪 **priorite** |
+
+### Decision (MISE A JOUR 2026-03-04)
 
 ```
-User vocals : RMVPE (meilleure precision sur chant, tolere residus)
-Reference vocals : FCPE (vitesse, la ref est deja propre)
-Real-time pendant enregistrement : FCPE (RTF 0.006 = temps reel)
-Fallback : garder torchcrepe si integration problematique
+NOUVEAU — SwiftF0 remplace CREPE pour tout :
+  User vocals : SwiftF0 (meilleure precision, CPU-only)
+  Reference vocals : SwiftF0 (meme modele, zero GPU)
+  Real-time pendant enregistrement : SwiftF0 ou FCPE (les deux sont temps-reel)
+  Fallback : RMVPE si separation imparfaite (polyphonic-aware)
+
+Consequence GPU : cuda:1 (RTX 3070) liberee du pitch
+→ Disponible pour RoFormer separation OU petits modeles IA
+→ Simplifie enormement le time-sharing A3B
 ```
 
 ---
 
-## 3. Qualite vocale (MOS)
+## 3. Enhancement audio
+
+> **NOUVEAU** — Decouvert lors du brainstorm 2026-03-04.
+> Pre-traiter l'audio user AVANT pitch + transcription = meilleur WER + meilleure precision pitch.
+
+Objectif : debruiter et ameliorer les enregistrements mobiles (micro mediocre, bruit ambiant, reverb piece).
+
+### DeepFilterNet3 🧪 ← **Quick win, priorite haute**
+
+- **Quoi** : debruitage audio SOTA (suppression bruit, reverb, echo)
+- **Performance** : PESQ 3.5-4.0+, STOI >0.95
+- **VRAM** : **~0 (CPU-only)**, temps reel capable
+- **Latence** : <10ms par frame, adapte streaming
+- **Repo** : [Rikorose/DeepFilterNet](https://github.com/Rikorose/DeepFilterNet)
+- **Pip** : `deepfilternet`
+- **Benchmark** : [noisereducerai.com/deepfilternet](https://noisereducerai.com/deepfilternet-ai-noise-reduction/)
+
+### Usage pour Kiaraoke
+
+```
+Pipeline actuel :
+  user_recording.webm → Demucs (separation) → CREPE (pitch) + Whisper (transcription)
+
+Pipeline ameliore :
+  user_recording.webm → DeepFilterNet3 (denoise, CPU, <1s) → Demucs → SwiftF0 + Whisper
+
+Impact attendu :
+  - WER Whisper : -10-20% d'erreurs sur enregistrements bruites
+  - Precision pitch : +5-10% sur micros mobiles bas de gamme
+  - Zero VRAM, zero GPU, ~1s CPU pour 3 min d'audio
+```
+
+### Decision
+
+```
+Sprint 1 : integrer DeepFilterNet3 comme etape pre-processing dans pipeline.py
+Position : entre download audio et Demucs separation
+CPU-only, zero impact GPU, gain de qualite immediat
+```
+
+### Alternatives
+
+| Solution | Type | CPU/GPU | Notes | Statut |
+|----------|------|---------|-------|--------|
+| DeepFilterNet3 | Denoiser | CPU | SOTA, temps reel, open source | 🧪 **priorite** |
+| Resemble Enhance | Denoiser + enhancer | GPU ~1 GB | Singing-aware, MIT license | 🔬 |
+| ClearerVoice-Studio | Super-resolution 16→48 kHz | GPU | ModelScope, bandwidth extension | 🔬 |
+
+---
+
+## 4. Analyse technique vocale unifiee
+
+> **NOUVEAU** — Decouvert lors du brainstorm 2026-03-04.
+> STARS remplace potentiellement whisper-timestamped + ajoute technique vocale.
+
+Objectif : aligner les mots ET detecter les techniques vocales en un seul pass.
+
+### STARS (ACL 2025) 🧪
+
+- **Quoi** : framework unifie pour analyse de chant — alignment + transcription notes + techniques vocales
+- **Capacites** :
+  - Alignment phoneme-audio (remplace whisper-timestamped)
+  - Transcription de notes (pitch → notation musicale)
+  - Detection techniques vocales : **vibrato, falsetto, breathy, mixed voice, belt**
+  - Analyse style global : emotion, pace
+- **Architecture** : Pre-trained sur HuggingFace
+- **VRAM** : ~2-3 GB (estimation)
+- **Paper** : [arxiv.org/abs/2507.06670](https://arxiv.org/abs/2507.06670) (ACL 2025)
+- **Repo** : [gwx314/STARS](https://github.com/gwx314/STARS)
+
+### Usage pour Kiaraoke
+
+```
+Actuel (2 outils separes) :
+  whisper-timestamped → word alignment (forced alignment + DTW)
+  Post-traitement pitch → vibrato, breath (a implementer)
+
+Avec STARS (1 outil unifie) :
+  STARS → word alignment + vibrato + falsetto + breathy + mixed + belt + emotion
+  → Injecte techniques detectees dans prompt jury LLM
+  → "Tu utilises du falsetto au refrain mais ton vibrato manque de regularite sur les aigus"
+```
+
+### Decision
+
+```
+Sprint 3 (coaching technique) : evaluer STARS comme remplacement whisper-timestamped
+Risque : projet academique ACL 2025, maturite a verifier
+Fallback : garder whisper-timestamped + post-traitement pitch manuel (vibrato/breath)
+Approche incrementale recommandee :
+  1. D'abord post-traitement SwiftF0 pour vibrato/breath (fiable, zero risque)
+  2. Puis STARS si la qualite se confirme (remplacement whisper-timestamped + enrichissement)
+```
+
+### Ressources liees
+
+- [UltraSinger](https://github.com/rakuri255/UltraSinger) — pipeline karaoke open-source (SwiftF0 + Whisper + separation), reference d'architecture
+- [AllKaraoke](https://github.com/Asvarox/allkaraoke) — karaoke browser TypeScript avec pitch real-time, reference UI
+- [Whisper + BS-RoFormer SOTA paper](https://arxiv.org/html/2506.15514v1) — confirme que separation → Whisper est SOTA pour lyrics transcription
+
+---
+
+## 5. Qualite vocale (MOS)
 
 Objectif : scorer la qualite perceptuelle de la voix (au-dela du pitch/rythme).
 
@@ -149,7 +281,7 @@ Integration : nouveau champ "vocal_quality_mos" dans les resultats.
 
 ---
 
-## 4. Comprehension musicale
+## 6. Comprehension musicale
 
 Objectif : extraire le contexte musical de la reference pour enrichir le jury.
 
@@ -181,7 +313,7 @@ Injecter dans le prompt jury (scoring.py).
 
 ---
 
-## 5. Detection d'erreurs de chant
+## 7. Detection d'erreurs de chant
 
 Objectif : localiser precisement les erreurs par passage (pas juste un score global).
 
@@ -215,7 +347,42 @@ Phase 2 : implementer le framework DL (arxiv 2602.06917) si les donnees le perme
 
 ---
 
-## 6. Generation musicale
+## 8. LLM Jury — alternatives locales
+
+> **NOUVEAU** — Decouvert lors du brainstorm 2026-03-04.
+> Meilleurs modeles francais pour le jury IA local (Tier 2 fallback).
+
+Objectif : ameliorer la qualite du francais dans les commentaires jury en local (quand Groq est indisponible).
+
+### Actuel : Qwen3-4B Q4_K_M via Ollama 🚀
+
+- **VRAM** : ~2.5-3 GB
+- **Qualite francais** : correcte mais parfois generique
+- **Role-play** : moyen (personas pas toujours distincts)
+
+### Alternatives decouvertes
+
+| Modele | VRAM (Q4) | Francais | Role-play | Notes | Statut |
+|--------|-----------|----------|-----------|-------|--------|
+| **Mistral Nemo 12B** | ~7.5 GB | **Excellent** (Mistral = FR) | Bon | Meilleur francais sub-8GB, joint Mistral+NVIDIA | 🧪 |
+| **Qwen3-8B** | ~5.5 GB | Bon | Bon | Upgrade direct du 4B, tient dans 8 GB | 🧪 |
+| Qwen3-Instruct-2507 | ~2.5-3 GB (4B) | Bon | **Meilleur** | Juillet 2025, meilleur role-play que Qwen3 original | 🧪 |
+| Gemma 3 12B | ~7-8 GB | Bon | Moyen | Google, multilingual | 🔬 |
+| Gemma 3 4B | ~2.5 GB | OK | Moyen | Leger, multilingual | 🔬 |
+
+### Decision
+
+```
+Court terme (Sprint 1) : Qwen3-Instruct-2507 4B remplace Qwen3-4B (meme VRAM, meilleur role-play)
+Moyen terme (Sprint 2) : Tester Mistral Nemo 12B Q4 si GPU libre (~7.5 GB)
+  → Meilleur francais du marche en sub-8GB
+  → Possible via LiteLLM → Ollama A3B instance (quand Kiaraoke n'utilise pas les GPUs)
+Note : Le Tier 1 (Groq qwen3-32b) reste le meilleur — ces alternatives sont pour le fallback local
+```
+
+---
+
+## 9. Generation musicale
 
 Objectif : features "wow" — generer des backing tracks, instrumentales.
 
@@ -247,7 +414,7 @@ VRAM OK : <4 GB, coexiste facilement avec les autres modeles.
 
 ---
 
-## 7. Voice conversion (SVC)
+## 10. Voice conversion (SVC)
 
 Objectif : entendre sa voix transformee "comme l'artiste".
 
@@ -280,7 +447,7 @@ A evaluer : RVC v3 quand disponible.
 
 ---
 
-## 8. Emotion vocale
+## 11. Emotion vocale
 
 Objectif : detecter l'emotion et l'expression dans le chant.
 
@@ -302,7 +469,7 @@ Hume AI en dernier recours (cloud dependency).
 
 ---
 
-## 9. Audio-to-MIDI
+## 12. Audio-to-MIDI
 
 Objectif : extraire la melodie en MIDI pour visualisation et comparaison.
 
@@ -323,33 +490,84 @@ CPU-only, zero conflit GPU.
 
 ---
 
-## 10. Matrice de compatibilite GPU
+## 13. Restauration audio reference
 
-### VRAM par modele (inference)
+> **NOUVEAU** — Decouvert lors du brainstorm 2026-03-04.
+> Ameliorer la qualite de la reference YouTube (souvent compresse MP3/AAC).
 
-| Modele | VRAM | Lazy load | Coexistence |
-|--------|------|-----------|-------------|
-| Mel-Band RoFormer | ~4-6 GB | Oui | Seul sur 1 GPU (separation) |
-| RMVPE | ~300 MB | Oui | Coexiste avec tout |
-| FCPE | ~150 MB | Oui | Coexiste avec tout |
-| UTMOSv2 | ~500 MB | Oui | Coexiste avec tout |
-| MERT-v1-95M | ~1 GB | Oui | Coexiste avec tout |
-| ACE-Step 1.5 | ~3-4 GB | Oui | Seul ou avec petits modeles |
-| RVC v2 | ~2-4 GB | Oui | Seul sur 1 GPU |
-| Whisper large-v3-turbo | 4.3 GB | Resident | GPU 0 dedie |
+Objectif : restaurer la qualite audio des references telechargees depuis YouTube.
 
-### Scenario d'allocation Kiaraoke SOTA
+### Apollo 🔬
+
+- **Quoi** : restauration audio — suppression artefacts MP3, extension bande passante
+- **Usage** : reference YouTube (souvent 128-192 kbps) → qualite quasi-lossless
+- **Repo** : [JusperLee/Apollo](https://github.com/JusperLee/Apollo)
+- **VRAM** : ~2-3 GB GPU (estimation)
+- **Impact** : meilleure separation RoFormer + meilleur pitch reference
+
+### AudioSR / FlashSR 🔬
+
+- **Quoi** : super-resolution audio vers 48 kHz
+- **FlashSR** : 22x plus rapide que AudioSR via diffusion distillation
+- **Repo** : [audioldm.github.io/audiosr](https://audioldm.github.io/audiosr/)
+
+### Decision
 
 ```
-Pipeline analyse (Phase 1) :
-  GPU libre (unload A3B) :
-    1. RoFormer separation (~5 GB) → unload
-    2. RMVPE + FCPE + UTMOSv2 + MERT (~2 GB total) → run parallele
-    3. Whisper (GPU 0, resident) → transcription
-  Total VRAM peak : ~5 GB sur 1 GPU + 4.3 GB Whisper
-  → Tient sur 2 GPUs, 3 GPUs libres pour A3B
+Phase 3+ (nice-to-have). La reference YouTube est deja de qualite suffisante.
+A tester si les scores de separation/pitch s'ameliorent significativement.
+CPU si possible, sinon GPU time-sharing.
+```
 
-Features avancees (Phase 4) :
+---
+
+## 14. Matrice de compatibilite GPU
+
+### VRAM par modele (inference) — MISE A JOUR 2026-03-04
+
+| Modele | VRAM | CPU-capable | Lazy load | Coexistence |
+|--------|------|-------------|-----------|-------------|
+| **SwiftF0** | **~0 (CPU)** | **Oui** | Oui | Coexiste avec tout |
+| **DeepFilterNet3** | **~0 (CPU)** | **Oui** | Oui | Coexiste avec tout |
+| Mel-Band RoFormer | ~4-6 GB | Non | Oui | Seul sur 1 GPU (separation) |
+| RMVPE (backup) | ~300 MB | Oui | Oui | Coexiste avec tout |
+| FCPE (backup) | ~150 MB | Oui | Oui | Coexiste avec tout |
+| UTMOSv2 | ~500 MB | Non | Oui | Coexiste avec tout |
+| MERT-v1-95M | ~1 GB | Non | Oui | Coexiste avec tout |
+| STARS | ~2-3 GB | Non | Oui | Coexiste avec petits modeles |
+| Whisper large-v3-turbo | 4.3 GB | Non | Resident | GPU 0 dedie |
+| ACE-Step 1.5 | ~3-4 GB | Non | Oui | Seul ou avec petits modeles |
+| RVC v2 | ~2-4 GB | Non | Oui | Seul sur 1 GPU |
+
+### Scenario d'allocation Kiaraoke SOTA (MISE A JOUR avec SwiftF0)
+
+```
+Impact majeur de SwiftF0 : pitch = CPU-only → libere 1 GPU entier
+
+Pipeline analyse SOTA (Sprint 2) :
+  CPU (zero GPU) :
+    - DeepFilterNet3 denoise (~1s)
+    - SwiftF0 pitch user + ref (~2s total)
+    - Cross-correlation sync (~1s)
+  GPU (unload A3B, 1 seul GPU suffit) :
+    - RoFormer separation user + ref (~5 GB, ~25s+25s ou 0s si cache)
+  GPU 0 (resident, jamais touche) :
+    - Whisper transcription (~3s)
+  Petits modeles GPU (coexistent avec RoFormer ou apres) :
+    - UTMOSv2 ~0.5 GB + MERT ~1 GB = ~1.5 GB
+  Total VRAM peak : ~5 GB sur 1 GPU + 4.3 GB Whisper + 1.5 GB petits
+  → Tient sur 2 GPUs MAX, 3 GPUs restent pour A3B
+
+Comparaison vs actuel :
+  Actuel : Demucs (cuda:0) + CREPE (cuda:1) = 2 GPUs necessaires
+  SOTA   : RoFormer (1 GPU) + SwiftF0 (CPU) = 1 GPU necessaire
+  Gain   : 1 GPU libere, pipeline plus simple, plus rapide
+
+Pipeline coaching (Sprint 3) :
+  Ajout STARS sur 1 GPU (~2-3 GB) OU post-traitement CPU (vibrato/breath)
+  → Toujours max 2 GPUs
+
+Features avancees (Sprint 5+) :
   ACE-Step : ~4 GB sur 1 GPU (a la demande)
   RVC : ~4 GB sur 1 GPU (a la demande)
   → Time-sharing, jamais tous en meme temps
@@ -362,3 +580,4 @@ Features avancees (Phase 4) :
 | Date | Changement |
 |------|-----------|
 | 2026-03-04 | Creation initiale — recherche SOTA complete |
+| 2026-03-04 | **Brainstorm** — Ajout SwiftF0 (pitch CPU-only, game changer), DeepFilterNet3 (denoise CPU), STARS (technique vocale unifiee ACL 2025), LLM jury alternatives (Mistral Nemo 12B, Qwen3-8B), Apollo (restauration audio). Reorganisation sections. Mise a jour matrice GPU avec impact SwiftF0 (1 GPU libere). |

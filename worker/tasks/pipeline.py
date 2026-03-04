@@ -44,8 +44,10 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 DEMUCS_DEVICE = os.getenv("DEMUCS_DEVICE", "cuda:0")  # GPU 1 RTX 3080 10GB
 CREPE_DEVICE = os.getenv("CREPE_DEVICE", "cuda:1")     # GPU 2 RTX 3070 8GB
 
-# Ollama Heavy on GPU 1 (same as Demucs) — unloaded before Demucs, reloads on next request
+# Ollama instances — unloaded before GPU tasks to free VRAM
 OLLAMA_HEAVY_HOST = os.getenv("OLLAMA_HEAVY_HOST", "http://host.docker.internal:11434")
+OLLAMA_A3B_HOST = os.getenv("OLLAMA_A3B_HOST", "http://host.docker.internal:11439")
+OLLAMA_A3B_MODEL = os.getenv("OLLAMA_A3B_MODEL", "aratan/qwen3.5-a3b-abliterated:35b")
 try:
     STORAGE_UPLOAD_PARALLELISM = max(1, min(2, int(os.getenv("STORAGE_UPLOAD_PARALLELISM", "1"))))
 except ValueError:
@@ -133,18 +135,39 @@ _ollama_unload_ok = True  # Tracks whether Ollama unload succeeded (for Demucs O
 
 
 def _unload_ollama_for_demucs():
-    """Unload Ollama Heavy model from GPU 1 to free VRAM for Demucs.
+    """Unload Ollama models from GPUs to free VRAM for Demucs/CREPE.
 
-    Ollama Heavy (qwen3:8b, ~5.8 GB) shares GPU 1 with Demucs (~4 GB).
-    Combined they exceed 10 GB RTX 3080 VRAM, so we unload before Demucs runs.
-    Ollama reloads automatically on next request (~2-3s cold start).
+    Targets both:
+    - Ollama Heavy (port 11434, qwen3:8b ~5.8 GB on GPU cuda:0)
+    - Ollama A3B (port 11439, 35B MoE ~28 GB on GPUs 1-4)
 
-    Non-fatal: if Ollama is unreachable or already unloaded, Demucs proceeds anyway.
-    Sets _ollama_unload_ok = False on failure so Demucs can adapt (e.g. reduce batch).
+    A3B is the main VRAM consumer. Without unloading, CREPE takes 47s instead of 5s
+    and de-bleeding OOMs on CPU fallback.
+
+    Non-fatal: if Ollama is unreachable or already unloaded, pipeline proceeds anyway.
+    Sets _ollama_unload_ok = False on failure so Demucs can adapt.
     """
     global _ollama_unload_ok
     import httpx
 
+    _ollama_unload_ok = True
+
+    # Unload A3B first (biggest VRAM consumer: ~28 GB on GPUs 1-4)
+    try:
+        resp = httpx.post(
+            f"{OLLAMA_A3B_HOST}/api/generate",
+            json={"model": OLLAMA_A3B_MODEL, "keep_alive": 0},
+            timeout=30.0,
+        )
+        if resp.status_code == 200:
+            logger.info("Ollama A3B unloaded from GPUs 1-4 (keep_alive:0)")
+        else:
+            logger.warning("Ollama A3B unload returned %d", resp.status_code)
+            _ollama_unload_ok = False
+    except Exception as e:
+        logger.warning("Ollama A3B not reachable: %s (may already be unloaded)", e)
+
+    # Unload Heavy (if running — often dead, but try anyway)
     try:
         resp = httpx.post(
             f"{OLLAMA_HEAVY_HOST}/api/generate",
@@ -153,13 +176,8 @@ def _unload_ollama_for_demucs():
         )
         if resp.status_code == 200:
             logger.info("Ollama Heavy unloaded from GPU 1 (keep_alive:0)")
-            _ollama_unload_ok = True
-        else:
-            logger.warning("Ollama Heavy unload returned %d — Demucs may OOM!", resp.status_code)
-            _ollama_unload_ok = False
-    except Exception as e:
-        logger.warning("Ollama Heavy not reachable: %s — Demucs may OOM if Ollama is loaded!", e)
-        _ollama_unload_ok = False
+    except Exception:
+        pass  # Heavy is often dead, not worth logging
 
 
 def _resolve_audio(url_or_path: str, dest: Path) -> str:
@@ -949,3 +967,117 @@ def prepare_reference(
     finally:
         shutil.rmtree(ref_temp, ignore_errors=True)
         logger.info("Cleaned up temp dir for prepare_reference session %s", session_id)
+
+
+# ══════════════════════════════════════════════════════════
+# AUDIO PERMANENCE — publish flow (CPU-only, default queue)
+# ══════════════════════════════════════════════════════════
+
+@shared_task(bind=True, name="tasks.pipeline.make_audio_permanent")
+def make_audio_permanent(self, session_id: str, youtube_video_id: str | None = None) -> dict:
+    """
+    Make a published performance's audio permanent in storage.
+
+    1. Copy user vocals to performances/{session_id}/vocals.wav (permanent)
+    2. Mix user vocals + reference instrumental → performances/{session_id}/mix.mp3
+    3. Update PostgreSQL with audio URLs
+
+    Runs on 'default' queue (CPU-only, ffmpeg).
+    """
+    import subprocess
+    import tempfile
+
+    storage = get_storage()
+    tmp_dir = Path(tempfile.mkdtemp(prefix=f"perf_{session_id}_"))
+
+    try:
+        self.update_state(state="PROGRESS", meta={"step": "downloading_vocals"})
+
+        # 1. Download user vocals
+        vocals_src = f"sessions/{session_id}_user/vocals.wav"
+        vocals_local = tmp_dir / "vocals.wav"
+        try:
+            storage.download_to_file(vocals_src, vocals_local)
+        except Exception as e:
+            logger.error("Could not download user vocals for %s: %s", session_id, e)
+            return {"status": "error", "error": f"vocals download failed: {e}"}
+
+        self.update_state(state="PROGRESS", meta={"step": "uploading_vocals"})
+
+        # 2. Upload vocals to permanent path
+        vocals_perm = f"performances/{session_id}/vocals.wav"
+        vocals_url = storage.upload_from_file(vocals_local, vocals_perm, "audio/wav")
+
+        # 3. Download instrumental and mix (if youtube_id available)
+        mix_url = None
+        if youtube_video_id:
+            try:
+                instru_src = f"cache/{youtube_video_id}/instrumentals.wav"
+                instru_local = tmp_dir / "instrumentals.wav"
+                storage.download_to_file(instru_src, instru_local)
+
+                self.update_state(state="PROGRESS", meta={"step": "mixing"})
+
+                # Mix with ffmpeg: vocals + instrumental → stereo MP3 160k
+                mix_local = tmp_dir / "mix.mp3"
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-i", str(vocals_local),
+                    "-i", str(instru_local),
+                    "-filter_complex",
+                    "[0:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=mono,volume=1.2[v];"
+                    "[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=0.8[i];"
+                    "[v][i]amix=inputs=2:duration=longest[a]",
+                    "-map", "[a]",
+                    "-b:a", "160k",
+                    "-ac", "2",
+                    str(mix_local),
+                ]
+                result = subprocess.run(cmd, capture_output=True, timeout=120)
+                if result.returncode == 0 and mix_local.exists():
+                    mix_perm = f"performances/{session_id}/mix.mp3"
+                    mix_url = storage.upload_from_file(mix_local, mix_perm, "audio/mpeg")
+                    logger.info("Mix uploaded for %s: %s", session_id, mix_url)
+                else:
+                    logger.warning(
+                        "ffmpeg mix failed for %s (rc=%d): %s",
+                        session_id, result.returncode,
+                        result.stderr.decode(errors="replace")[:500],
+                    )
+            except Exception as e:
+                logger.warning("Mix step failed for %s (non-fatal): %s", session_id, e)
+
+        self.update_state(state="PROGRESS", meta={"step": "updating_db"})
+
+        # 4. Update PostgreSQL directly (psycopg2 — same pattern as word_timestamps_db.py)
+        db_url = os.getenv("DATABASE_URL", "")
+        # Convert async URL to sync
+        sync_url = db_url.replace("postgresql+asyncpg://", "postgresql://")
+        if not sync_url.startswith("postgresql://"):
+            sync_url = f"postgresql://{sync_url}" if sync_url else ""
+
+        if sync_url:
+            try:
+                import psycopg2
+                conn = psycopg2.connect(sync_url)
+                try:
+                    with conn:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                """UPDATE session_results
+                                   SET has_audio = TRUE,
+                                       audio_vocals_url = %s,
+                                       audio_mix_url = %s
+                                   WHERE session_id = %s""",
+                                (vocals_url, mix_url, session_id),
+                            )
+                finally:
+                    conn.close()
+            except Exception as e:
+                logger.error("DB update for audio permanence failed for %s: %s", session_id, e)
+
+        logger.info("Audio permanence complete for session %s", session_id)
+        return {"status": "completed", "vocals_url": vocals_url, "mix_url": mix_url}
+
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)

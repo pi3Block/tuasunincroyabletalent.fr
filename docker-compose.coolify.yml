@@ -87,15 +87,12 @@ services:
   # ============================================
   # Worker Heavy - Multi-GPU (Demucs + CREPE)
   # ============================================
-  # Dedicated GPUs — no Ollama sharing, no time-sharing, no OOM:
-  #   cuda:0 = GPU 1 (RTX 3080, 10 GB) → Demucs + de-bleeding
-  #   cuda:1 = GPU 2 (RTX 3070, 8 GB) → CREPE pitch extraction
-  # Whisper: shared-whisper HTTP (GPU 3, separate container)
+  # GPU time-sharing with A3B via keep_alive:0:
+  #   cuda:0 = Host GPU 4 (RTX 3080, 10 GB) → Demucs + de-bleeding + CTC alignment
+  #   cuda:1 = Host GPU 1 (RTX 3070, 8 GB) → CREPE pitch extraction
+  # A3B (port 11439, GPUs 1-4) unloaded before GPU tasks, reloads after.
+  # Whisper: shared-whisper HTTP (GPU 0, separate container)
   # Jury LLM: 100% LiteLLM/Groq (no local GPU needed)
-  #
-  # Memory budget:
-  #   cuda:0 (GPU 1): Demucs ~5.5 GB peak + de-bleeding ~0.5 GB = ~6 GB / 10 GB
-  #   cuda:1 (GPU 2): CREPE full ~1 GB / 8 GB
   worker-heavy:
     build:
       context: ./worker
@@ -115,8 +112,10 @@ services:
       # Multi-GPU device assignment (shared with Ollama via keep_alive:0 time-sharing)
       - DEMUCS_DEVICE=cuda:0
       - CREPE_DEVICE=cuda:1
-      # Ollama Heavy on GPU 1 (same as Demucs) — unloaded before Demucs runs
+      # Ollama — unloaded before GPU tasks (keep_alive:0 time-sharing)
       - OLLAMA_HEAVY_HOST=http://host.docker.internal:11434
+      - OLLAMA_A3B_HOST=http://host.docker.internal:11439
+      - OLLAMA_A3B_MODEL=${OLLAMA_A3B_MODEL:-aratan/qwen3.5-a3b-abliterated:35b}
       # Remote storage — storages.augmenter.pro
       - STORAGE_URL=${STORAGE_URL:-https://storages.augmenter.pro}
       - STORAGE_API_KEY=${STORAGE_API_KEY:-}
@@ -141,8 +140,8 @@ services:
       - SENTRY_ENVIRONMENT=${SENTRY_ENVIRONMENT:-production}
       # Disable TorchCodec backend (ignores backend= param, may conflict with CUDA init)
       - TORCHAUDIO_USE_TORCHCODEC=0
-      # Karaoke V2 — CTC forced alignment
-      - CTC_ALIGN_DEVICE=${CTC_ALIGN_DEVICE:-cuda:1}
+      # Karaoke V2 — CTC forced alignment (cuda:0 = RTX 3080, shared with Demucs but sequential)
+      - CTC_ALIGN_DEVICE=${CTC_ALIGN_DEVICE:-cuda:0}
       - KARAOKE_ALIGNMENT_ENGINE=${KARAOKE_ALIGNMENT_ENGINE:-auto}
       - KARAOKE_ALIGNMENT_ENGINE_VERSION=${KARAOKE_ALIGNMENT_ENGINE_VERSION:-v2-p1}
       - KARAOKE_ALIGNMENT_LICENSE_MODE=${KARAOKE_ALIGNMENT_LICENSE_MODE:-non_commercial}

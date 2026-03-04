@@ -48,12 +48,14 @@ docker-compose -f docker-compose.dev.yml build --no-cache <service>
 - **Backend Worker**: Python 3.11 + Celery 5 + Redis (GPU tasks) + Langfuse (tracing)
 - **LLM**: LiteLLM Proxy -> Groq qwen3-32b (gratuit) + Ollama qwen3:4b / LoRA fine-tuned (local GPU 0) + heuristique fallback
 - **Storage**: PostgreSQL 16 (shared), Redis 7 DB2 (shared), Filesystem (audio temp)
-- **Audio Processing**:
-  - Demucs htdemucs - Source separation (vocals/instrumentals) + spectral de-bleeding (Wiener masks)
-  - torchcrepe - Pitch detection (full/tiny models)
+- **Audio Processing** (actuel → cible SOTA, voir docs/SOTA_MODELS.md) :
+  - Demucs htdemucs → **Mel-Band RoFormer** (separation, +52% SDR) + spectral de-bleeding (Wiener masks)
+  - torchcrepe → **SwiftF0** (pitch detection, CPU-only, 42x plus rapide, +12% precision)
+  - **DeepFilterNet3** (denoise user recording, CPU-only) ← NOUVEAU
   - scipy.signal.correlate - Cross-correlation sync (auto offset detection)
   - shared-whisper HTTP (Faster Whisper large-v3-turbo, GPU 3 RTX 3070) + Groq Whisper API fallback
   - whisper-timestamped - Word-level alignment (forced alignment + DTW)
+  - **UTMOSv2** (score qualite vocale MOS) + **MERT-v1-95M** (features musicales) ← NOUVEAU
   - Librosa - Onset detection (rhythm)
   - fastdtw - Pitch comparison (Dynamic Time Warping)
   - jiwer - Word Error Rate (lyrics accuracy)
@@ -169,16 +171,19 @@ tuasunincroyabletalent.fr/
     └── UNIFIED_ARCHITECTURE.md    # Architecture multi-projets unifiee
 ```
 
-### Pipeline Audio (9 etapes)
+### Pipeline Audio — Actuel (9 etapes)
 
 ```
 analyze_performance (Celery task, gpu-heavy queue)
 │
-├─ Step 1: Unload Ollama Light (GPU 0, keep_alive:0, libere ~4 Go VRAM)
+├─ Step 1: Unload Ollama (keep_alive:0, libere VRAM pour Demucs)
+│           Actuel: cible Ollama Light (port 11435)
+│           Cible Sprint 1: cible A3B (port 11439, libere 28 GB sur GPUs 1-4)
 │
 ├─ Step 2: Demucs — Separation user audio → vocals.wav + instrumentals.wav
 │           + De-bleeding spectral (Wiener-like soft masking, env DEBLEED_ENABLED)
-│           [GPU, ~25s pour 3min]
+│           Cible Sprint 2: Mel-Band RoFormer (+52% SDR)
+│           [GPU cuda:0, ~25s pour 3min]
 │
 ├─ Step 3: Demucs — Separation reference (CACHE par YouTube ID)
 │           + De-bleeding spectral
@@ -190,9 +195,9 @@ analyze_performance (Celery task, gpu-heavy queue)
 │             [CPU, ~1s]
 │
 ├─ Step 4: torchcrepe — Pitch extraction
-│           User: full model (precision)
-│           Reference: tiny model (vitesse, 3x plus rapide)
-│           [GPU, ~4s + ~1.5s]
+│           User: full model (precision), Reference: tiny model (vitesse)
+│           Cible Sprint 1: SwiftF0 (CPU-only, +12% precision, 42x plus rapide)
+│           [GPU cuda:1 ~4s+1.5s → CPU ~2s total]
 │
 ├─ Step 5: Whisper — Transcription user vocals (3-tier fallback)
 │           Tier 1: shared-whisper HTTP (GPU 3 RTX 3070, large-v3-turbo int8, VAD)
@@ -209,11 +214,38 @@ analyze_performance (Celery task, gpu-heavy queue)
            Lyrics: WER jiwer (30%)
            Jury: asyncio.gather() 3 personas
              Tier 1: LiteLLM -> Groq qwen3-32b
-             Tier 2: Ollama fine-tuned LoRA (env USE_FINETUNED_JURY) → fallback qwen3:4b
+             Tier 2: LiteLLM -> fallback model
              Tier 3: Heuristique
            [~1-5s]
 
-Total: ~42-67s (premiere analyse) ou ~17-27s (reference en cache)
+Total actuel: ~42-67s (1ere analyse) ou ~17-27s (reference en cache)
+Cible Sprint 2: <25s (1ere) ou <8s (cache)
+```
+
+### Pipeline Audio — Cible SOTA (apres Sprint 2)
+
+```
+analyze_performance (Celery task, gpu-heavy queue)
+│
+├─ Step 0: Unload A3B (port 11439, keep_alive:0, libere 28 GB VRAM)
+│
+├─ Step 1: DeepFilterNet3 — Denoise user recording [CPU, ~1s] ← NOUVEAU
+│
+├─ Parallele CPU + GPU :
+│   ├─ [CPU] SwiftF0 — Pitch user + ref (~2s total) ← remplace CREPE
+│   ├─ [CPU] Cross-correlation sync (~1s)
+│   ├─ [GPU cuda:0] RoFormer — Separation user (~25s) ← remplace Demucs
+│   └─ [GPU cuda:0] RoFormer — Separation ref (0s cache, ~25s sinon)
+│
+├─ Parallele HTTP :
+│   ├─ [GPU 0 resident] Whisper transcription (~3s)
+│   └─ [HTTP] Genius lyrics (~1s)
+│
+├─ [GPU cuda:0] UTMOSv2 (~0.5 GB) + MERT (~1 GB) — qualite + contexte ← NOUVEAU
+│
+└─ [HTTP] Scoring enrichi + Jury LLM 3 personas (~1-5s)
+
+Total cible: <25s (1ere) ou <8s (cache) — 1 seul GPU worker
 ```
 
 ## API Endpoints
@@ -528,17 +560,20 @@ Tables creees via Alembic migrations (`alembic upgrade head`), fallback `create_
 
 ## Performance Guidelines
 
-| Metric | Target |
-|--------|--------|
-| API Response | <200ms |
-| Demucs Separation + De-bleeding | <30s for 3min song (GPU) |
-| Cross-correlation Sync | <1s (CPU, 8kHz downsampled envelopes) |
-| Whisper Transcription (shared-whisper) | <3s for 3min (VAD, GPU 3 RTX 3070) |
-| CREPE Pitch (full) | <5s for 3min (GPU) |
-| Jury Generation (3 personas parallel) | <5s |
-| SSE Event Latency | <500ms (internal Redis poll interval) |
-| Total Analysis (first time) | <67s |
-| Total Analysis (cached reference) | <27s |
+| Metric | Actuel | Cible SOTA (Sprint 2) |
+|--------|--------|----------------------|
+| API Response | <200ms | <200ms |
+| Source Separation (Demucs/RoFormer) | <30s (Demucs GPU) | <25s (RoFormer GPU) |
+| Cross-correlation Sync | <1s (CPU) | <1s (CPU) |
+| Whisper Transcription (shared-whisper) | <3s (GPU 3) | <3s (GPU 3) |
+| Pitch Extraction | <5s CREPE (GPU) | **<1s SwiftF0 (CPU)** |
+| DeepFilterNet3 Denoise | N/A | **<1s (CPU)** |
+| UTMOSv2 + MERT | N/A | **<2s (GPU, apres separation)** |
+| Jury Generation (3 personas parallel) | <5s | <5s |
+| SSE Event Latency | <500ms | <500ms |
+| Total Analysis (first time) | <67s | **<25s** |
+| Total Analysis (cached reference) | <27s | **<8s** |
+| GPUs worker | 2 | **1** |
 
 ## SEO & Web Standards
 
@@ -554,7 +589,10 @@ Le frontend Next.js inclut un SEO complet :
 
 ## Key Documentation
 
-- [docs/ROADMAP.md](docs/ROADMAP.md) - **Roadmap implementation** (etat d'avancement, taches priorisees, specs techniques)
+- [docs/VISION_2026.md](docs/VISION_2026.md) - **Strategie + Roadmap sprints** (Sprint 0-6, GPU-first, social last)
+- [docs/SOTA_MODELS.md](docs/SOTA_MODELS.md) - **Catalogue modeles SOTA** (SwiftF0, RoFormer, DeepFilterNet3, STARS, UTMOSv2, MERT...)
+- [docs/GPU_TIMESHARING.md](docs/GPU_TIMESHARING.md) - **Time-sharing A3B** (unload auto, allocation 1 GPU post-SwiftF0)
+- [docs/ROADMAP.md](docs/ROADMAP.md) - Roadmap implementation detaillee (⚠️ a synchroniser avec VISION_2026.md)
 - [docs/UNIFIED_ARCHITECTURE.md](docs/UNIFIED_ARCHITECTURE.md) - Architecture multi-projets unifiee (GPU, DB, Redis, LiteLLM, Langfuse, shared-whisper)
 - [Last Idea.md](Last%20Idea.md) - Guide deploiement Coolify voicejury etape par etape
 - [StartingDraft.md](StartingDraft.md) - Documentation technique V1.0 (vision fine-tuning)

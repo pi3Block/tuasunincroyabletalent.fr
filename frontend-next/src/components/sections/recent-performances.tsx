@@ -318,18 +318,29 @@ export const RecentPerformancesSection = memo(
             <p className="text-muted-foreground mb-4">
               Rejoins la communaute et montre ton talent !
             </p>
-            <Link href="/app">
-              <motion.span
-                className="inline-block px-6 py-3 rounded-full bg-linear-to-r from-primary to-emerald-500 text-primary-foreground font-semibold shadow-lg shadow-primary/25 cursor-pointer"
-                whileHover={{
-                  scale: 1.05,
-                  boxShadow: "0 20px 40px -10px rgba(34, 197, 94, 0.4)",
-                }}
-                whileTap={{ scale: 0.95 }}
-              >
-                C&apos;est mon tour !
-              </motion.span>
-            </Link>
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+              <Link href="/app">
+                <motion.span
+                  className="inline-block px-6 py-3 rounded-full bg-linear-to-r from-primary to-emerald-500 text-primary-foreground font-semibold shadow-lg shadow-primary/25 cursor-pointer"
+                  whileHover={{
+                    scale: 1.05,
+                    boxShadow: "0 20px 40px -10px rgba(34, 197, 94, 0.4)",
+                  }}
+                  whileTap={{ scale: 0.95 }}
+                >
+                  C&apos;est mon tour !
+                </motion.span>
+              </Link>
+              <Link href="/discover">
+                <motion.span
+                  className="inline-block px-6 py-3 rounded-full border border-border bg-secondary/50 text-foreground font-semibold cursor-pointer"
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                >
+                  Voir toutes les performances
+                </motion.span>
+              </Link>
+            </div>
           </motion.div>
         </div>
       </section>

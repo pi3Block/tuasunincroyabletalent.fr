@@ -1,7 +1,8 @@
 # VISION 2026 — Kiaraoke, leader analyse vocale IA en France
 
-> Derniere mise a jour : 2026-03-04
-> Statut : STRATEGIE — Aucune implementation commencee
+> Derniere mise a jour : 2026-03-04 (brainstorm session — reorganisation sprints)
+> Statut : Sprint 0 complete (2026-03-04), Sprint 1 a venir
+> Priorite : **Infra GPU → SOTA modeles → Coaching → UX/Partage → Social**
 
 ---
 
@@ -85,13 +86,18 @@ Objectif : les resultats Kiaraoke sont les plus precis du marche.
 
 | Composant | Actuel | Cible SOTA | Gain |
 |-----------|--------|-----------|------|
+| **Denoise user** | Aucun | DeepFilterNet3 (CPU) | **Nouveau** : -10-20% WER, +5-10% pitch sur mobile |
 | Separation vocale | Demucs htdemucs (~8.5 dB SDR) | Mel-Band RoFormer (~12.9 dB SDR) | +52% SDR |
-| Pitch user | torchcrepe full | RMVPE | +precis sur chant, +rapide |
-| Pitch reference | torchcrepe tiny | FCPE (torchfcpe) | 77x plus rapide |
+| **Pitch user + ref** | torchcrepe full/tiny (GPU) | **SwiftF0 (CPU-only)** | **+12% precision, 42x plus rapide, 0 GPU** |
 | Score perceptuel | Aucun | UTMOSv2 fine-tune SingMOS-Pro | Nouveau : qualite vocale MOS |
 | Contexte musical | Aucun | MERT-v1-95M | Nouveau : key, tempo, emotion |
-| Detection erreurs | DTW+WER heuristique | DL-based (frequency/amplitude/pronunciation) | Feedback par passage |
-| Techniques vocales | Aucun | Post-traitement pitch (vibrato, breath, formant) | Coaching technique |
+| Detection erreurs | DTW+WER heuristique | Post-traitement SwiftF0 + STARS (ACL 2025) | Feedback par passage |
+| Techniques vocales | Aucun | **STARS** (vibrato, falsetto, breathy, belt) ou post-traitement | Coaching technique |
+
+> **Decouverte brainstorm 2026-03-04** : SwiftF0 (CPU-only, 230x plus petit que CREPE, +12% precision)
+> remplace CREPE et libere 1 GPU entier. Change fondamentalement le time-sharing A3B :
+> pipeline SOTA = 1 GPU (RoFormer) au lieu de 2 (Demucs + CREPE).
+> DeepFilterNet3 (CPU) ameliore la qualite des enregistrements mobiles sans GPU.
 
 Details techniques : voir [docs/SOTA_MODELS.md](SOTA_MODELS.md)
 
@@ -130,53 +136,166 @@ Details techniques : voir [docs/GPU_TIMESHARING.md](GPU_TIMESHARING.md)
 
 ---
 
-## 4. Roadmap par phases
+## 4. Roadmap par sprints
 
-### Phase 1 — Fondations SOTA (semaines 1-3)
+> Reorganisee le 2026-03-04 (brainstorm session).
+> Priorite : **Infra GPU first** → SOTA modeles → coaching → UX/partage → social.
+> Chaque sprint = ~1 semaine. Executable via `/implement <tache>`.
 
-> Objectif : pipeline d'analyse best-in-class, zero changement UX
+---
 
-- [ ] Fix `CTC_ALIGN_DEVICE=cuda:1` dans Coolify env (5 min)
-- [ ] Remplacer Demucs htdemucs → Mel-Band RoFormer (`audio-separator`)
-- [ ] Remplacer torchcrepe full → RMVPE (pitch user)
-- [ ] Remplacer torchcrepe tiny → FCPE (pitch reference)
-- [ ] Integrer UTMOSv2 — score qualite vocale perceptuel
-- [ ] Integrer MERT-v1-95M — extraction features musicales (key, tempo, emotion)
-- [ ] Mettre a jour le scoring pour inclure les nouvelles metriques
-- [ ] Implémenter GPU time-sharing auto (unload A3B → load Kiaraoke models)
-- [ ] Benchmarker : temps pipeline, SDR, precision pitch, MOS correlation
+### Sprint 0 — Quick fixes infra (1 jour) ✅ COMPLETE (2026-03-04)
 
-### Phase 2 — Coaching technique (semaines 4-6)
+> Objectif : debloquer le pipeline actuel, zero changement de modele
 
-> Objectif : feedback actionnable par passage
+- [x] **Fix GROQ_API_KEY** vide dans env worker-heavy Coolify → restaure Whisper Tier 2 + alignment Groq
+- [x] **Fix CTC_ALIGN_DEVICE** cuda:1 → cuda:0 dans Coolify env (cuda:1 = A3B shard, crash CTC)
+- [x] **Fix ollama@heavy** — `systemctl stop ollama && systemctl disable ollama` (zombie 0 modeles, bloquait port 11434)
+- [x] **Unload A3B** — pipeline.py cible maintenant ollama@a3b (port 11439, keep_alive:0) en plus d'Heavy
+- [x] Verifier et documenter l'etat reel des 5 GPUs + services Ollama
 
-- [ ] Analyse vibrato (rate Hz, extent cents, regularite) depuis pitch RMVPE
-- [ ] Analyse breath support (stabilite pitch sur notes tenues)
-- [ ] Detection erreurs par passage (pitch, amplitude, prononciation)
-- [ ] Feedback LLM enrichi (donnees MERT + UTMOSv2 + technique dans le prompt)
-- [ ] UI : vue detaillee par passage (scrollable, cliquable pour re-ecouter)
+**Critere de succes** : pipeline analyse fonctionne de bout en bout, jury Groq operationnel, logs propres.
 
-### Phase 3 — Social et competition (semaines 7-10)
+---
 
-> Objectif : viralit, retention
+### Sprint 1 — GPU time-sharing A3B + SwiftF0 (3-5 jours)
+
+> Objectif : decharger A3B proprement, remplacer CREPE par SwiftF0 (CPU), liberer 1 GPU
+
+#### 1.1 — Unload A3B automatique
+- [ ] Implementer `_unload_a3b()` dans `pipeline.py` — HTTP POST `keep_alive:0` vers `ollama@a3b` (port 11439)
+- [ ] Poll VRAM libre apres unload (nvidia-smi via subprocess ou pynvml)
+- [ ] Timeout 60s si A3B en cours de generation, non-fatal si injoignable
+- [ ] Remplacer `_unload_ollama_for_demucs()` actuel (qui cible Light, port 11435) par `_unload_a3b()`
+- [ ] Tester : pipeline complet avec A3B charge → verifie que Demucs ne OOM pas
+
+#### 1.2 — SwiftF0 remplace CREPE (pitch CPU-only)
+- [ ] Ajouter `swift-f0` dans `worker/requirements-project.txt`
+- [ ] Creer `worker/tasks/pitch_swiftf0.py` — wrapper SwiftF0 avec meme interface que `do_extract_pitch()`
+- [ ] Output identique : NPZ avec arrays `time`, `frequency`, `confidence`
+- [ ] Mettre a jour `pipeline.py` : `do_extract_pitch()` → `do_extract_pitch_swiftf0()`
+- [ ] Supprimer la distinction `fast_mode=True/False` (un seul modele pour user + ref)
+- [ ] Supprimer `CREPE_DEVICE` env var (plus besoin de GPU pour le pitch)
+- [ ] Benchmark : temps, precision sur 3-5 chansons test vs CREPE actuel
+
+#### 1.3 — Reallocation GPU Docker
+- [ ] Mettre a jour `docker-compose.coolify.yml` : worker-heavy n'a besoin que d'**1 GPU** (pour RoFormer/Demucs)
+  - Garder `GPU-bdb1f5e4...` (RTX 3080 10 GB, cuda:0) pour separation
+  - Retirer `GPU-c99d136d...` (RTX 3070 8 GB) → rendu a A3B
+- [ ] Mettre a jour `DEMUCS_DEVICE=cuda:0` (inchange), supprimer `CREPE_DEVICE`
+- [ ] Mettre a jour `deploy.resources.limits.memory` si necessaire
+
+**Critere de succes** : pipeline analyse complete en <30s (1er run), pitch CPU en <3s, A3B se recharge en <5s apres analyse. Worker n'utilise qu'1 GPU.
+
+**Impact GPU** :
+```
+Avant : worker = 2 GPUs (cuda:0 Demucs, cuda:1 CREPE) → A3B sur 3 GPUs
+Apres : worker = 1 GPU (cuda:0 Demucs/RoFormer) → A3B sur 4 GPUs
+```
+
+---
+
+### Sprint 2 — SOTA separation + denoise (3-5 jours)
+
+> Objectif : RoFormer +52% SDR, DeepFilterNet3 denoise, qualite d'analyse best-in-class
+
+#### 2.1 — DeepFilterNet3 pre-processing (CPU)
+- [ ] Ajouter `deepfilternet` dans `worker/requirements-project.txt`
+- [ ] Creer `worker/tasks/audio_enhancement.py` — wrapper DeepFilterNet3, lazy load, CPU-only
+- [ ] Integrer dans `pipeline.py` : appliquer AVANT Demucs sur `user_recording`
+- [ ] Optionnel : env var `DENOISE_ENABLED=true` (comme `DEBLEED_ENABLED`)
+- [ ] Benchmark : WER avant/apres sur 5 enregistrements mobiles bruites
+
+#### 2.2 — Mel-Band RoFormer remplace Demucs
+- [ ] Ajouter `audio-separator` dans `worker/requirements-project.txt`
+- [ ] Modifier `worker/tasks/audio_separation.py` : RoFormer via `audio-separator`, meme interface in/out
+- [ ] Modele : `BS-Roformer-Viperx-1297` (meilleur pretrained, ~5 GB VRAM)
+- [ ] Garder `de-bleeding` si encore utile (RoFormer produit des separations plus propres, peut-etre inutile)
+- [ ] Pattern lazy load identique (`_model = None`, `model.cpu()` apres usage)
+- [ ] Fallback : garder Demucs comme fallback si RoFormer echoue (env var `SEPARATION_ENGINE=roformer|demucs`)
+- [ ] Benchmark : SDR sur 5 chansons test, temps de separation, VRAM peak
+
+#### 2.3 — Petits modeles d'enrichissement
+- [ ] Integrer UTMOSv2 — score qualite vocale perceptuel (MOS 1-5)
+  - `worker/tasks/vocal_quality.py`, lazy load, ~500 MB GPU
+  - Nouveau champ `vocal_quality_mos` dans resultats
+- [ ] Integrer MERT-v1-95M — extraction features musicales
+  - `worker/tasks/music_features.py`, lazy load, ~1 GB GPU
+  - Output : `{key, tempo, energy_profile, emotion, genre}`
+  - Cache dans storage : `cache/{youtube_id}/mert_features.json`
+- [ ] Injecter MERT + UTMOSv2 dans prompt jury (`scoring.py`)
+
+**Critere de succes** : SDR >12 dB, WER ameliore sur mobile, nouveau score MOS visible dans resultats, jury contextualise.
+
+---
+
+### Sprint 3 — Coaching technique + feedback par passage (5-7 jours)
+
+> Objectif : feedback actionnable, pas juste un score global
+
+#### 3.1 — Analyse technique vocale (post-traitement SwiftF0)
+- [ ] Implementer dans `worker/tasks/vocal_technique.py` :
+  - Vibrato detection (oscillation 5-7 Hz dans F0, extent en cents, regularite %)
+  - Breath support (variance pitch sur notes tenues >0.5s, stability score 0-1)
+  - Pitch accuracy par phrase (deviation en cents vs reference, aligne par cross-correlation)
+  - Onset precision (decalage temporel vs reference par syllabe, ms)
+- [ ] Sortie : JSON avec heatmap par passage (timestamp, score, detail)
+
+#### 3.2 — Evaluer STARS (ACL 2025) comme enrichissement
+- [ ] Tester STARS sur 3-5 chansons : qualite alignment, detection techniques
+- [ ] Si viable : integrer pour vibrato/falsetto/breathy/belt detection
+- [ ] Si non viable : rester sur post-traitement SwiftF0 (3.1)
+
+#### 3.3 — Feedback LLM enrichi
+- [ ] Enrichir le prompt jury avec : MERT features + UTMOSv2 MOS + techniques vocales
+- [ ] Nouveau mode "coach" en plus du "jury" (prompt different, feedback constructif)
+- [ ] Exemple : "Sur ce morceau melancolique en la mineur, ton vibrato est irregulier au refrain (4.2 Hz au lieu de 5-6 Hz), et tu arrives 200ms en retard sur le premier couplet."
+
+#### 3.4 — UI resultats detailles
+- [ ] Vue heatmap par passage (scrollable, code couleur vert/jaune/rouge)
+- [ ] Cliquable pour re-ecouter le passage
+- [ ] Score breakdown : 3 jauges separees (pitch, rhythm, lyrics) + MOS + techniques
+
+**Critere de succes** : feedback par passage visible, techniques vocales detectees, jury utilise le contexte musical.
+
+---
+
+### Sprint 4 — UX et partage (3-5 jours)
+
+> Objectif : rendre les resultats partageables, ameliorer l'experience
+
+- [ ] **Score breakdown visuel** — 3 jauges pitch/rhythm/lyrics + MOS (donnees deja calculees)
+- [ ] **Partage resultats** — card generee (Canvas/SVG) avec score, extrait jury, pochette Spotify
+- [ ] Open Graph meta pour preview Twitter/Instagram/WhatsApp
+- [ ] **Real-time pitch overlay** pendant enregistrement (SwiftF0 CPU ou FCPE WASM)
+- [ ] Ameliorer la page resultats (design, animations, responsive)
+
+**Critere de succes** : card partageable generee, preview correct sur reseaux sociaux, pitch real-time visible.
+
+---
+
+### Sprint 5 — Features avancees (semaines 8+)
+
+> Objectif : fosse technologique
+
+- [ ] ACE-Step 1.5 — generation backing tracks depuis a cappella (<4 GB GPU)
+- [ ] RVC v2 — voice conversion "entends ta voix comme l'artiste" (~4 GB GPU)
+- [ ] Mode entrainement — re-chanter un passage en boucle, voir progression
+- [ ] Basic Pitch — extraction MIDI depuis vocals (CPU, Spotify open-source)
+- [ ] Vocal emotion detection (post-traitement energie/dynamique + MERT)
+
+---
+
+### Sprint 6 — Social et competition (semaines 10+)
+
+> Objectif : viralite, retention — **vient en dernier** (l'analyse doit etre parfaite d'abord)
 
 - [ ] Schema DB : users, scores historiques, leaderboard
 - [ ] Authentification (OAuth Google/Apple/email)
 - [ ] Leaderboard par chanson (top scores)
 - [ ] Profil utilisateur (historique, stats, progression)
-- [ ] Partage resultats (cards generees, Open Graph pour preview)
 - [ ] Contests hebdomadaires (chanson de la semaine)
-
-### Phase 4 — Features avancees (semaines 11+)
-
-> Objectif : fossé technologique infranchissable
-
-- [ ] ACE-Step 1.5 — generation backing tracks depuis a cappella (<4 GB)
-- [ ] RVC v2 — voice conversion ("entends ta voix comme l'artiste")
-- [ ] Mode entrainement — re-chanter un passage, voir progression
-- [ ] Real-time pitch overlay pendant l'enregistrement (FCPE, RTF 0.006)
-- [ ] Basic Pitch — extraction MIDI depuis vocals (Spotify open-source)
-- [ ] Vocal emotion detection (expression dans le chant)
+- [ ] Duels (comparer son score a un ami)
 
 ---
 
@@ -184,14 +303,17 @@ Details techniques : voir [docs/GPU_TIMESHARING.md](GPU_TIMESHARING.md)
 
 ### Technique
 
-| Metrique | Actuel | Cible Phase 1 | Cible Phase 4 |
-|----------|--------|--------------|--------------|
-| SDR separation vocale | ~8.5 dB | ~12.9 dB | ~13+ dB |
-| Precision pitch (RPA) | ~80% (CREPE) | ~87% (RMVPE) | ~90%+ |
-| Temps pipeline (1er run) | 40-67s | <20s | <15s |
-| Temps pipeline (cache) | 10-27s | <8s | <5s |
+| Metrique | Actuel | Cible Sprint 1-2 | Cible Sprint 5+ |
+|----------|--------|------------------|-----------------|
+| SDR separation vocale | ~8.5 dB (Demucs) | ~12.9 dB (RoFormer) | ~13+ dB |
+| Precision pitch (RPA) | ~80% (CREPE GPU) | **~92% (SwiftF0 CPU)** | ~92%+ |
+| Temps pitch extraction | ~4-5s (CREPE, GPU) | **<1s (SwiftF0, CPU)** | <1s |
+| GPUs utilises par pipeline | 2 (Demucs + CREPE) | **1 (RoFormer seul)** | 1-2 |
+| Temps pipeline (1er run) | 40-67s | **<25s** | <15s |
+| Temps pipeline (cache) | 10-27s | **<8s** | <5s |
 | Temps word timestamps | 30-51s | <10s | <5s |
-| Score MOS correlation | N/A | >0.85 | >0.90 |
+| Score MOS correlation | N/A | >0.85 (UTMOSv2) | >0.90 |
+| Qualite denoise mobile | N/A | DeepFilterNet3 PESQ>3.5 | >4.0 |
 
 ### Produit
 

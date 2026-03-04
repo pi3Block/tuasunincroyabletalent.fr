@@ -136,6 +136,7 @@ celery_app.conf.task_routes = {
     # Heavy tasks → gpu-heavy queue (Demucs ~4GB, Whisper ~2-6GB)
     "tasks.audio_separation.*": {"queue": "gpu-heavy"},
     "tasks.transcription.*": {"queue": "gpu-heavy"},
+    "tasks.pipeline.make_audio_permanent": {"queue": "default"},  # CPU-only (ffmpeg)
     "tasks.pipeline.*": {"queue": "gpu-heavy"},  # Pipeline runs Demucs+Whisper
     "tasks.word_timestamps.*": {"queue": "gpu-heavy"},  # Demucs + Whisper-timestamped
 

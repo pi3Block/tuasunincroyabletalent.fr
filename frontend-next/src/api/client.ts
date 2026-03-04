@@ -117,12 +117,55 @@ export interface PerformanceHistoryItem {
   track_name: string;
   artist_name: string;
   album_image?: string | null;
+  score: number;
   total_score: number;
   pitch_accuracy: number;
   rhythm_accuracy: number;
   lyrics_accuracy: number;
   jury_comments: JuryComment[];
   created_at: string;
+}
+
+export interface PublicPerformance extends PerformanceHistoryItem {
+  spotify_track_id: string;
+  youtube_video_id?: string | null;
+  display_name: string | null;
+  is_public: boolean;
+  like_count: number;
+  play_count: number;
+  has_audio: boolean;
+  audio_mix_url: string | null;
+  audio_vocals_url: string | null;
+  published_at: string | null;
+  rank?: number;
+}
+
+export interface FeedResponse {
+  page: number;
+  limit: number;
+  sort: string;
+  results: PublicPerformance[];
+}
+
+export interface LeaderboardResponse {
+  spotify_track_id: string;
+  period: string;
+  entries: PublicPerformance[];
+}
+
+export interface PublishRequest {
+  display_name: string;
+  include_audio: boolean;
+}
+
+export interface PublishResponse {
+  status: string;
+  session_id: string;
+  display_name: string;
+}
+
+export interface LikeStatusResponse {
+  liked: boolean;
 }
 
 export interface SyncedLyricLine {
@@ -288,6 +331,76 @@ class ApiClient {
   async getResultsHistory(limit = 6): Promise<PerformanceHistoryItem[]> {
     return this.request<PerformanceHistoryItem[]>(
       `/api/results/history?limit=${limit}`,
+    );
+  }
+
+  async getResultById(
+    sessionId: string,
+  ): Promise<{ session_id: string; results: PublicPerformance }> {
+    return this.request(`/api/results/${sessionId}`);
+  }
+
+  async getPublicFeed(
+    page = 1,
+    limit = 20,
+    sort = "recent",
+    song?: string,
+  ): Promise<FeedResponse> {
+    const params = new URLSearchParams({
+      page: String(page),
+      limit: String(limit),
+      sort,
+    });
+    if (song) params.set("song", song);
+    return this.request<FeedResponse>(`/api/results/feed?${params}`);
+  }
+
+  async getLeaderboard(
+    spotifyTrackId: string,
+    period = "all",
+    limit = 20,
+  ): Promise<LeaderboardResponse> {
+    const params = new URLSearchParams({
+      period,
+      limit: String(limit),
+    });
+    return this.request<LeaderboardResponse>(
+      `/api/results/leaderboard/${spotifyTrackId}?${params}`,
+    );
+  }
+
+  async publishPerformance(
+    sessionId: string,
+    req: PublishRequest,
+  ): Promise<PublishResponse> {
+    return this.request<PublishResponse>(
+      `/api/results/${sessionId}/publish`,
+      {
+        method: "POST",
+        body: JSON.stringify(req),
+      },
+    );
+  }
+
+  async likePerformance(
+    sessionId: string,
+  ): Promise<{ liked: boolean; inserted: boolean }> {
+    return this.request(`/api/results/${sessionId}/like`, {
+      method: "POST",
+    });
+  }
+
+  async unlikePerformance(
+    sessionId: string,
+  ): Promise<{ liked: boolean; deleted: boolean }> {
+    return this.request(`/api/results/${sessionId}/like`, {
+      method: "DELETE",
+    });
+  }
+
+  async getLikeStatus(sessionId: string): Promise<LikeStatusResponse> {
+    return this.request<LikeStatusResponse>(
+      `/api/results/${sessionId}/like-status`,
     );
   }
 

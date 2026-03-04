@@ -20,6 +20,7 @@ export function Navbar({ className }: NavbarProps) {
   const links = [
     { href: "/", label: "Accueil" },
     { href: "/app", label: "Studio" },
+    { href: "/discover", label: "Decouvrir" },
   ];
 
   return (

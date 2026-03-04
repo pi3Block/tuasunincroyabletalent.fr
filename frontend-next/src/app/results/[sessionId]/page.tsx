@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { ResultsPublishSection } from "@/components/app/ResultsPublishSection";
 
 interface Props {
   params: Promise<{ sessionId: string }>;
@@ -180,14 +181,23 @@ export default async function ResultsPage({ params }: Props) {
           </>
         )}
 
-        {/* CTA */}
-        <div className="text-center">
-          <a
-            href="/app"
-            className="inline-block px-8 py-4 bg-linear-to-r from-gold-400 to-gold-600 text-gray-900 font-bold rounded-full text-lg shadow-lg hover:scale-105 transition-transform"
-          >
-            C&apos;est mon tour !
-          </a>
+        {/* Publish + CTA */}
+        <div className="text-center space-y-4">
+          <ResultsPublishSection
+            sessionId={sessionId}
+            trackName={results.track_name ?? "Performance"}
+            score={results.score ?? 0}
+            isPublic={results.is_public}
+            spotifyTrackId={results.spotify_track_id}
+          />
+          <div>
+            <a
+              href="/app"
+              className="inline-block px-8 py-4 bg-linear-to-r from-gold-400 to-gold-600 text-gray-900 font-bold rounded-full text-lg shadow-lg hover:scale-105 transition-transform"
+            >
+              C&apos;est mon tour !
+            </a>
+          </div>
         </div>
       </div>
     </main>

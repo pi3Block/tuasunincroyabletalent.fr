@@ -30,6 +30,28 @@ AUDIO_TEMP_DIR = os.getenv("AUDIO_TEMP_DIR", "/tmp/kiaraoke")
 SESSION_MAX_AGE = 7200  # 2 hours
 
 
+def _is_published(session_id: str) -> bool:
+    """Check if session was published (exempt from cleanup)."""
+    db_url = os.getenv("DATABASE_URL", "").replace("postgresql+asyncpg://", "postgresql://")
+    if not db_url:
+        return False
+    try:
+        import psycopg2
+        conn = psycopg2.connect(db_url)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT is_public FROM session_results WHERE session_id = %s",
+                    (session_id,)
+                )
+                row = cur.fetchone()
+                return bool(row and row[0])
+        finally:
+            conn.close()
+    except Exception:
+        return False  # safe default: do not skip cleanup on error
+
+
 def _session_storage_paths(session_id: str) -> list:
     """Return all storage relative paths that belong to a session."""
     return [
@@ -80,6 +102,11 @@ def cleanup_session_files():
                         continue
 
                     session_id = session_data.get("session_id") or key.replace("session:", "")
+
+                    # Skip published sessions (audio preserved permanently)
+                    if _is_published(session_id):
+                        logger.info("Skipping cleanup for published session: %s", session_id)
+                        continue
 
                     # Delete storage files for this session
                     for rel_path in _session_storage_paths(session_id):
