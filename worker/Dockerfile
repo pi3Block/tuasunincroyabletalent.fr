@@ -1,37 +1,34 @@
-# Worker Dockerfile - Celery + Audio Processing (Optimized with uv)
-# Note: For GPU support, PyTorch will auto-detect CUDA if available
-FROM python:3.11-slim
+# ===========================================
+# tuasunincroyabletalent.fr GPU Worker
+# Uses shared base image for fast builds (~2min vs ~15min)
+# Base: ghcr.io/pi3block/gpu-worker-base:latest
+#   → python:3.11-slim + ffmpeg + uv + torch + torchaudio + whisper + librosa
+# ===========================================
+
+FROM ghcr.io/pi3block/gpu-worker-base:latest
 
 WORKDIR /app
 
-# Install system dependencies + uv
-RUN apt-get update && apt-get install -y \
-    ffmpeg \
-    git \
-    libsndfile1 \
-    curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Add uv to PATH
-ENV PATH="/root/.local/bin:$PATH"
-
-# Layer 1: Heavy dependencies (PyTorch ecosystem) - changes rarely
-# Using cache mount for faster rebuilds
-COPY requirements-torch.txt .
+# ===========================================
+# Project-Specific Python Dependencies
+# (Base already has: torch, torchaudio, whisper, librosa, etc.)
+# ===========================================
+COPY requirements-project.txt .
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system --no-cache -r requirements-torch.txt
+    uv pip install --system -r requirements-project.txt
 
-# Layer 2: Other dependencies - changes occasionally
-COPY requirements.txt .
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system --no-cache -r requirements.txt
-
-# Pre-download models (optional, can be done at runtime)
-# RUN python -c "import whisper; whisper.load_model('turbo')"
-
-# Copy source (changes frequently, so last)
+# Copy source (layer invalidated only when code changes, not deps)
 COPY . .
 
-# Run Celery worker - listen to all queues (gpu-heavy for Demucs/Whisper, gpu for CREPE, default for CPU tasks)
+# Create cache directories for models
+RUN mkdir -p /root/.cache/whisper /root/.cache/torch/hub
+
+# Health check — lightweight (don't import ML libs, each costs ~200-500 MB RAM)
+HEALTHCHECK --interval=60s --timeout=10s --start-period=120s --retries=3 \
+    CMD celery -A tasks.celery_app inspect ping --timeout 5 2>/dev/null | grep -q "pong" || exit 1
+
+# Run Celery worker
+# gpu-heavy: Demucs, Whisper (resource-intensive)
+# gpu: CREPE pitch analysis
+# default: CPU-bound tasks
 CMD ["celery", "-A", "tasks.celery_app", "worker", "--loglevel=info", "--concurrency=2", "-Q", "gpu-heavy,gpu,default"]

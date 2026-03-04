@@ -29,9 +29,9 @@ COPY . .
 # Create cache directories for models
 RUN mkdir -p /root/.cache/whisper /root/.cache/torch/hub
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD python -c "import whisper; import demucs; import torchcrepe; print('OK')" || exit 1
+# Health check — lightweight (don't import ML libs, each costs ~200-500 MB RAM)
+HEALTHCHECK --interval=60s --timeout=10s --start-period=120s --retries=3 \
+    CMD celery -A tasks.celery_app inspect ping --timeout 5 2>/dev/null | grep -q "pong" || exit 1
 
 # Run Celery worker
 # gpu-heavy: Demucs, Whisper (resource-intensive)
