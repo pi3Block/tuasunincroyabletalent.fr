@@ -67,7 +67,9 @@
       "WebFetch(domain:www.tomsguide.com)",
       "WebFetch(domain:www.oreateai.com)",
       "WebFetch(domain:www.soundmaximum.com)",
-      "WebFetch(domain:blog.synarionit.com)"
+      "WebFetch(domain:blog.synarionit.com)",
+      "WebFetch(domain:pypi.org)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ],
     "additionalDirectories": [
       "d:\\SourceFast\\coolify_linux\\app.augmenter.pro\\storage-server\\api",

@@ -24,10 +24,12 @@ yt-dlp>=2024.1.0
 
 # ML Models (PyTorch-based)
 demucs>=4.0.1
+audio-separator[gpu]>=0.41.0  # BS-Roformer separation (SDR 12.97, Sprint 2.2)
 openai-whisper>=20240930
 whisper-timestamped>=1.15.0
 swift-f0  # SwiftF0 pitch detection (CPU-only, ONNX Runtime, replaces torchcrepe)
 onnxruntime>=1.17.0  # SwiftF0 + Silero VAD in whisper-timestamped
+deepfilternet>=0.5.6  # DeepFilterNet3 audio denoise (CPU-only, Sprint 2.1)
 
 # Ollama Client
 httpx>=0.28.0

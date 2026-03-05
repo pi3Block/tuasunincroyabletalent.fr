@@ -193,20 +193,20 @@ Apres : worker = 1 GPU (cuda:0 Demucs) → A3B sur 4 GPUs ← DONE
 
 > Objectif : RoFormer +52% SDR, DeepFilterNet3 denoise, qualite d'analyse best-in-class
 
-#### 2.1 — DeepFilterNet3 pre-processing (CPU)
-- [ ] Ajouter `deepfilternet` dans `worker/requirements-project.txt`
-- [ ] Creer `worker/tasks/audio_enhancement.py` — wrapper DeepFilterNet3, lazy load, CPU-only
-- [ ] Integrer dans `pipeline.py` : appliquer AVANT Demucs sur `user_recording`
-- [ ] Optionnel : env var `DENOISE_ENABLED=true` (comme `DEBLEED_ENABLED`)
+#### 2.1 — DeepFilterNet3 pre-processing (CPU) ✅ (2026-03-04)
+- [x] Ajouter `deepfilternet` dans `worker/requirements-project.txt`
+- [x] Creer `worker/tasks/audio_enhancement.py` — wrapper DeepFilterNet3, lazy load, CPU-only
+- [x] Integrer dans `pipeline.py` : appliquer AVANT Demucs sur `user_recording`
+- [x] Optionnel : env var `DENOISE_ENABLED=true` (comme `DEBLEED_ENABLED`)
 - [ ] Benchmark : WER avant/apres sur 5 enregistrements mobiles bruites
 
-#### 2.2 — Mel-Band RoFormer remplace Demucs
-- [ ] Ajouter `audio-separator` dans `worker/requirements-project.txt`
-- [ ] Modifier `worker/tasks/audio_separation.py` : RoFormer via `audio-separator`, meme interface in/out
-- [ ] Modele : `BS-Roformer-Viperx-1297` (meilleur pretrained, ~5 GB VRAM)
-- [ ] Garder `de-bleeding` si encore utile (RoFormer produit des separations plus propres, peut-etre inutile)
-- [ ] Pattern lazy load identique (`_model = None`, `model.cpu()` apres usage)
-- [ ] Fallback : garder Demucs comme fallback si RoFormer echoue (env var `SEPARATION_ENGINE=roformer|demucs`)
+#### 2.2 — BS-RoFormer remplace Demucs ✅ (2026-03-04)
+- [x] Ajouter `audio-separator[gpu]` dans `worker/requirements-project.txt`
+- [x] Modifier `worker/tasks/audio_separation.py` : RoFormer via `audio-separator`, meme interface in/out
+- [x] Modele : `model_bs_roformer_ep_317_sdr_12.9755.ckpt` (SDR 12.97)
+- [x] Garder de-bleeding Wiener (sur fichiers WAV post-separation)
+- [x] Pattern lazy load singleton (`_roformer_separator = None`)
+- [x] Fallback : Demucs auto si RoFormer echoue (`SEPARATION_ENGINE=roformer|demucs`)
 - [ ] Benchmark : SDR sur 5 chansons test, temps de separation, VRAM peak
 
 #### 2.3 — Petits modeles d'enrichissement

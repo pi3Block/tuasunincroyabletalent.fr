@@ -2,9 +2,9 @@
 Audio analysis pipeline - orchestrates all analysis tasks.
 Runs all processing directly (not as sub-tasks) to avoid Celery .get() issues.
 
-Architecture (Sprint 1, 2026-03-04):
+Architecture (Sprint 2, 2026-03-04):
 - 1 GPU only: cuda:0 (RTX 3080 10GB) → Demucs separation
-- CPU: SwiftF0 pitch (replaces CREPE, 42x faster, +12% precision)
+- CPU: DeepFilterNet3 denoise (Sprint 2.1) + SwiftF0 pitch (Sprint 1)
 - HTTP: shared-whisper (GPU 0), LiteLLM/Groq jury (no local GPU)
 - Time-sharing: A3B (port 11439) unloaded before GPU tasks via keep_alive:0
 
@@ -282,10 +282,11 @@ def analyze_performance(
     """
     Full analysis pipeline for a vocal performance.
 
-    1 GPU (Demucs cuda:0) + CPU (SwiftF0 pitch) + HTTP (Whisper, Jury).
+    1 GPU (Demucs cuda:0) + CPU (DeepFilterNet3 + SwiftF0) + HTTP (Whisper, Jury).
 
     Steps:
     1. Download user audio from storage -> /tmp/kiaraoke/
+    1b. DeepFilterNet3 denoise user audio (CPU, ~1s) — Sprint 2.1
     2. Separate user audio (Demucs, cuda:0)
     3. Check ref separation in storage cache (Demucs if MISS)
     4. Cross-correlation sync (CPU)
@@ -338,6 +339,11 @@ def analyze_performance(
                 user_audio_path,
                 session_temp / f"user_recording{ext_guess}",
             )
+
+            # DeepFilterNet3 denoise (CPU, ~1s) — reduces noise/reverb before Demucs
+            from tasks.audio_enhancement import maybe_denoise
+            update_progress(self, "denoising", 8, "Nettoyage audio...")
+            local_user_path = maybe_denoise(local_user_path, session_temp)
 
             update_progress(self, "separating_user", 10, "Isolation de ta voix...")
             user_separation = do_separate_audio(local_user_path, f"{session_id}_user")

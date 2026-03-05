@@ -85,11 +85,11 @@ services:
       start_period: 40s
 
   # ============================================
-  # Worker Heavy - Single GPU (Demucs) + CPU (SwiftF0)
+  # Worker Heavy - Single GPU (Demucs) + CPU (DeepFilterNet3 + SwiftF0)
   # ============================================
-  # Sprint 1: SwiftF0 replaces CREPE → pitch is CPU-only → 1 GPU suffices
+  # Sprint 2: DeepFilterNet3 denoise (CPU) + Demucs (GPU) + SwiftF0 pitch (CPU)
   #   cuda:0 = Host GPU 4 (RTX 3080, 10 GB) → Demucs + de-bleeding + CTC alignment
-  #   CPU = SwiftF0 pitch extraction (42x faster than CREPE, +12% precision)
+  #   CPU = DeepFilterNet3 denoise + SwiftF0 pitch extraction
   # A3B (port 11439, GPUs 1-4) unloaded before GPU tasks, reloads after.
   # GPU 1 (RTX 3070) returned to A3B → A3B gets 4 GPUs instead of 3.
   # Whisper: shared-whisper HTTP (GPU 0, separate container)
@@ -110,8 +110,13 @@ services:
       - WHISPER_MODEL=${WHISPER_MODEL:-turbo}
       - WHISPER_LOCAL_FALLBACK=false
       - GROQ_API_KEY=${GROQ_API_KEY:-}
-      # Single GPU for Demucs (pitch is CPU-only via SwiftF0)
+      # Audio separation — RoFormer (default) or Demucs (fallback), Sprint 2.2
+      - SEPARATION_ENGINE=${SEPARATION_ENGINE:-roformer}
+      - AUDIO_SEP_MODEL=${AUDIO_SEP_MODEL:-model_bs_roformer_ep_317_sdr_12.9755.ckpt}
       - DEMUCS_DEVICE=cuda:0
+      # Audio enhancement — DeepFilterNet3 denoise (CPU-only, Sprint 2.1)
+      - DENOISE_ENABLED=${DENOISE_ENABLED:-true}
+      - DENOISE_ATTEN_LIMIT_DB=${DENOISE_ATTEN_LIMIT_DB:-}
       # Ollama — unloaded before GPU tasks (keep_alive:0 time-sharing)
       - OLLAMA_HEAVY_HOST=http://host.docker.internal:11434
       - OLLAMA_A3B_HOST=http://host.docker.internal:11439

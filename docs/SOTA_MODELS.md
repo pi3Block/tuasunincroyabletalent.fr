@@ -38,7 +38,7 @@ Objectif : extraire les vocals purs de la piste reference et user.
 - **Plus** : fiable, bien integre, de-bleeding Wiener masks
 - **Moins** : depasse par les Transformers depuis 2023
 
-### Cible : Mel-Band RoFormer 🧪
+### Cible : BS-RoFormer ✅ ← **Deploye Sprint 2.2 (2026-03-04)**
 
 - **SDR** : **12.97 dB** vocals (modele Viperx-1297), soit +52% vs Demucs
 - **Architecture** : Band-split + RoPE Transformer, bandes mel-scale
@@ -61,10 +61,12 @@ Objectif : extraire les vocals purs de la piste reference et user.
 ### Decision
 
 ```
-Recommandation : Mel-Band RoFormer via audio-separator
-Raison : +52% SDR, meme VRAM, integration pip triviale
-Fallback : garder Demucs htdemucs si RoFormer instable
-Migration : remplacer audio_separation.py, meme interface in/out
+DEPLOYE Sprint 2.2 (2026-03-04) :
+  audio_separation.py — SEPARATION_ENGINE=roformer (defaut) ou demucs (fallback)
+  Modele : model_bs_roformer_ep_317_sdr_12.9755.ckpt (SDR 12.97)
+  Lazy-load singleton, fallback auto Demucs si RoFormer crash
+  De-bleeding Wiener toujours actif (sur fichiers WAV post-separation)
+  Env vars : SEPARATION_ENGINE, AUDIO_SEP_MODEL
 ```
 
 ### Ressources
@@ -156,7 +158,7 @@ Consequence GPU : cuda:1 (RTX 3070) liberee du pitch
 
 Objectif : debruiter et ameliorer les enregistrements mobiles (micro mediocre, bruit ambiant, reverb piece).
 
-### DeepFilterNet3 🧪 ← **Quick win, priorite haute**
+### DeepFilterNet3 ✅ ← **Deploye Sprint 2.1 (2026-03-04)**
 
 - **Quoi** : debruitage audio SOTA (suppression bruit, reverb, echo)
 - **Performance** : PESQ 3.5-4.0+, STOI >0.95
@@ -184,16 +186,18 @@ Impact attendu :
 ### Decision
 
 ```
-Sprint 1 : integrer DeepFilterNet3 comme etape pre-processing dans pipeline.py
-Position : entre download audio et Demucs separation
-CPU-only, zero impact GPU, gain de qualite immediat
+DEPLOYE Sprint 2.1 (2026-03-04) :
+  worker/tasks/audio_enhancement.py — lazy load, singleton, CPU-only
+  pipeline.py : maybe_denoise() entre download et Demucs
+  Env vars : DENOISE_ENABLED=true, DENOISE_ATTEN_LIMIT_DB= (vide = max)
+  Output 48kHz WAV → Demucs resample a 44100Hz automatiquement
 ```
 
 ### Alternatives
 
 | Solution | Type | CPU/GPU | Notes | Statut |
 |----------|------|---------|-------|--------|
-| DeepFilterNet3 | Denoiser | CPU | SOTA, temps reel, open source | 🧪 **priorite** |
+| DeepFilterNet3 | Denoiser | CPU | SOTA, temps reel, open source | ✅ **deploye** |
 | Resemble Enhance | Denoiser + enhancer | GPU ~1 GB | Singing-aware, MIT license | 🔬 |
 | ClearerVoice-Studio | Super-resolution 16→48 kHz | GPU | ModelScope, bandwidth extension | 🔬 |
 
@@ -528,7 +532,7 @@ CPU si possible, sinon GPU time-sharing.
 | Modele | VRAM | CPU-capable | Lazy load | Coexistence |
 |--------|------|-------------|-----------|-------------|
 | **SwiftF0** | **~0 (CPU)** | **Oui** | Oui | Coexiste avec tout |
-| **DeepFilterNet3** | **~0 (CPU)** | **Oui** | Oui | Coexiste avec tout |
+| **DeepFilterNet3** | **~0 (CPU)** | **Oui** | Oui | Coexiste avec tout | ✅ deploye |
 | Mel-Band RoFormer | ~4-6 GB | Non | Oui | Seul sur 1 GPU (separation) |
 | RMVPE (backup) | ~300 MB | Oui | Oui | Coexiste avec tout |
 | FCPE (backup) | ~150 MB | Oui | Oui | Coexiste avec tout |

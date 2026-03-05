@@ -49,9 +49,9 @@ docker-compose -f docker-compose.dev.yml build --no-cache <service>
 - **LLM**: LiteLLM Proxy -> Groq qwen3-32b (gratuit) + Ollama qwen3:4b / LoRA fine-tuned (local GPU 0) + heuristique fallback
 - **Storage**: PostgreSQL 16 (shared), Redis 7 DB2 (shared), Filesystem (audio temp)
 - **Audio Processing** (actuel → cible SOTA, voir docs/SOTA_MODELS.md) :
-  - Demucs htdemucs → **Mel-Band RoFormer** (separation, +52% SDR) + spectral de-bleeding (Wiener masks)
+  - **BS-RoFormer** (separation, SDR 12.97, +52% vs Demucs) ✅ Sprint 2.2 + Demucs fallback + de-bleeding Wiener
   - torchcrepe → **SwiftF0** (pitch detection, CPU-only, 42x plus rapide, +12% precision)
-  - **DeepFilterNet3** (denoise user recording, CPU-only) ← NOUVEAU
+  - **DeepFilterNet3** (denoise user recording, CPU-only) ✅ Sprint 2.1
   - scipy.signal.correlate - Cross-correlation sync (auto offset detection)
   - shared-whisper HTTP (Faster Whisper large-v3-turbo, GPU 3 RTX 3070) + Groq Whisper API fallback
   - whisper-timestamped - Word-level alignment (forced alignment + DTW)
@@ -171,36 +171,40 @@ tuasunincroyabletalent.fr/
     └── UNIFIED_ARCHITECTURE.md    # Architecture multi-projets unifiee
 ```
 
-### Pipeline Audio — Actuel (9 etapes)
+### Pipeline Audio — Actuel (10 etapes)
 
 ```
 analyze_performance (Celery task, gpu-heavy queue)
 │
-├─ Step 1: Unload Ollama (keep_alive:0, libere VRAM pour Demucs)
-│           Actuel: cible Ollama Light (port 11435)
-│           Cible Sprint 1: cible A3B (port 11439, libere 28 GB sur GPUs 1-4)
+├─ Step 1: Unload Ollama A3B + Heavy (keep_alive:0, libere VRAM pour Demucs)
+│           A3B (port 11439, 28 GB GPUs 1-4), Heavy (port 11434)
+│           [non-fatal si injoignable]
 │
-├─ Step 2: Demucs — Separation user audio → vocals.wav + instrumentals.wav
-│           + De-bleeding spectral (Wiener-like soft masking, env DEBLEED_ENABLED)
-│           Cible Sprint 2: Mel-Band RoFormer (+52% SDR)
-│           [GPU cuda:0, ~25s pour 3min]
+├─ Step 1.5: DeepFilterNet3 — Denoise user recording ← Sprint 2.1
+│             CPU-only, ~1s pour 3min. Toggle: DENOISE_ENABLED=true
+│             Reduit bruit/reverb des micros mobiles → meilleur WER + pitch
 │
-├─ Step 3: Demucs — Separation reference (CACHE par YouTube ID)
+├─ Step 2: BS-RoFormer — Separation user audio → vocals.wav + instrumentals.wav
+│           SDR 12.97 (+52% vs Demucs). Fallback: Demucs si RoFormer echoue.
+│           + De-bleeding spectral (Wiener masks, env DEBLEED_ENABLED)
+│           Env: SEPARATION_ENGINE=roformer|demucs
+│           [GPU cuda:0, ~20-30s pour 3min]
+│
+├─ Step 3: RoFormer/Demucs — Separation reference (CACHE par YouTube ID)
 │           + De-bleeding spectral
-│           [0s si cache, ~25s sinon]
+│           [0s si cache, ~20-30s sinon]
 │
 ├─ Step 3.5: Cross-correlation sync — Auto offset detection
 │             Downsample 8kHz → amplitude envelopes → scipy.signal.correlate
 │             Applique offset au scoring si confidence > 0.3
 │             [CPU, ~1s]
 │
-├─ Step 4: torchcrepe — Pitch extraction
-│           User: full model (precision), Reference: tiny model (vitesse)
-│           Cible Sprint 1: SwiftF0 (CPU-only, +12% precision, 42x plus rapide)
-│           [GPU cuda:1 ~4s+1.5s → CPU ~2s total]
+├─ Step 4: SwiftF0 — Pitch extraction (CPU-only, Sprint 1)
+│           91.80% harmonic-mean, 42x plus rapide que CREPE, 0 GPU
+│           [CPU ~2s total user + ref]
 │
 ├─ Step 5: Whisper — Transcription user vocals (3-tier fallback)
-│           Tier 1: shared-whisper HTTP (GPU 3 RTX 3070, large-v3-turbo int8, VAD)
+│           Tier 1: shared-whisper HTTP (GPU 0 RTX 3070, large-v3-turbo int8, VAD)
 │           Tier 2: Groq Whisper API (gratuit, whisper-large-v3-turbo)
 │           Tier 3: Local PyTorch Whisper (desactive par defaut)
 │           [~2-8s]
@@ -517,7 +521,11 @@ AUDIO_OUTPUT_DIR=/app/audio_files
 CUDA_VISIBLE_DEVICES=0
 
 # Audio processing (optionnel)
-DEBLEED_ENABLED=true             # Spectral de-bleeding post-Demucs (Wiener masks)
+DENOISE_ENABLED=true             # DeepFilterNet3 denoise avant Demucs (CPU, Sprint 2.1)
+DENOISE_ATTEN_LIMIT_DB=          # Limite attenuation dB (vide=max, 6.0=leger)
+SEPARATION_ENGINE=roformer       # roformer (default, +52% SDR) ou demucs (fallback) — Sprint 2.2
+AUDIO_SEP_MODEL=model_bs_roformer_ep_317_sdr_12.9755.ckpt  # Modele BS-Roformer
+DEBLEED_ENABLED=true             # Spectral de-bleeding post-separation (Wiener masks)
 
 # Fine-tuning (optionnel)
 USE_FINETUNED_JURY=false         # Use LoRA fine-tuned models for jury personas in Tier 2
