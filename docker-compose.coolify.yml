@@ -9,7 +9,7 @@
 #   Database: voicejury_db, User: augmenter (shared superuser)
 # - Redis: shared-redis (redis:7-alpine)
 #   DB index 2 (broker + sessions)
-# - LiteLLM: litellm-proxy:4000 (LLM gateway, Groq free tier)
+# - LiteLLM: https://litellm.augmenter.pro (LLM gateway, Groq free tier)
 # - Langfuse: langfuse:3000 (LLM tracing)
 # - Flower: flower-voicejury.augmenter.pro (Celery monitoring, Redis DB 2)
 # - All accessed via coolify network DNS
@@ -87,13 +87,13 @@ services:
   # ============================================
   # Worker Heavy - Single GPU (Demucs) + CPU (DeepFilterNet3 + SwiftF0)
   # ============================================
-  # Sprint 2: DeepFilterNet3 denoise (CPU) + Demucs (GPU) + SwiftF0 pitch (CPU)
-  #   cuda:0 = Host GPU 4 (RTX 3080, 10 GB) → Demucs + de-bleeding + CTC alignment
+  # Sprint 2: DeepFilterNet3 denoise (CPU) + RoFormer (GPU) + SwiftF0 pitch (CPU)
+  #   cuda:0 = Host GPU 4 (RTX 3080, 10 GB) → RoFormer + UTMOSv2 + MERT + CTC alignment
   #   CPU = DeepFilterNet3 denoise + SwiftF0 pitch extraction
-  # A3B (port 11439, GPUs 1-4) unloaded before GPU tasks, reloads after.
-  # GPU 1 (RTX 3070) returned to A3B → A3B gets 4 GPUs instead of 3.
-  # Whisper: shared-whisper HTTP (GPU 0, separate container)
-  # Jury LLM: 100% LiteLLM/Groq (no local GPU needed)
+  # GPU layout V5 (2026-03-11): Ollama Embed (port :11438, ~3.9 GB) unloaded before RoFormer.
+  # llama-server/Hauhau (port :11440, GPUs 1-3) and Heavy (port :11434, GPU 0) = no conflict.
+  # Whisper: shared-whisper HTTP (GPU 4, same container host — stays resident)
+  # Jury LLM: 100% via https://litellm.augmenter.pro (Groq qwen3-32b → llama-3.1-8b fallback)
   worker-heavy:
     build:
       context: ./worker
@@ -117,10 +117,13 @@ services:
       # Audio enhancement — DeepFilterNet3 denoise (CPU-only, Sprint 2.1)
       - DENOISE_ENABLED=${DENOISE_ENABLED:-true}
       - DENOISE_ATTEN_LIMIT_DB=${DENOISE_ATTEN_LIMIT_DB:-}
-      # Ollama — unloaded before GPU tasks (keep_alive:0 time-sharing)
-      - OLLAMA_HEAVY_HOST=http://host.docker.internal:11434
-      - OLLAMA_A3B_HOST=http://host.docker.internal:11439
-      - OLLAMA_A3B_MODEL=${OLLAMA_A3B_MODEL:-aratan/qwen3.5-a3b-abliterated:35b}
+      # Enrichment — UTMOSv2 vocal quality + MERT music features (GPU, Sprint 2.3)
+      - UTMOS_ENABLED=${UTMOS_ENABLED:-true}
+      - MERT_ENABLED=${MERT_ENABLED:-true}
+      # Ollama Embed — unloaded before GPU tasks (GPU 4 time-sharing with RoFormer)
+      # llama-server (GPUs 1-3, port :11440) and Heavy (GPU 0, port :11434) have no conflict.
+      - OLLAMA_EMBED_HOST=http://host.docker.internal:11438
+      - OLLAMA_EMBED_MODEL=${OLLAMA_EMBED_MODEL:-rjmalagon/gte-qwen2-1.5b-instruct-embed-f16}
       # Remote storage — storages.augmenter.pro
       - STORAGE_URL=${STORAGE_URL:-https://storages.augmenter.pro}
       - STORAGE_API_KEY=${STORAGE_API_KEY:-}
@@ -135,11 +138,12 @@ services:
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
       - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
       - LANGFUSE_BASE_URL=${LANGFUSE_BASE_URL:-http://langfuse-wogs8c0wgg8o4gckkg4oc4o8:3000}
-      # LiteLLM proxy — jury 100% cloud (Groq qwen3-32b → qwen3-8b fallback)
-      - LITELLM_HOST=${LITELLM_HOST:-http://litellm-wogs8c0wgg8o4gckkg4oc4o8:4000}
+      # LiteLLM proxy — jury 100% cloud via https://litellm.augmenter.pro
+      # Aliases: jury-comment/groq-qwen3-32b → Groq qwen3-32b | fast/groq-fast → llama-3.1-8b-instant
+      - LITELLM_HOST=${LITELLM_HOST:-https://litellm.augmenter.pro}
       - LITELLM_API_KEY=${LITELLM_API_KEY:-}
       - LITELLM_JURY_MODEL=${LITELLM_JURY_MODEL:-jury-comment}
-      - LITELLM_JURY_FALLBACK_MODEL=${LITELLM_JURY_FALLBACK_MODEL:-jury-comment-fallback}
+      - LITELLM_JURY_FALLBACK_MODEL=${LITELLM_JURY_FALLBACK_MODEL:-fast}
       # Sentry error tracking (optional)
       - SENTRY_DSN=${SENTRY_DSN:-}
       - SENTRY_ENVIRONMENT=${SENTRY_ENVIRONMENT:-production}

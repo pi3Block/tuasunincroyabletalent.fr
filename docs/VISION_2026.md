@@ -209,15 +209,16 @@ Apres : worker = 1 GPU (cuda:0 Demucs) → A3B sur 4 GPUs ← DONE
 - [x] Fallback : Demucs auto si RoFormer echoue (`SEPARATION_ENGINE=roformer|demucs`)
 - [ ] Benchmark : SDR sur 5 chansons test, temps de separation, VRAM peak
 
-#### 2.3 — Petits modeles d'enrichissement
-- [ ] Integrer UTMOSv2 — score qualite vocale perceptuel (MOS 1-5)
+#### 2.3 — Petits modeles d'enrichissement ✅ (2026-03-05)
+- [x] Integrer UTMOSv2 — score qualite vocale perceptuel (MOS 1-5)
   - `worker/tasks/vocal_quality.py`, lazy load, ~500 MB GPU
-  - Nouveau champ `vocal_quality_mos` dans resultats
-- [ ] Integrer MERT-v1-95M — extraction features musicales
+  - Nouveau champ `vocal_quality` dans resultats (mos + mos_100)
+- [x] Integrer MERT-v1-95M — extraction features musicales
   - `worker/tasks/music_features.py`, lazy load, ~1 GB GPU
-  - Output : `{key, tempo, energy_profile, emotion, genre}`
+  - Output : `{energy_mean, energy_std, dynamics, tags, ...}`
   - Cache dans storage : `cache/{youtube_id}/mert_features.json`
-- [ ] Injecter MERT + UTMOSv2 dans prompt jury (`scoring.py`)
+- [x] Injecter MERT + UTMOSv2 dans prompt jury (`scoring.py`)
+- [ ] Benchmark : VRAM peak, latence, qualite feedback jury enrichi
 
 **Critere de succes** : SDR >12 dB, WER ameliore sur mobile, nouveau score MOS visible dans resultats, jury contextualise.
 

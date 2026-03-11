@@ -46,7 +46,7 @@ docker-compose -f docker-compose.dev.yml build --no-cache <service>
 - **Frontend**: Next.js 15 (App Router, Turbopack) + React 19 + TypeScript 5.7 + Zustand 5 + Tailwind 4 + Framer Motion 12 + Radix UI (shadcn)
 - **Backend API**: Python 3.11 + FastAPI + Uvicorn + Pydantic 2 + SQLAlchemy 2 (async) + asyncpg
 - **Backend Worker**: Python 3.11 + Celery 5 + Redis (GPU tasks) + Langfuse (tracing)
-- **LLM**: LiteLLM Proxy -> Groq qwen3-32b (gratuit) + Ollama qwen3:4b / LoRA fine-tuned (local GPU 0) + heuristique fallback
+- **LLM**: LiteLLM Proxy (https://litellm.augmenter.pro) -> alias jury-comment/groq-qwen3-32b (Groq qwen3-32b) + fast/groq-fast (llama-3.1-8b-instant fallback) + heuristique
 - **Storage**: PostgreSQL 16 (shared), Redis 7 DB2 (shared), Filesystem (audio temp)
 - **Audio Processing** (actuel → cible SOTA, voir docs/SOTA_MODELS.md) :
   - **BS-RoFormer** (separation, SDR 12.97, +52% vs Demucs) ✅ Sprint 2.2 + Demucs fallback + de-bleeding Wiener
@@ -55,7 +55,7 @@ docker-compose -f docker-compose.dev.yml build --no-cache <service>
   - scipy.signal.correlate - Cross-correlation sync (auto offset detection)
   - shared-whisper HTTP (Faster Whisper large-v3-turbo, GPU 3 RTX 3070) + Groq Whisper API fallback
   - whisper-timestamped - Word-level alignment (forced alignment + DTW)
-  - **UTMOSv2** (score qualite vocale MOS) + **MERT-v1-95M** (features musicales) ← NOUVEAU
+  - **UTMOSv2** (score qualite vocale MOS, GPU ~500 MB) + **MERT-v1-95M** (features musicales, GPU ~1 GB) ✅ Sprint 2.3
   - Librosa - Onset detection (rhythm)
   - fastdtw - Pitch comparison (Dynamic Time Warping)
   - jiwer - Word Error Rate (lyrics accuracy)
@@ -171,13 +171,14 @@ tuasunincroyabletalent.fr/
     └── UNIFIED_ARCHITECTURE.md    # Architecture multi-projets unifiee
 ```
 
-### Pipeline Audio — Actuel (10 etapes)
+### Pipeline Audio — Actuel (11 etapes)
 
 ```
 analyze_performance (Celery task, gpu-heavy queue)
 │
-├─ Step 1: Unload Ollama A3B + Heavy (keep_alive:0, libere VRAM pour Demucs)
-│           A3B (port 11439, 28 GB GPUs 1-4), Heavy (port 11434)
+├─ Step 1: Unload Ollama Embed (keep_alive:0, libere ~3.9 GB VRAM sur GPU 4 pour RoFormer)
+│           Embed (port 11438, gte-qwen2-1.5b-instruct-embed-f16, GPU 4)
+│           llama-server (port 11440, GPUs 1-3) et Heavy (port 11434, GPU 0) = pas de conflit
 │           [non-fatal si injoignable]
 │
 ├─ Step 1.5: DeepFilterNet3 — Denoise user recording ← Sprint 2.1
@@ -212,42 +213,48 @@ analyze_performance (Celery task, gpu-heavy queue)
 ├─ Step 6: Genius API — Paroles reference
 │           [~1s]
 │
-└─ Step 7: Scoring + Jury LLM (parallele x3 personas)
+├─ Step 6.5: Enrichissement (parallele, Sprint 2.3)
+│             UTMOSv2 — score qualite vocale MOS (GPU ~500 MB, ~1s)
+│             MERT-v1-95M — features musicales (GPU ~1 GB, ~1s, cache youtube_id)
+│             Env: UTMOS_ENABLED=true, MERT_ENABLED=true
+│             [non-fatal si echoue]
+│
+└─ Step 7: Scoring + Jury LLM enrichi (parallele x3 personas)
            Pitch: DTW cents distance (40% du score), offset-aware
            Rhythm: Voice onset detection (30%), offset-aware
            Lyrics: WER jiwer (30%)
-           Jury: asyncio.gather() 3 personas
+           Jury: asyncio.gather() 3 personas + MOS + music context
              Tier 1: LiteLLM -> Groq qwen3-32b
              Tier 2: LiteLLM -> fallback model
              Tier 3: Heuristique
            [~1-5s]
 
-Total actuel: ~42-67s (1ere analyse) ou ~17-27s (reference en cache)
+Total actuel: ~44-69s (1ere analyse) ou ~19-29s (reference en cache)
 Cible Sprint 2: <25s (1ere) ou <8s (cache)
 ```
 
-### Pipeline Audio — Cible SOTA (apres Sprint 2)
+### Pipeline Audio — Cible SOTA (Sprint 2 COMPLETE)
 
 ```
 analyze_performance (Celery task, gpu-heavy queue)
 │
-├─ Step 0: Unload A3B (port 11439, keep_alive:0, libere 28 GB VRAM)
+├─ Step 0: Unload Ollama Embed (port 11438, keep_alive:0, libere ~3.9 GB sur GPU 4)
 │
-├─ Step 1: DeepFilterNet3 — Denoise user recording [CPU, ~1s] ← NOUVEAU
+├─ Step 1: DeepFilterNet3 — Denoise user recording [CPU, ~1s] ✅ Sprint 2.1
 │
 ├─ Parallele CPU + GPU :
-│   ├─ [CPU] SwiftF0 — Pitch user + ref (~2s total) ← remplace CREPE
+│   ├─ [CPU] SwiftF0 — Pitch user + ref (~2s total) ✅ Sprint 1
 │   ├─ [CPU] Cross-correlation sync (~1s)
-│   ├─ [GPU cuda:0] RoFormer — Separation user (~25s) ← remplace Demucs
+│   ├─ [GPU cuda:0] RoFormer — Separation user (~25s) ✅ Sprint 2.2
 │   └─ [GPU cuda:0] RoFormer — Separation ref (0s cache, ~25s sinon)
 │
 ├─ Parallele HTTP :
 │   ├─ [GPU 0 resident] Whisper transcription (~3s)
 │   └─ [HTTP] Genius lyrics (~1s)
 │
-├─ [GPU cuda:0] UTMOSv2 (~0.5 GB) + MERT (~1 GB) — qualite + contexte ← NOUVEAU
+├─ [GPU cuda:0] UTMOSv2 (~0.5 GB) + MERT (~1 GB) — qualite + contexte ✅ Sprint 2.3
 │
-└─ [HTTP] Scoring enrichi + Jury LLM 3 personas (~1-5s)
+└─ [HTTP] Scoring enrichi + Jury LLM 3 personas + MOS + music context (~1-5s)
 
 Total cible: <25s (1ere) ou <8s (cache) — 1 seul GPU worker
 ```
@@ -465,21 +472,25 @@ task_routes = {
 |---------|------|--------|----------------------|
 | shared-postgres | 5432 | coolify DNS | Base voicejury_db, user augmenter |
 | shared-redis | 6379 | coolify DNS | DB index 2 (broker + sessions) |
-| LiteLLM Proxy | 4000 | host.docker.internal | Jury LLM -> Groq qwen3-32b |
-| Ollama Light | 11435 | host.docker.internal | qwen3:4b (GPU 0, fallback jury) |
-| shared-whisper | 9000 | coolify DNS | Faster Whisper HTTP (GPU 3 RTX 3070, large-v3-turbo) |
+| LiteLLM Proxy | https | litellm.augmenter.pro | Jury LLM — alias: jury-comment (Groq qwen3-32b), fast (llama-3.1-8b), default (qwen3.5:9b), reasoning (Hauhau 27B) |
+| Ollama Heavy | 11434 | host.docker.internal | qwen3.5:9b (GPU 0 RTX 3070, ~6 GB) — alias LiteLLM: default |
+| llama-server Hauhau | 11440 | host.docker.internal | Qwen3.5-27B Q5_K_M (GPUs 1-3) — alias LiteLLM: reasoning/vision/a3b |
+| Ollama Embed | 11438 | host.docker.internal | gte-qwen2-1.5b-instruct-embed-f16 (GPU 4) — alias LiteLLM: embedding |
+| shared-whisper | 9000 | host.docker.internal | Faster Whisper HTTP (GPU 4 RTX 3080, large-v3-turbo) |
 | Langfuse | 3000 | coolify DNS | Tracing LLM |
 
-### GPU Time-Sharing (GPU 0, RTX 3070, 8 Go)
+### GPU Time-Sharing (GPU 4, RTX 3080, 10 Go) — Layout V5 (2026-03-11)
 
 ```
-Etat normal: Ollama Light qwen3:4b resident (~4.1 Go VRAM)
+GPU 0 (RTX 3070): Ollama Heavy qwen3.5:9b (~6 GB) — pas de conflit avec kiaraoke
+GPU 1-3 (RTX 3070/3080): llama-server Hauhau 27B (~21.5 GB) — pas de conflit
+GPU 4 (RTX 3080, 10 GB): Ollama Embed (~3.9 GB) + Whisper (~4.4 GB) + kiaraoke
 
-Pipeline voicejury demarre:
-  1. POST keep_alive:0 → Ollama decharge modele (~4 Go liberes)
-  2. Demucs s'execute (~4 Go VRAM)
-  3. CREPE s'execute (~1 Go supplementaire)
-  4. Pipeline termine → Ollama recharge au prochain appel (~2-3s cold start)
+Pipeline kiaraoke demarre sur GPU 4:
+  1. POST keep_alive:0 → Ollama Embed (port :11438) decharge (~3.9 GB liberes)
+  2. Disponible: 10 - 4.4 (Whisper) = 5.6 GB → RoFormer s'execute (~4-5 GB)
+  3. UTMOSv2 + MERT s'executent (~1.5 GB supplementaire)
+  4. Pipeline termine → Embed recharge au prochain appel embedding
 ```
 
 ### Variables d'environnement
@@ -491,11 +502,14 @@ DATABASE_URL=postgresql://augmenter:${AUGMENTER_DB_PASSWORD}@shared-postgres:543
 # Redis (shared-redis, DB index 2)
 REDIS_URL=redis://:${AUGMENTER_REDIS_PASSWORD}@shared-redis:6379/2
 
-# LLM — Jury generation
-LITELLM_HOST=http://host.docker.internal:4000
+# LLM — Jury generation (via LiteLLM proxy public)
+LITELLM_HOST=https://litellm.augmenter.pro
 LITELLM_API_KEY=sk-voice-jury
 LITELLM_JURY_MODEL=jury-comment
-OLLAMA_HOST=http://host.docker.internal:11435
+LITELLM_JURY_FALLBACK_MODEL=fast
+# Ollama Embed — unload GPU 4 avant RoFormer
+OLLAMA_EMBED_HOST=http://host.docker.internal:11438
+OLLAMA_EMBED_MODEL=rjmalagon/gte-qwen2-1.5b-instruct-embed-f16
 
 # Whisper — Transcription
 SHARED_WHISPER_URL=http://shared-whisper:9000
@@ -526,6 +540,8 @@ DENOISE_ATTEN_LIMIT_DB=          # Limite attenuation dB (vide=max, 6.0=leger)
 SEPARATION_ENGINE=roformer       # roformer (default, +52% SDR) ou demucs (fallback) — Sprint 2.2
 AUDIO_SEP_MODEL=model_bs_roformer_ep_317_sdr_12.9755.ckpt  # Modele BS-Roformer
 DEBLEED_ENABLED=true             # Spectral de-bleeding post-separation (Wiener masks)
+UTMOS_ENABLED=true               # UTMOSv2 vocal quality MOS (GPU ~500 MB, Sprint 2.3)
+MERT_ENABLED=true                # MERT-v1-95M music features (GPU ~1 GB, Sprint 2.3)
 
 # Fine-tuning (optionnel)
 USE_FINETUNED_JURY=false         # Use LoRA fine-tuned models for jury personas in Tier 2
@@ -562,7 +578,7 @@ Tables creees via Alembic migrations (`alembic upgrade head`), fallback `create_
 - **Never** use blocking I/O in FastAPI async routes
 - **Never** hardcode credentials (use environment variables)
 - **Never** use `large-v3` Whisper (non-turbo) — 7.6 Go VRAM, CUDA OOM on 8GB GPUs
-- **Never** run Demucs pendant qu'Ollama Light est charge (GPU OOM)
+- **Never** run RoFormer pendant qu'Ollama Embed est charge sur GPU 4 (OOM — ~1.7 GB libre insuffisant)
 - **Never** `REINDEX SYSTEM` sur shared-postgres en production
 - **Never** create a second `new AudioContext()` — use `getAudioContext()` singleton (contention = stuttering)
 

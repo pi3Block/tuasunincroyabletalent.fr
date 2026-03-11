@@ -259,7 +259,7 @@ Approche incrementale recommandee :
 
 Objectif : scorer la qualite perceptuelle de la voix (au-dela du pitch/rythme).
 
-### UTMOSv2 🧪
+### UTMOSv2 ✅ ← **Deploye Sprint 2.3 (2026-03-05)**
 
 - **Quoi** : prediction Mean Opinion Score (qualite percue)
 - **Classement** : 1er en 7/16, 2eme en 9/16 metriques VoiceMOS Challenge 2024
@@ -278,9 +278,13 @@ Objectif : scorer la qualite perceptuelle de la voix (au-dela du pitch/rythme).
 ### Decision
 
 ```
-Deployer UTMOSv2 tel quel pour un score MOS de base.
-Phase 2 : fine-tuner sur SingMOS-Pro pour score specifique chant.
-Integration : nouveau champ "vocal_quality_mos" dans les resultats.
+DEPLOYE Sprint 2.3 (2026-03-05) :
+  worker/tasks/vocal_quality.py — lazy load, singleton, GPU ~500 MB
+  pipeline.py : Phase 3b, parallele avec MERT, non-fatal
+  scoring.py : MOS injecte dans prompt jury (qualite vocale)
+  Env vars : UTMOS_ENABLED=true
+  Output : {"mos": float 1-5, "mos_100": int 0-100}
+Phase suivante : fine-tuner sur SingMOS-Pro pour score specifique chant.
 ```
 
 ---
@@ -289,7 +293,7 @@ Integration : nouveau champ "vocal_quality_mos" dans les resultats.
 
 Objectif : extraire le contexte musical de la reference pour enrichir le jury.
 
-### MERT-v1-95M 🧪
+### MERT-v1-95M ✅ ← **Deploye Sprint 2.3 (2026-03-05)**
 
 - **Quoi** : Transformer encoder (BERT-style) pour la musique
 - **Taches** : pitch, beat, key, genre, emotion, instrument (14 taches MIR)
@@ -310,9 +314,13 @@ Output : {key: "Am", tempo: 120, energy_profile: [...], emotion: "melancholic", 
 ### Decision
 
 ```
-Deployer MERT-v1-95M dans prepare_reference (une seule fois, cache).
-Stocker les features dans storage: cache/{youtube_id}/mert_features.json
-Injecter dans le prompt jury (scoring.py).
+DEPLOYE Sprint 2.3 (2026-03-05) :
+  worker/tasks/music_features.py — lazy load, singleton, GPU ~1 GB
+  pipeline.py : Phase 3b, parallele avec UTMOSv2, non-fatal
+  Cache : cache/{youtube_id}/mert_features.json (storage)
+  scoring.py : tags musicaux injectes dans prompt jury
+  Env vars : MERT_ENABLED=true
+  Output : {energy_mean, energy_std, dynamics, tags: ["dynamique", "rythmé", ...]}
 ```
 
 ---
@@ -536,8 +544,8 @@ CPU si possible, sinon GPU time-sharing.
 | Mel-Band RoFormer | ~4-6 GB | Non | Oui | Seul sur 1 GPU (separation) |
 | RMVPE (backup) | ~300 MB | Oui | Oui | Coexiste avec tout |
 | FCPE (backup) | ~150 MB | Oui | Oui | Coexiste avec tout |
-| UTMOSv2 | ~500 MB | Non | Oui | Coexiste avec tout |
-| MERT-v1-95M | ~1 GB | Non | Oui | Coexiste avec tout |
+| UTMOSv2 | ~500 MB | Non | Oui | Coexiste avec tout | ✅ deploye |
+| MERT-v1-95M | ~1 GB | Non | Oui | Coexiste avec tout | ✅ deploye |
 | STARS | ~2-3 GB | Non | Oui | Coexiste avec petits modeles |
 | Whisper large-v3-turbo | 4.3 GB | Non | Resident | GPU 0 dedie |
 | ACE-Step 1.5 | ~3-4 GB | Non | Oui | Seul ou avec petits modeles |

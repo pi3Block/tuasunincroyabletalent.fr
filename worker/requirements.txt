@@ -30,6 +30,8 @@ whisper-timestamped>=1.15.0
 swift-f0  # SwiftF0 pitch detection (CPU-only, ONNX Runtime, replaces torchcrepe)
 onnxruntime>=1.17.0  # SwiftF0 + Silero VAD in whisper-timestamped
 deepfilternet>=0.5.6  # DeepFilterNet3 audio denoise (CPU-only, Sprint 2.1)
+utmosv2 @ git+https://github.com/sarulab-speech/UTMOSv2.git  # Vocal quality MOS (Sprint 2.3)
+transformers>=4.40.0  # MERT-v1-95M music features (Sprint 2.3)
 
 # Ollama Client
 httpx>=0.28.0

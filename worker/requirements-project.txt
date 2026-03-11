@@ -23,6 +23,12 @@ demucs>=4.0.1
 # Audio Enhancement — DeepFilterNet3 (CPU-only denoise, Sprint 2.1)
 deepfilternet>=0.5.6
 
+# Vocal Quality — UTMOSv2 MOS prediction (GPU ~500 MB, Sprint 2.3)
+utmosv2 @ git+https://github.com/sarulab-speech/UTMOSv2.git
+
+# Music Features — MERT-v1-95M (GPU ~1 GB, Sprint 2.3)
+transformers>=4.40.0
+
 # Pitch Detection — SwiftF0 (CPU-only, ONNX Runtime, replaces torchcrepe Sprint 1)
 swift-f0
 

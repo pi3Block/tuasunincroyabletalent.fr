@@ -2,11 +2,11 @@
 Audio analysis pipeline - orchestrates all analysis tasks.
 Runs all processing directly (not as sub-tasks) to avoid Celery .get() issues.
 
-Architecture (Sprint 2, 2026-03-04):
-- 1 GPU only: cuda:0 (RTX 3080 10GB) → Demucs separation
+Architecture (Sprint 2, 2026-03-05):
+- 1 GPU only: cuda:0 (RTX 3080 10GB) → RoFormer separation + UTMOSv2 + MERT
 - CPU: DeepFilterNet3 denoise (Sprint 2.1) + SwiftF0 pitch (Sprint 1)
 - HTTP: shared-whisper (GPU 0), LiteLLM/Groq jury (no local GPU)
-- Time-sharing: A3B (port 11439) unloaded before GPU tasks via keep_alive:0
+- Time-sharing: Ollama Embed (port 11438, GPU 4) unloaded before GPU tasks via keep_alive:0
 
 Storage (storages.augmenter.pro, bucket: kiaraoke):
   cache/{youtube_id}/reference.wav         <- YouTube original (permanent)
@@ -38,10 +38,11 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 # GPU device — single GPU for Demucs separation, pitch is CPU-only (SwiftF0)
 DEMUCS_DEVICE = os.getenv("DEMUCS_DEVICE", "cuda:0")  # Host GPU 4 RTX 3080 10GB
 
-# Ollama instances — unloaded before GPU tasks to free VRAM
-OLLAMA_HEAVY_HOST = os.getenv("OLLAMA_HEAVY_HOST", "http://host.docker.internal:11434")
-OLLAMA_A3B_HOST = os.getenv("OLLAMA_A3B_HOST", "http://host.docker.internal:11439")
-OLLAMA_A3B_MODEL = os.getenv("OLLAMA_A3B_MODEL", "aratan/qwen3.5-a3b-abliterated:35b")
+# Ollama Embed — unloaded before GPU tasks to free VRAM on GPU 4 (RTX 3080, shared with RoFormer)
+# Layout V5 (2026-03-11): GPU 4 = Embed (~3.9 GB) + Whisper (~4.4 GB) + kiaraoke RoFormer (~4-5 GB)
+# llama-server (port :11440, GPUs 1-3) and Ollama Heavy (port :11434, GPU 0) have NO conflict.
+OLLAMA_EMBED_HOST = os.getenv("OLLAMA_EMBED_HOST", "http://host.docker.internal:11438")
+OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "rjmalagon/gte-qwen2-1.5b-instruct-embed-f16")
 try:
     STORAGE_UPLOAD_PARALLELISM = max(1, min(2, int(os.getenv("STORAGE_UPLOAD_PARALLELISM", "1"))))
 except ValueError:
@@ -129,49 +130,38 @@ _ollama_unload_ok = True  # Tracks whether Ollama unload succeeded (for Demucs O
 
 
 def _unload_ollama_for_demucs():
-    """Unload Ollama models from GPUs to free VRAM for Demucs.
+    """Unload Ollama Embed from GPU 4 to free VRAM for RoFormer.
 
-    Targets both:
-    - Ollama Heavy (port 11434, qwen3:8b ~5.8 GB on GPU cuda:0)
-    - Ollama A3B (port 11439, 35B MoE ~28 GB on GPUs 1-4)
+    GPU layout V5 (2026-03-11) — GPU 4 (RTX 3080, 10 GB):
+    - Ollama Embed (port :11438, rjmalagon/gte-qwen2-1.5b-instruct-embed-f16): ~3.9 GB
+    - Whisper (port :9000): ~4.4 GB  ← stays (used via HTTP during pipeline)
+    - RoFormer needs: ~4-5 GB        ← only fits after Embed is unloaded
 
-    A3B is the main VRAM consumer. Without unloading, Demucs may OOM
-    and de-bleeding falls back to CPU.
+    Ollama Heavy (GPU 0, port :11434) and llama-server (GPUs 1-3, port :11440)
+    do NOT share GPU 4 — no conflict, no need to unload.
 
-    Non-fatal: if Ollama is unreachable or already unloaded, pipeline proceeds anyway.
-    Sets _ollama_unload_ok = False on failure so Demucs can adapt.
+    Non-fatal: if Embed is unreachable or already unloaded, pipeline proceeds anyway.
+    Sets _ollama_unload_ok = False on failure so RoFormer can adapt (CPU fallback).
     """
     global _ollama_unload_ok
     import httpx
 
     _ollama_unload_ok = True
 
-    # Unload A3B first (biggest VRAM consumer: ~28 GB on GPUs 1-4)
+    # Unload Embed (GPU 4, same GPU as RoFormer — critical to free ~3.9 GB)
     try:
         resp = httpx.post(
-            f"{OLLAMA_A3B_HOST}/api/generate",
-            json={"model": OLLAMA_A3B_MODEL, "keep_alive": 0},
-            timeout=30.0,
+            f"{OLLAMA_EMBED_HOST}/api/generate",
+            json={"model": OLLAMA_EMBED_MODEL, "keep_alive": 0},
+            timeout=15.0,
         )
         if resp.status_code == 200:
-            logger.info("Ollama A3B unloaded from GPUs 1-4 (keep_alive:0)")
+            logger.info("Ollama Embed unloaded from GPU 4 (keep_alive:0) — %.1f GB freed", 3.9)
         else:
-            logger.warning("Ollama A3B unload returned %d", resp.status_code)
+            logger.warning("Ollama Embed unload returned %d", resp.status_code)
             _ollama_unload_ok = False
     except Exception as e:
-        logger.warning("Ollama A3B not reachable: %s (may already be unloaded)", e)
-
-    # Unload Heavy (if running — often dead, but try anyway)
-    try:
-        resp = httpx.post(
-            f"{OLLAMA_HEAVY_HOST}/api/generate",
-            json={"model": "qwen3:8b", "keep_alive": 0},
-            timeout=10.0,
-        )
-        if resp.status_code == 200:
-            logger.info("Ollama Heavy unloaded from GPU 1 (keep_alive:0)")
-    except Exception:
-        pass  # Heavy is often dead, not worth logging
+        logger.warning("Ollama Embed not reachable: %s (may already be unloaded)", e)
 
 
 def _resolve_audio(url_or_path: str, dest: Path) -> str:
@@ -282,16 +272,17 @@ def analyze_performance(
     """
     Full analysis pipeline for a vocal performance.
 
-    1 GPU (Demucs cuda:0) + CPU (DeepFilterNet3 + SwiftF0) + HTTP (Whisper, Jury).
+    1 GPU (RoFormer/Demucs cuda:0) + CPU (DeepFilterNet3 + SwiftF0) + HTTP (Whisper, Jury).
 
     Steps:
     1. Download user audio from storage -> /tmp/kiaraoke/
     1b. DeepFilterNet3 denoise user audio (CPU, ~1s) — Sprint 2.1
-    2. Separate user audio (Demucs, cuda:0)
-    3. Check ref separation in storage cache (Demucs if MISS)
+    2. Separate user audio (RoFormer/Demucs, cuda:0) — Sprint 2.2
+    3. Check ref separation in storage cache (RoFormer/Demucs if MISS)
     4. Cross-correlation sync (CPU)
     5. SwiftF0 pitch (CPU) || Whisper+Lyrics (HTTP) — parallel
-    6. Score + Jury feedback (LiteLLM, no GPU)
+    5b. UTMOSv2 vocal quality (GPU ~500 MB) || MERT features (GPU ~1 GB) — Sprint 2.3
+    6. Score + Jury feedback enriched with MOS + music context (LiteLLM)
     7. Cleanup /tmp/kiaraoke/
     """
     from tasks.audio_separation import do_separate_audio
@@ -629,10 +620,58 @@ def analyze_performance(
             reference_lyrics = lyrics_result.get("text", "")
 
             if lyrics_result.get("status") == "found":
-                update_progress(self, "analysis_done", 78, "Analyse terminee !")
+                update_progress(self, "analysis_done", 72, "Analyse terminee !")
                 logger.info("Lyrics found from %s", lyrics_result.get("source"))
             else:
-                update_progress(self, "analysis_done", 78, "Analyse terminee (paroles non trouvees)")
+                update_progress(self, "analysis_done", 72, "Analyse terminee (paroles non trouvees)")
+
+            # ========================================================
+            # PHASE 3b — UTMOSv2 + MERT enrichment (GPU, ~2s total)
+            #
+            #   Thread G (utmos)  : UTMOSv2 vocal quality MOS (GPU ~500 MB)
+            #   Thread H (mert)   : MERT-v1-95M music features (GPU ~1 GB, cached)
+            #
+            # Both run after separation (need vocals WAV) and before scoring.
+            # Non-fatal: jury works without enrichment data.
+            # ========================================================
+            update_progress(self, "enrichment", 75, "Analyse qualite vocale...")
+
+            def _score_utmos() -> dict | None:
+                """Thread G: UTMOSv2 vocal quality (GPU ~500 MB)."""
+                from tasks.vocal_quality import score_vocal_quality
+                return score_vocal_quality(user_separation["vocals_path"])
+
+            def _extract_mert() -> dict | None:
+                """Thread H: MERT music features (GPU ~1 GB, cached by youtube_id)."""
+                from tasks.music_features import extract_and_cache_features, extract_music_features
+                if youtube_id:
+                    return extract_and_cache_features(
+                        str(ref_vocals_path), youtube_id, storage,
+                    )
+                return extract_music_features(str(ref_vocals_path))
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                fut_utmos = pool.submit(_score_utmos)
+                fut_mert = pool.submit(_extract_mert)
+
+            vocal_quality = None
+            music_context = None
+            try:
+                vocal_quality = fut_utmos.result(timeout=60)
+            except Exception as e:
+                logger.warning("UTMOSv2 failed (non-fatal): %s", e)
+            try:
+                music_context = fut_mert.result(timeout=60)
+            except Exception as e:
+                logger.warning("MERT failed (non-fatal): %s", e)
+
+            # Free GPU after enrichment models
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
 
             # ========================================================
             # PHASE 4 — Scoring + Jury (séquentiel, CPU + LiteLLM)
@@ -652,9 +691,15 @@ def analyze_performance(
                 song_title=song_title,
                 pipeline_span=pipeline_span,
                 offset_seconds=effective_offset,
+                vocal_quality=vocal_quality,
+                music_context=music_context,
             )
 
             results["auto_sync"] = sync_result
+            if vocal_quality:
+                results["vocal_quality"] = vocal_quality
+            if music_context:
+                results["music_context"] = music_context
 
             update_progress(self, "jury_voting", 95, "Le jury vote...")
             update_progress(self, "completed", 100, "Verdict rendu !")

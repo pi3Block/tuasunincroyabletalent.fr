@@ -35,10 +35,10 @@ from .tracing import trace_jury_comment, TracingSpan
 
 logger = logging.getLogger(__name__)
 
-LITELLM_HOST = os.getenv("LITELLM_HOST", "http://host.docker.internal:4000")
+LITELLM_HOST = os.getenv("LITELLM_HOST", "https://litellm.augmenter.pro")
 LITELLM_API_KEY = os.getenv("LITELLM_API_KEY", "")
 LITELLM_JURY_MODEL = os.getenv("LITELLM_JURY_MODEL", "jury-comment")
-LITELLM_JURY_FALLBACK_MODEL = os.getenv("LITELLM_JURY_FALLBACK_MODEL", "jury-comment-fallback")
+LITELLM_JURY_FALLBACK_MODEL = os.getenv("LITELLM_JURY_FALLBACK_MODEL", "fast")
 
 
 def do_generate_feedback(
@@ -50,6 +50,8 @@ def do_generate_feedback(
     song_title: str,
     pipeline_span: TracingSpan = None,
     offset_seconds: float = 0.0,
+    vocal_quality: dict = None,
+    music_context: dict = None,
 ) -> dict:
     """
     Core logic: Generate final scores and jury feedback.
@@ -63,6 +65,8 @@ def do_generate_feedback(
         song_title: Name of the song
         pipeline_span: Optional Langfuse pipeline trace for child spans
         offset_seconds: Auto-detected temporal offset (from cross-correlation)
+        vocal_quality: UTMOSv2 result {"mos": float, "mos_100": int} or None
+        music_context: MERT features {"energy_mean", "tags", ...} or None
 
     Returns:
         dict with scores and jury comments
@@ -141,7 +145,7 @@ def do_generate_feedback(
         len(warnings),
     )
 
-    # Generate jury comments via Ollama (parallel, with fallback)
+    # Generate jury comments (parallel, with fallback + enrichment)
     jury_comments = generate_jury_comments(
         song_title=song_title,
         overall_score=overall_score,
@@ -149,6 +153,8 @@ def do_generate_feedback(
         rhythm_accuracy=rhythm_accuracy,
         lyrics_accuracy=lyrics_accuracy,
         pipeline_span=pipeline_span,
+        vocal_quality=vocal_quality,
+        music_context=music_context,
     )
 
     # Save results
@@ -544,8 +550,10 @@ def _build_jury_prompt(
     pitch_accuracy: float,
     rhythm_accuracy: float,
     lyrics_accuracy: float,
+    vocal_quality: dict = None,
+    music_context: dict = None,
 ) -> str:
-    """Build the LLM prompt for a jury persona."""
+    """Build the LLM prompt for a jury persona, enriched with MOS + music context."""
     issues = []
     strengths = []
 
@@ -564,6 +572,24 @@ def _build_jury_prompt(
     elif lyrics_accuracy > 80:
         strengths.append("Connaissance des paroles")
 
+    # Vocal quality enrichment (UTMOSv2)
+    mos_line = ""
+    if vocal_quality:
+        mos = vocal_quality.get("mos", 0)
+        mos_100 = vocal_quality.get("mos_100", 0)
+        if mos >= 4.0:
+            strengths.append("Qualité vocale excellente")
+        elif mos < 2.5:
+            issues.append("Qualité vocale à améliorer (timbre, clarté)")
+        mos_line = f"\n- Qualité vocale (MOS): {mos}/5 ({mos_100}/100)"
+
+    # Music context enrichment (MERT)
+    music_line = ""
+    if music_context:
+        tags = music_context.get("tags", [])
+        if tags:
+            music_line = f"\n- Caractère du morceau: {', '.join(tags)}"
+
     return f"""Tu es "{persona['name']}", un jury d'un concours de chant type "Incroyable Talent".
 Style: {persona['style']}
 
@@ -572,7 +598,7 @@ CONTEXTE:
 - Score global: {overall_score}/100
 - Justesse: {pitch_accuracy}%
 - Rythme: {rhythm_accuracy}%
-- Paroles: {lyrics_accuracy}%
+- Paroles: {lyrics_accuracy}%{mos_line}{music_line}
 - Problèmes: {', '.join(issues) if issues else 'Aucun majeur'}
 - Points forts: {', '.join(strengths) if strengths else 'À développer'}
 
@@ -732,6 +758,8 @@ async def _generate_all_comments_async(
     rhythm_accuracy: float,
     lyrics_accuracy: float,
     pipeline_span: TracingSpan = None,
+    vocal_quality: dict = None,
+    music_context: dict = None,
 ) -> list[dict]:
     """Run all 3 jury LLM calls in parallel."""
     async with httpx.AsyncClient() as client:
@@ -740,6 +768,8 @@ async def _generate_all_comments_async(
             prompt = _build_jury_prompt(
                 persona, song_title, overall_score,
                 pitch_accuracy, rhythm_accuracy, lyrics_accuracy,
+                vocal_quality=vocal_quality,
+                music_context=music_context,
             )
             tasks.append(
                 _generate_comment_async(
@@ -761,12 +791,15 @@ def generate_jury_comments(
     rhythm_accuracy: float,
     lyrics_accuracy: float,
     pipeline_span: TracingSpan = None,
+    vocal_quality: dict = None,
+    music_context: dict = None,
 ) -> list[dict]:
     """
     Generate jury AI comments (parallel, 3-tier zero-cost fallback, no local GPU).
 
     Runs 3 persona LLM calls concurrently via asyncio.gather.
     Each call: LiteLLM/Groq qwen3-32b → LiteLLM/qwen3-8b → heuristic.
+    Enriched with UTMOSv2 MOS + MERT music context when available (Sprint 2.3).
     """
     start = time.time()
 
@@ -775,6 +808,8 @@ def generate_jury_comments(
             song_title, overall_score,
             pitch_accuracy, rhythm_accuracy, lyrics_accuracy,
             pipeline_span,
+            vocal_quality=vocal_quality,
+            music_context=music_context,
         )
     )
 
